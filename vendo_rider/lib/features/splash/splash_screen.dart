@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:vendo_rider/features/auth/screens/login_screen.dart';
+import 'package:vendo_rider/features/work/screens/rider_work_screen.dart';
+import 'package:vendo_rider/core/api/rider_api.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -28,12 +30,13 @@ class _SplashScreenState extends State<SplashScreen>
     ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
     _ctrl.forward();
 
-    Future.delayed(const Duration(milliseconds: 2600), () {
+    Future.delayed(const Duration(milliseconds: 2600), () async {
+      final signedIn = await RiderApi.instance.hasToken();
       if (mounted) {
         Navigator.pushReplacement(
           context,
           PageRouteBuilder(
-            pageBuilder: (_, __, ___) => const LoginScreen(),
+            pageBuilder: (_, __, ___) => signedIn ? const RiderWorkScreen() : const LoginScreen(),
             transitionsBuilder: (_, anim, __, child) =>
                 FadeTransition(opacity: anim, child: child),
             transitionDuration: const Duration(milliseconds: 500),

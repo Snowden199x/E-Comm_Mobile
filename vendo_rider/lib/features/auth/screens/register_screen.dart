@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/auth/services/license_ocr_service.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -25,12 +26,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _obscurePass = true;
   bool _obscureConfirm = true;
   String? _validIdFileName;
+  String? _validIdPath;
 
   // ── Step 2: Vehicle Details ────────────────────────────────────
   String? _vehicleType;
   final _plateNumberCtrl = TextEditingController();
   String? _driversLicenseFile;
   String? _orCrFile;
+  String? _driversLicensePath;
+  String? _orCrPath;
 
   // Driver's License info fields
   final _dlLastNameCtrl = TextEditingController();
@@ -68,16 +72,81 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   // ── Step 4: Review & Submit ────────────────────────────────────
   bool _agreedToTerms = false;
+  bool _submitting = false;
+  bool _loadingLocations = false;
+  String? _locationsError;
+  Map<String, dynamic> _provinces = {};
+  Map<String, dynamic> _barangays = {};
+  bool _loadingBarangays = false;
+  String? _barangaysError;
+  String? _provinceCode;
+  String? _cityCode;
+  String? _barangayCode;
+  String? _matchedCenterName;
 
   static const int _totalSteps = 4;
 
-  final List<String> _sexOptions = ['Male', 'Female', 'Prefer not to say'];
+  final List<String> _sexOptions = ['Male', 'Female'];
   final List<String> _vehicleOptions = [
     'Motorcycle',
     'Bicycle',
     'Tricycle',
     'Car',
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLocations();
+  }
+
+  Future<void> _loadLocations() async {
+    setState(() { _loadingLocations = true; _locationsError = null; });
+    try {
+      final data = await RiderApi.instance.locations();
+      final provinces = Map<String, dynamic>.from(data['provinces'] as Map);
+      if (mounted) setState(() {
+        _provinces = provinces;
+        if (provinces.isEmpty) _locationsError = 'No provinces were returned by the Vendo API.';
+      });
+    } on RiderApiException catch (error) {
+      if (mounted) setState(() => _locationsError = '${error.message} API: ${RiderApi.baseUrl}');
+    } catch (_) {
+      if (mounted) setState(() => _locationsError =
+          'Cannot connect to ${RiderApi.baseUrl}. Check that the Laravel server is running.');
+    } finally {
+      if (mounted) setState(() => _loadingLocations = false);
+    }
+  }
+
+  Future<void> _loadBarangays(String cityCode) async {
+    setState(() {
+      _loadingBarangays = true;
+      _barangaysError = null;
+      _barangays = {};
+    });
+    try {
+      final data = await RiderApi.instance.barangays(cityCode);
+      if (!mounted || _cityCode != cityCode) return;
+      final barangays = Map<String, dynamic>.from(data['barangays'] as Map);
+      setState(() {
+        _barangays = barangays;
+        if (barangays.isEmpty) _barangaysError = 'No barangays were returned for this city.';
+      });
+    } on RiderApiException catch (error) {
+      if (mounted && _cityCode == cityCode) {
+        setState(() => _barangaysError = error.message);
+      }
+    } catch (_) {
+      if (mounted && _cityCode == cityCode) {
+        setState(() => _barangaysError = 'Cannot load barangays from ${RiderApi.baseUrl}.');
+      }
+    } finally {
+      if (mounted && _cityCode == cityCode) {
+        setState(() => _loadingBarangays = false);
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -119,11 +188,81 @@ class _RegisterScreenState extends State<RegisterScreen> {
     super.dispose();
   }
 
-  void _nextStep() {
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _nextStep() async {
+    if (_submitting) return;
+    if (_currentStep == 0) {
+      if (_firstNameCtrl.text.trim().isEmpty || _lastNameCtrl.text.trim().isEmpty ||
+          _selectedSex == null || _emailCtrl.text.trim().isEmpty ||
+          _birthdayCtrl.text.isEmpty || _passwordCtrl.text.length < 8 ||
+          _passwordCtrl.text != _confirmPassCtrl.text || _validIdPath == null) {
+        _showError('Complete your personal details, ID, and matching passwords.');
+        return;
+      }
+    } else if (_currentStep == 1) {
+      if (_vehicleType == null || _plateNumberCtrl.text.trim().isEmpty ||
+          _driversLicensePath == null || _orCrPath == null) {
+        _showError('Complete vehicle details and upload the license and OR/CR.');
+        return;
+      }
+    } else if (_currentStep == 2) {
+      if (_phoneCtrl.text.trim().isEmpty || _provinceCode == null ||
+          _cityCode == null || _barangayCode == null ||
+          _streetCtrl.text.trim().isEmpty || _zipCodeCtrl.text.trim().isEmpty) {
+        _showError('Complete your contact address and select a city.');
+        return;
+      }
+    }
+
     if (_currentStep < _totalSteps - 1) {
       setState(() => _currentStep++);
-    } else {
+      return;
+    }
+    if (!_agreedToTerms) {
+      _showError('Please agree to the terms before submitting.');
+      return;
+    }
+    final parts = _birthdayCtrl.text.split('/');
+    if (parts.length != 3) {
+      _showError('Choose a valid birthday.');
+      return;
+    }
+    setState(() => _submitting = true);
+    try {
+      final result = await RiderApi.instance.register({
+        'first_name': _firstNameCtrl.text.trim(),
+        'last_name': _lastNameCtrl.text.trim(),
+        'middle_name': _middleInitialCtrl.text.trim(),
+        'sex': _selectedSex!.toLowerCase(),
+        'birthday': '${parts[2]}-${parts[0]}-${parts[1]}',
+        'email': _emailCtrl.text.trim(),
+        'password': _passwordCtrl.text,
+        'password_confirmation': _confirmPassCtrl.text,
+        'phone_number': _phoneCtrl.text.trim(),
+        'province_code': _provinceCode!,
+        'city_code': _cityCode!,
+        'barangay_code': _barangayCode!,
+        'street': _streetCtrl.text.trim(),
+        'zip_code': _zipCodeCtrl.text.trim(),
+        'vehicle_type': _vehicleType!,
+        'plate_number': _plateNumberCtrl.text.trim(),
+      }, {
+        'valid_id': _validIdPath!,
+        'drivers_license': _driversLicensePath!,
+        'or_cr': _orCrPath!,
+      });
+      if (!mounted) return;
+      _matchedCenterName = (result['logistics_center'] as Map)['name']?.toString();
       _showSuccessModal(context);
+    } on RiderApiException catch (error) {
+      if (mounted) _showError(error.message);
+    } catch (_) {
+      if (mounted) _showError('Could not submit the application. Check your connection.');
+    } finally {
+      if (mounted) setState(() => _submitting = false);
     }
   }
 
@@ -134,6 +273,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       isDismissible: false,
       backgroundColor: Colors.transparent,
       builder: (_) => _SuccessModal(
+        centerName: _matchedCenterName,
         onBackToLogin: () => Navigator.of(context).popUntil((r) => r.isFirst),
       ),
     );
@@ -206,7 +346,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
       bottomNavigationBar: _BottomNextBar(
         currentStep: _currentStep,
         totalSteps: _totalSteps,
-        onNext: _nextStep,
+        onNext: _submitting ? null : _nextStep,
+        submitting: _submitting,
         onBack: _currentStep > 0 ? () => setState(() => _currentStep--) : null,
       ),
     );
@@ -250,23 +391,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
         const SizedBox(height: 12),
 
-        Row(
-          children: [
-            _label('Email', required: true),
-            const Spacer(),
-            GestureDetector(
-              onTap: () => _showVerifyEmailModal(context),
-              child: const Text(
-                'Verify',
-                style: TextStyle(
-                  color: Color(0xFF7B2FBE),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
+        _label('Email', required: true),
         const SizedBox(height: 6),
         _Field(
           controller: _emailCtrl,
@@ -341,7 +466,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           hint: 'Upload Valid ID here',
           onTap: () => _showImageSourceSheet(
             context,
-            (n) => setState(() => _validIdFileName = n),
+            (file) => setState(() { _validIdFileName = file.name; _validIdPath = file.path; }),
           ),
         ),
         const SizedBox(height: 24),
@@ -662,7 +787,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           hint: 'Upload OR / CR',
           onTap: () => _showImageSourceSheet(
             context,
-            (n) => setState(() => _orCrFile = n),
+            (file) => setState(() { _orCrFile = file.name; _orCrPath = file.path; }),
           ),
         ),
         const SizedBox(height: 20),
@@ -883,20 +1008,85 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
         _label('Province', required: true),
         const SizedBox(height: 6),
-        _Field(controller: _provinceCtrl, hint: 'Enter province'),
+        if (_loadingLocations) const LinearProgressIndicator(),
+        if (_locationsError != null) TextButton(
+          onPressed: _loadLocations,
+          child: Text('$_locationsError Tap to retry.'),
+        ),
+        DropdownButtonFormField<String>(
+          initialValue: _provinceCode,
+          isExpanded: true,
+          hint: const Text('Select province'),
+          items: _provinces.entries.map((entry) => DropdownMenuItem(
+            value: entry.key,
+            child: Text((entry.value as Map)['name'].toString(), overflow: TextOverflow.ellipsis),
+          )).toList(),
+          onChanged: _provinces.isEmpty ? null : (code) => setState(() {
+            _provinceCode = code;
+            _cityCode = null;
+            _barangayCode = null;
+            _barangayCtrl.clear();
+            _barangays = {};
+            _barangaysError = null;
+            _provinceCtrl.text = code == null ? '' : (_provinces[code] as Map)['name'].toString();
+            _municipalityCtrl.clear();
+          }),
+        ),
         const SizedBox(height: 12),
 
         _label('Municipality / City', required: true),
         const SizedBox(height: 6),
-        _Field(
-          controller: _municipalityCtrl,
-          hint: 'Enter municipality or city',
+        DropdownButtonFormField<String>(
+          key: ValueKey(_provinceCode),
+          initialValue: _cityCode,
+          isExpanded: true,
+          hint: const Text('Select municipality or city'),
+          items: _provinceCode == null ? [] :
+            Map<String, dynamic>.from((_provinces[_provinceCode] as Map)['cities'] as Map)
+              .entries.map((entry) => DropdownMenuItem(
+                value: entry.key,
+                child: Text(entry.value.toString(), overflow: TextOverflow.ellipsis),
+              )).toList(),
+          onChanged: _provinceCode == null ? null : (code) {
+            setState(() {
+              _cityCode = code;
+              _barangayCode = null;
+              _barangayCtrl.clear();
+              _barangays = {};
+              _barangaysError = null;
+              _municipalityCtrl.text = code == null ? '' :
+                (_provinces[_provinceCode] as Map)['cities'][code].toString();
+            });
+            if (code != null) _loadBarangays(code);
+          },
         ),
         const SizedBox(height: 12),
 
         _label('Barangay', required: true),
         const SizedBox(height: 6),
-        _Field(controller: _barangayCtrl, hint: 'Enter barangay'),
+        if (_loadingBarangays) const LinearProgressIndicator(),
+        if (_barangaysError != null) TextButton(
+          onPressed: _cityCode == null ? null : () => _loadBarangays(_cityCode!),
+          child: Text('$_barangaysError Tap to retry.'),
+        ),
+        LayoutBuilder(builder: (context, constraints) => DropdownMenu<String>(
+          key: ValueKey('barangay-$_cityCode'),
+          width: constraints.maxWidth,
+          enabled: _barangays.isNotEmpty && !_loadingBarangays,
+          enableFilter: true,
+          enableSearch: true,
+          requestFocusOnTap: true,
+          hintText: 'Select barangay',
+          initialSelection: _barangayCode,
+          dropdownMenuEntries: _barangays.entries.map((entry) => DropdownMenuEntry<String>(
+            value: entry.key,
+            label: entry.value.toString(),
+          )).toList(),
+          onSelected: (code) => setState(() {
+            _barangayCode = code;
+            _barangayCtrl.text = code == null ? '' : _barangays[code].toString();
+          }),
+        )),
         const SizedBox(height: 12),
 
         _label('Street / House No.', required: true),
@@ -1041,7 +1231,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               const SizedBox(height: 10),
               const Text(
                 'By submitting this registration, you confirm that all information provided is true and correct. '
-                'Our team will review your application and you will be notified via email once your account is approved.',
+                'The matched logistics hub will review your application. You can sign in after approval.',
                 style: TextStyle(
                   color: Color(0xFF555555),
                   fontSize: 12,
@@ -1221,6 +1411,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Future<void> _runLicenseOcr(String path, String fileName) async {
     setState(() {
       _driversLicenseFile = fileName;
+      _driversLicensePath = path;
       _scanningLicense = true;
     });
 
@@ -1301,7 +1492,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   void _showImageSourceSheet(
     BuildContext context,
-    void Function(String) onPicked,
+    void Function(XFile) onPicked,
   ) {
     showModalBottomSheet(
       context: context,
@@ -1357,7 +1548,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   imageQuality: 85,
                 );
                 if (file != null) {
-                  onPicked(file.name);
+                  onPicked(file);
                 }
               },
             ),
@@ -1373,7 +1564,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   imageQuality: 85,
                 );
                 if (file != null) {
-                  onPicked(file.name);
+                  onPicked(file);
                 }
               },
             ),
@@ -1384,14 +1575,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  void _showVerifyEmailModal(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _VerifyEmailModal(),
-    );
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2119,13 +2302,15 @@ class _RC {
 // ─────────────────────────────────────────────────────────────────────────────
 class _BottomNextBar extends StatelessWidget {
   final int currentStep, totalSteps;
-  final VoidCallback onNext;
+  final VoidCallback? onNext;
   final VoidCallback? onBack;
+  final bool submitting;
   const _BottomNextBar({
     required this.currentStep,
     required this.totalSteps,
     required this.onNext,
     this.onBack,
+    this.submitting = false,
   });
 
   static const _nextLabels = [
@@ -2193,8 +2378,8 @@ class _BottomNextBar extends StatelessWidget {
                 ),
                 elevation: 0,
               ),
-              child: const Text(
-                'Submit',
+              child: Text(
+                submitting ? 'Submitting…' : 'Submit',
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
               ),
             )
@@ -2234,206 +2419,12 @@ class _BottomNextBar extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Verify Email Modal
-// ─────────────────────────────────────────────────────────────────────────────
-class _VerifyEmailModal extends StatefulWidget {
-  @override
-  State<_VerifyEmailModal> createState() => _VerifyEmailModalState();
-}
-
-class _VerifyEmailModalState extends State<_VerifyEmailModal> {
-  final List<TextEditingController> _ctrl = List.generate(
-    6,
-    (_) => TextEditingController(),
-  );
-  final List<FocusNode> _nodes = List.generate(6, (_) => FocusNode());
-
-  @override
-  void dispose() {
-    for (final c in _ctrl) {
-      c.dispose();
-    }
-    for (final f in _nodes) {
-      f.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      padding: EdgeInsets.fromLTRB(
-        24,
-        28,
-        24,
-        28 + MediaQuery.of(context).viewInsets.bottom,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: const Color(0xFFDDDDDD),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 28),
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: 80,
-                height: 80,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFF0E8F8),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.mail_outline_rounded,
-                  color: Color(0xFF2D1B3D),
-                  size: 38,
-                ),
-              ),
-              Positioned(
-                bottom: 6,
-                right: 6,
-                child: Container(
-                  width: 22,
-                  height: 22,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF2D1B3D),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.check, color: Colors.white, size: 13),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 22),
-          const Text(
-            'Verify Your Email',
-            style: TextStyle(
-              color: Color(0xFF1A1A2E),
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            "We've sent a 6-digit code to your email.",
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Color(0xFF888888),
-              fontSize: 15,
-              height: 1.4,
-            ),
-          ),
-          const SizedBox(height: 28),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: List.generate(
-              6,
-              (i) => SizedBox(
-                width: 46,
-                height: 56,
-                child: TextField(
-                  controller: _ctrl[i],
-                  focusNode: _nodes[i],
-                  textAlign: TextAlign.center,
-                  keyboardType: TextInputType.number,
-                  maxLength: 1,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF1A1A2E),
-                  ),
-                  decoration: InputDecoration(
-                    counterText: '',
-                    contentPadding: EdgeInsets.zero,
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(
-                        color: Color(0xFFCCCCCC),
-                        width: 1.5,
-                      ),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(
-                        color: Color(0xFF2D1B3D),
-                        width: 2,
-                      ),
-                    ),
-                  ),
-                  onChanged: (val) {
-                    if (val.length == 1 && i < 5) {
-                      _nodes[i + 1].requestFocus();
-                    } else if (val.isEmpty && i > 0) {
-                      _nodes[i - 1].requestFocus();
-                    }
-                  },
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-          GestureDetector(
-            onTap: () {},
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: const [
-                Icon(Icons.refresh_rounded, color: Color(0xFFCC2222), size: 18),
-                SizedBox(width: 6),
-                Text(
-                  'Resend Code',
-                  style: TextStyle(
-                    color: Color(0xFFCC2222),
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton(
-              onPressed: () => Navigator.pop(context),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2D1B3D),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                elevation: 0,
-              ),
-              child: const Text(
-                'Verify Email',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Success Modal
 // ─────────────────────────────────────────────────────────────────────────────
 class _SuccessModal extends StatelessWidget {
   final VoidCallback onBackToLogin;
-  const _SuccessModal({required this.onBackToLogin});
+  final String? centerName;
+  const _SuccessModal({required this.onBackToLogin, this.centerName});
 
   @override
   Widget build(BuildContext context) {
@@ -2566,10 +2557,10 @@ class _SuccessModal extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 6),
-          const Text(
-            'You will receive an email once your account has\nbeen approved by the administrator',
+          Text(
+            'Your application was sent to ${centerName ?? 'your logistics hub'}. Sign in after that hub approves it.',
             textAlign: TextAlign.center,
-            style: TextStyle(
+            style: const TextStyle(
               color: Color(0xFF888888),
               fontSize: 14,
               height: 1.5,
