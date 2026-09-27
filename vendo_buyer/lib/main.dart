@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:vendo_buyer/features/auth/screens/login_screen.dart';
+import 'package:vendo_buyer/features/splash/splash_screen.dart';
 
 void main() {
   runApp(const VendoBuyerApp());
@@ -15,11 +15,9 @@ class VendoBuyerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         fontFamily: 'Roboto',
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF3B1F52),
-        ),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF3B1F52)),
       ),
-      home: const LoginScreen(),
+      home: const SplashScreen(),
     );
   }
 }
