@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:vendo_rider/features/dashboard/widgets/shared_widgets.dart';
+import 'package:vendo_rider/features/dashboard/screens/delivery_detail_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -294,7 +295,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  _ActiveDeliveryCard(),
+                  GestureDetector(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const DeliveryDetailScreen(),
+                      ),
+                    ),
+                    child: _ActiveDeliveryCard(),
+                  ),
 
                   const SizedBox(height: 24),
 
