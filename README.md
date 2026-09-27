@@ -1,16 +1,5 @@
-# e_comm_mobile
+# Vendo Mobile
 
-A new Flutter project.
+Flutter applications for Vendo live in `vendo_rider/` and `vendo_buyer/`. This repository has its own [working rules](AGENTS.md) and [documentation](docs/README.md). The Laravel marketplace and logistics backend lives separately in `../E-Comm_Web`.
 
-## Getting Started
-
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+The rider app now has a live integration path for registration, approved-rider login, assigned work, and seven scan transitions supported by the current web API, including a delivered scan after handover. Linux webcam scanning needs the system `zbar` package; Android/iOS use the Flutter scanner. See the [rider integration spec](docs/features/rider-integration.md) for the exact behavior, configuration, and remaining gaps. The buyer app is separate work.
