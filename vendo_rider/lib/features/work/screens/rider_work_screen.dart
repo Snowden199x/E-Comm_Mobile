@@ -23,6 +23,7 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
   String? _error;
   String? _name;
   String? _center;
+  String? _vehicleType;
 
   @override
   void initState() {
@@ -36,7 +37,13 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
       final work = await RiderApi.instance.assignments();
       final name = await RiderApi.instance.riderName();
       final center = await RiderApi.instance.centerName();
-      if (mounted) setState(() { _assignments = work; _name = name; _center = center; });
+      final vehicleType = await RiderApi.instance.riderVehicleType();
+      if (mounted) setState(() {
+        _assignments = work;
+        _name = name;
+        _center = center;
+        _vehicleType = vehicleType;
+      });
     } on RiderApiException catch (error) {
       if (mounted && (error.statusCode == 401 || error.statusCode == 403)) {
         await RiderApi.instance.clearSession();
@@ -58,9 +65,6 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
     if (order['assignment'] == 'pickup') {
       if (status == 'ready_for_pickup') return 'pickup';
       if (status == 'picked_up') return 'origin_arrival';
-      if (status == 'sorted') return 'soc5';
-      if (status == 'to_soc5') return 'soc6';
-      if (status == 'to_soc6') return 'destination_hub';
     }
     if (order['assignment'] == 'delivery') {
       if (status == 'assigned_to_rider') return 'out_for_delivery';
@@ -72,12 +76,15 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
   String _scanLabel(String type) => switch (type) {
     'pickup' => 'Scan seller pickup',
     'origin_arrival' => 'Scan at origin hub',
-    'soc5' => 'Scan toward SOC5',
-    'soc6' => 'Scan toward SOC6',
-    'destination_hub' => 'Scan toward destination hub',
     'delivered' => 'Scan after handing over parcel',
     _ => 'Scan out for delivery',
   };
+
+  bool _supportsAssignment(Map<String, dynamic> order) {
+    final assignment = order['assignment'];
+    if (_vehicleType == 'Truck') return assignment != 'delivery';
+    return assignment != 'linehaul';
+  }
 
   Future<void> _scan(Map<String, dynamic> order, String type) async {
     if (_busy) return;
@@ -144,6 +151,7 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
   @override
   Widget build(BuildContext context) {
     const purple = Color(0xFF2D1B3D);
+    final visibleAssignments = _assignments.where(_supportsAssignment).toList();
     return Scaffold(
       backgroundColor: const Color(0xFFF8F5FB),
       appBar: AppBar(
@@ -173,15 +181,42 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
                     children: [
                       Text(_name == null ? 'Rider work' : 'Hello, $_name',
                         style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: purple)),
+                      if (_vehicleType != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            _vehicleType == 'Truck' ? 'Truck Rider · Long-haul' : '$_vehicleType Rider · Local pickup and delivery',
+                            style: const TextStyle(color: Color(0xFF66606D)),
+                          ),
+                        ),
                       if (_center != null) Text('Logistics hub: $_center',
                         style: const TextStyle(color: Color(0xFF66606D))),
                       const SizedBox(height: 16),
-                      if (_assignments.isEmpty)
-                        const Card(child: Padding(padding: EdgeInsets.all(24),
-                          child: Text('No pickup or delivery assignments yet. Pull down to refresh.'))),
-                      ..._assignments.map((order) {
+                      if (visibleAssignments.isEmpty)
+                        Card(child: Padding(padding: const EdgeInsets.all(24),
+                          child: Text(_vehicleType == 'Truck'
+                              ? 'No truck linehaul assignments yet. The Main Hub assigns a Truck Rider after sorting the parcel.'
+                              : 'No pickup or delivery assignments yet. Pull down to refresh.'))),
+                      ...visibleAssignments.map((order) {
                         final type = _scanType(order);
                         final stop = Map<String, dynamic>.from(order['stop'] as Map);
+                        final plannedRoute = order['planned_route'] is Map
+                            ? Map<String, dynamic>.from(order['planned_route'] as Map)
+                            : null;
+                        final checkpoints = plannedRoute?['checkpoints'] is List
+                            ? plannedRoute!['checkpoints'] as List<dynamic>
+                            : const <dynamic>[];
+                        final routeNames = <String>[
+                          plannedRoute?['origin_main_hub']?.toString() ?? '',
+                          ...checkpoints.map((checkpoint) {
+                            if (checkpoint is! Map) return '';
+                            final data = Map<String, dynamic>.from(checkpoint);
+                            final code = data['code']?.toString();
+                            final name = data['name']?.toString();
+                            return [code, name].whereType<String>().where((value) => value.isNotEmpty).join(' · ');
+                          }),
+                          plannedRoute?['destination_main_hub']?.toString() ?? '',
+                        ].where((value) => value.isNotEmpty).toList();
                         return Card(
                           margin: const EdgeInsets.only(bottom: 12),
                           color: Colors.white,
@@ -191,7 +226,7 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
                               Text(order['tracking_number']?.toString() ?? '',
                                 style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
                               const SizedBox(height: 4),
-                              Text('${order['assignment'] == 'pickup' ? 'Pickup' : 'Delivery'} · ${order['status']}',
+                              Text('${order['assignment'] == 'pickup' ? 'Pickup' : order['assignment'] == 'linehaul' ? 'Truck linehaul' : 'Delivery'} · ${order['status']}',
                                 style: const TextStyle(color: Color(0xFF6D6475))),
                               const Divider(height: 24),
                               Text(stop['name']?.toString() ?? 'Stop',
@@ -201,6 +236,28 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
                               const SizedBox(height: 8),
                               Text('Origin: ${order['pickup_center'] ?? 'Unassigned'}'),
                               Text('Destination: ${order['destination_center'] ?? 'Unassigned'}'),
+                              if (plannedRoute != null) ...[
+                                const Divider(height: 24),
+                                const Text('Planned truck route', style: TextStyle(fontWeight: FontWeight.w600)),
+                                const SizedBox(height: 4),
+                                Text(routeNames.join(' → ')),
+                                if (plannedRoute['next_checkpoint'] is Map)
+                                  Text('Next planned checkpoint: ${Map<String, dynamic>.from(plannedRoute['next_checkpoint'] as Map)['name']} (${Map<String, dynamic>.from(plannedRoute['next_checkpoint'] as Map)['code']})'),
+                                const Padding(
+                                  padding: EdgeInsets.only(top: 8),
+                                  child: Text('This is the planned route. SH arrival and sorting are confirmed by the separate SH scanner app.',
+                                    style: TextStyle(color: Color(0xFF6D6475))),
+                                ),
+                              ],
+                              if (order['assignment'] == 'linehaul' && type == null)
+                                const Text('Use the separate SH scanner app for actual SH arrival and sorting scans.',
+                                  style: TextStyle(color: Color(0xFF6D6475)))
+                              else if (_vehicleType == 'Truck' && plannedRoute == null)
+                                const Padding(
+                                  padding: EdgeInsets.only(top: 8),
+                                  child: Text('SH arrival and sorting are recorded in the separate SH scanner app.',
+                                    style: TextStyle(color: Color(0xFF6D6475))),
+                                ),
                               const SizedBox(height: 12),
                               if (type != null)
                                 SizedBox(width: double.infinity, child: FilledButton.icon(
@@ -209,7 +266,7 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
                                   icon: const Icon(Icons.qr_code_scanner),
                                   label: Text(_scanLabel(type)),
                                 ))
-                              else const Text('No rider scan is available at this stage.',
+                              else if (order['assignment'] != 'linehaul') const Text('No rider scan is available at this stage.',
                                 style: TextStyle(color: Color(0xFF6D6475))),
                             ]),
                           ),

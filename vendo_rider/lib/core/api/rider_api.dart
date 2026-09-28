@@ -20,7 +20,9 @@ class RiderApi {
   static final RiderApi instance = RiderApi._();
   static String get baseUrl {
     const configuredUrl = String.fromEnvironment('VENDO_API_BASE_URL');
-    if (configuredUrl.isNotEmpty) return configuredUrl.replaceFirst(RegExp(r'/+$'), '');
+    if (configuredUrl.isNotEmpty) {
+      return configuredUrl.replaceFirst(RegExp(r'/+$'), '');
+    }
 
     if (kDebugMode && defaultTargetPlatform == TargetPlatform.linux) {
       return 'http://127.0.0.1:8000/api/v1/rider';
@@ -28,26 +30,33 @@ class RiderApi {
 
     return 'https://vendo-ph.app/api/v1/rider';
   }
+
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
 
-  Future<bool> hasToken() async => (await _storage.read(key: 'rider_token')) != null;
+  Future<bool> hasToken() async =>
+      (await _storage.read(key: 'rider_token')) != null;
   Future<String?> riderName() => _storage.read(key: 'rider_name');
   Future<String?> centerName() => _storage.read(key: 'center_name');
+  Future<String?> riderVehicleType() =>
+      _storage.read(key: 'rider_vehicle_type');
 
   Future<Map<String, dynamic>> locations() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/locations'),
-      headers: {'Accept': 'application/json'},
-    )
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/locations'),
+          headers: {'Accept': 'application/json'},
+        )
         .timeout(const Duration(seconds: 20));
     return _body(response);
   }
 
   Future<Map<String, dynamic>> barangays(String cityCode) async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/locations/$cityCode/barangays'),
-      headers: {'Accept': 'application/json'},
-    ).timeout(const Duration(seconds: 20));
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/locations/$cityCode/barangays'),
+          headers: {'Accept': 'application/json'},
+        )
+        .timeout(const Duration(seconds: 20));
     return _body(response);
   }
 
@@ -55,43 +64,164 @@ class RiderApi {
     Map<String, String> fields,
     Map<String, String> documentPaths,
   ) async {
-    final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/register'));
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/register'),
+    );
     request.headers['Accept'] = 'application/json';
     request.fields.addAll(fields);
     for (final entry in documentPaths.entries) {
-      request.files.add(await http.MultipartFile.fromPath(entry.key, entry.value));
+      request.files.add(
+        await http.MultipartFile.fromPath(entry.key, entry.value),
+      );
     }
     final streamed = await request.send().timeout(const Duration(seconds: 60));
     return _body(await http.Response.fromStream(streamed));
   }
 
-  Future<void> login(String email, String password) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/login'),
-      headers: {'Accept': 'application/json', 'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': email.trim(),
-        'password': password,
-        'device_name': 'Vendo Rider mobile',
-      }),
-    ).timeout(const Duration(seconds: 20));
+  Future<void> sendRegistrationCode(String email) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/email/otp/send'),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'email': email.trim()}),
+        )
+        .timeout(const Duration(seconds: 20));
+    _body(response);
+  }
+
+  Future<String> verifyRegistrationCode(String email, String code) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/email/otp/verify'),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'email': email.trim(), 'code': code.trim()}),
+        )
+        .timeout(const Duration(seconds: 20));
+    return _body(response)['verification_token'] as String;
+  }
+
+  Future<Map<String, dynamic>> googleSignIn(String idToken) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/google'),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'credential': idToken,
+            'device_name': 'Vendo Rider mobile',
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
     final data = _body(response);
+    if (data['registration_required'] == true) return data;
+    await _saveLogin(data);
+    return data;
+  }
+
+  Future<void> sendPasswordResetCode(String email) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/password/otp/send'),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'email': email.trim()}),
+        )
+        .timeout(const Duration(seconds: 20));
+    _body(response);
+  }
+
+  Future<String> verifyPasswordResetCode(String email, String code) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/password/otp/verify'),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'email': email.trim(), 'code': code.trim()}),
+        )
+        .timeout(const Duration(seconds: 20));
+    return _body(response)['reset_token'] as String;
+  }
+
+  Future<void> resetPassword(
+    String email,
+    String token,
+    String password,
+    String confirmation,
+  ) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/password/reset'),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'email': email.trim(),
+            'reset_token': token,
+            'password': password,
+            'password_confirmation': confirmation,
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
+    _body(response);
+  }
+
+  Future<void> login(String email, String password) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/login'),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'email': email.trim(),
+            'password': password,
+            'device_name': 'Vendo Rider mobile',
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
+    final data = _body(response);
+    await _saveLogin(data);
+  }
+
+  Future<void> _saveLogin(Map<String, dynamic> data) async {
     await _storage.write(key: 'rider_token', value: data['token'] as String);
     await _storage.write(
       key: 'rider_name',
       value: (data['rider'] as Map<String, dynamic>)['name'] as String?,
     );
+    final rider = data['rider'] as Map<String, dynamic>;
+    final vehicleType = rider['vehicle_type']?.toString();
+    if (vehicleType == null || vehicleType.isEmpty) {
+      await _storage.delete(key: 'rider_vehicle_type');
+    } else {
+      await _storage.write(key: 'rider_vehicle_type', value: vehicleType);
+    }
     await _storage.write(
       key: 'center_name',
-      value: (data['logistics_center'] as Map<String, dynamic>)['name'] as String?,
+      value:
+          (data['logistics_center'] as Map<String, dynamic>)['name'] as String?,
     );
   }
 
   Future<List<Map<String, dynamic>>> assignments() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/assignments'),
-      headers: await _authHeaders(),
-    ).timeout(const Duration(seconds: 20));
+    final response = await http
+        .get(Uri.parse('$baseUrl/assignments'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 20));
     final data = _body(response);
     return (data['assignments'] as List<dynamic>)
         .map((item) => Map<String, dynamic>.from(item as Map))
@@ -103,23 +233,28 @@ class RiderApi {
     String scanType,
     String scanKey,
   ) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/scans'),
-      headers: await _authHeaders(),
-      body: jsonEncode({
-        'tracking_number': trackingNumber,
-        'scan_type': scanType,
-        'scan_key': scanKey,
-      }),
-    ).timeout(const Duration(seconds: 25));
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/scans'),
+          headers: await _authHeaders(),
+          body: jsonEncode({
+            'tracking_number': trackingNumber,
+            'scan_type': scanType,
+            'scan_key': scanKey,
+          }),
+        )
+        .timeout(const Duration(seconds: 25));
     return _body(response);
   }
 
   Future<String?> pendingScanKey(String trackingNumber, String scanType) =>
       _storage.read(key: 'scan:$trackingNumber:$scanType');
 
-  Future<void> saveScanKey(String trackingNumber, String scanType, String key) =>
-      _storage.write(key: 'scan:$trackingNumber:$scanType', value: key);
+  Future<void> saveScanKey(
+    String trackingNumber,
+    String scanType,
+    String key,
+  ) => _storage.write(key: 'scan:$trackingNumber:$scanType', value: key);
 
   Future<void> clearScanKey(String trackingNumber, String scanType) =>
       _storage.delete(key: 'scan:$trackingNumber:$scanType');
@@ -127,10 +262,9 @@ class RiderApi {
   Future<void> clearSession() => _storage.deleteAll();
 
   Future<void> logout() async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/logout'),
-      headers: await _authHeaders(),
-    ).timeout(const Duration(seconds: 20));
+    final response = await http
+        .post(Uri.parse('$baseUrl/logout'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 20));
     _body(response);
     await _storage.deleteAll();
   }
@@ -161,7 +295,8 @@ class RiderApi {
       final errors = data['errors'];
       final detail = errors is Map && errors.isNotEmpty
           ? (errors.values.first as List).first.toString()
-          : (data['message']?.toString() ?? 'Request failed. Please try again.');
+          : (data['message']?.toString() ??
+                'Request failed. Please try again.');
       throw RiderApiException(detail, response.statusCode);
     }
     return data;
