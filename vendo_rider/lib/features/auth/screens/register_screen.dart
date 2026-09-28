@@ -4,7 +4,18 @@ import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/auth/services/license_ocr_service.dart';
 
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+  const RegisterScreen({
+    super.key,
+    this.googleRegistrationToken,
+    this.verifiedEmail,
+    this.googleFirstName = '',
+    this.googleLastName = '',
+  });
+
+  final String? googleRegistrationToken;
+  final String? verifiedEmail;
+  final String googleFirstName;
+  final String googleLastName;
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -19,6 +30,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _middleInitialCtrl = TextEditingController();
   String? _selectedSex;
   final _emailCtrl = TextEditingController();
+  final _emailOtpCtrl = TextEditingController();
+  String? _emailVerificationToken;
+  bool _sendingEmailOtp = false;
+  bool _verifyingEmailOtp = false;
   final _birthdayCtrl = TextEditingController();
   final _ageCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
@@ -87,33 +102,46 @@ class _RegisterScreenState extends State<RegisterScreen> {
   static const int _totalSteps = 4;
 
   final List<String> _sexOptions = ['Male', 'Female'];
-  final List<String> _vehicleOptions = [
-    'Motorcycle',
-    'Bicycle',
-    'Tricycle',
-    'Car',
-  ];
+  final List<String> _vehicleOptions = ['Motorcycle', 'Van', 'L300', 'Truck'];
 
   @override
   void initState() {
     super.initState();
+    _emailCtrl.text = widget.verifiedEmail ?? '';
+    _firstNameCtrl.text = widget.googleFirstName;
+    _lastNameCtrl.text = widget.googleLastName;
     _loadLocations();
   }
 
   Future<void> _loadLocations() async {
-    setState(() { _loadingLocations = true; _locationsError = null; });
+    setState(() {
+      _loadingLocations = true;
+      _locationsError = null;
+    });
     try {
       final data = await RiderApi.instance.locations();
       final provinces = Map<String, dynamic>.from(data['provinces'] as Map);
-      if (mounted) setState(() {
-        _provinces = provinces;
-        if (provinces.isEmpty) _locationsError = 'No provinces were returned by the Vendo API.';
-      });
+      if (mounted) {
+        setState(() {
+          _provinces = provinces;
+          if (provinces.isEmpty) {
+            _locationsError = 'No provinces were returned by the Vendo API.';
+          }
+        });
+      }
     } on RiderApiException catch (error) {
-      if (mounted) setState(() => _locationsError = '${error.message} API: ${RiderApi.baseUrl}');
+      if (mounted) {
+        setState(
+          () => _locationsError = '${error.message} API: ${RiderApi.baseUrl}',
+        );
+      }
     } catch (_) {
-      if (mounted) setState(() => _locationsError =
-          'Cannot connect to ${RiderApi.baseUrl}. Check that the Laravel server is running.');
+      if (mounted) {
+        setState(
+          () => _locationsError =
+              'Cannot connect to ${RiderApi.baseUrl}. Check that the Laravel server is running.',
+        );
+      }
     } finally {
       if (mounted) setState(() => _loadingLocations = false);
     }
@@ -131,7 +159,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final barangays = Map<String, dynamic>.from(data['barangays'] as Map);
       setState(() {
         _barangays = barangays;
-        if (barangays.isEmpty) _barangaysError = 'No barangays were returned for this city.';
+        if (barangays.isEmpty) {
+          _barangaysError = 'No barangays were returned for this city.';
+        }
       });
     } on RiderApiException catch (error) {
       if (mounted && _cityCode == cityCode) {
@@ -139,7 +169,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       }
     } catch (_) {
       if (mounted && _cityCode == cityCode) {
-        setState(() => _barangaysError = 'Cannot load barangays from ${RiderApi.baseUrl}.');
+        setState(
+          () => _barangaysError =
+              'Cannot load barangays from ${RiderApi.baseUrl}.',
+        );
       }
     } finally {
       if (mounted && _cityCode == cityCode) {
@@ -154,6 +187,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _firstNameCtrl.dispose();
     _middleInitialCtrl.dispose();
     _emailCtrl.dispose();
+    _emailOtpCtrl.dispose();
     _birthdayCtrl.dispose();
     _ageCtrl.dispose();
     _passwordCtrl.dispose();
@@ -189,29 +223,86 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _sendEmailOtp() async {
+    final email = _emailCtrl.text.trim();
+    if (!email.contains('@')) {
+      _showError('Enter a valid email address first.');
+      return;
+    }
+    setState(() => _sendingEmailOtp = true);
+    try {
+      await RiderApi.instance.sendRegistrationCode(email);
+      if (mounted) _showError('Verification code sent. Check your email.');
+    } on RiderApiException catch (error) {
+      if (mounted) _showError(error.message);
+    } catch (_) {
+      if (mounted) {
+        _showError(
+          'Could not send the code. Check your connection and email setup.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sendingEmailOtp = false);
+    }
+  }
+
+  Future<void> _verifyEmailOtp() async {
+    setState(() => _verifyingEmailOtp = true);
+    try {
+      _emailVerificationToken = await RiderApi.instance.verifyRegistrationCode(
+        _emailCtrl.text.trim(),
+        _emailOtpCtrl.text,
+      );
+      if (mounted) setState(() {});
+    } on RiderApiException catch (error) {
+      if (mounted) _showError(error.message);
+    } catch (_) {
+      if (mounted) _showError('Could not verify the code. Try again.');
+    } finally {
+      if (mounted) setState(() => _verifyingEmailOtp = false);
+    }
   }
 
   Future<void> _nextStep() async {
     if (_submitting) return;
     if (_currentStep == 0) {
-      if (_firstNameCtrl.text.trim().isEmpty || _lastNameCtrl.text.trim().isEmpty ||
-          _selectedSex == null || _emailCtrl.text.trim().isEmpty ||
-          _birthdayCtrl.text.isEmpty || _passwordCtrl.text.length < 8 ||
-          _passwordCtrl.text != _confirmPassCtrl.text || _validIdPath == null) {
-        _showError('Complete your personal details, ID, and matching passwords.');
+      if (_firstNameCtrl.text.trim().isEmpty ||
+          _lastNameCtrl.text.trim().isEmpty ||
+          _selectedSex == null ||
+          _emailCtrl.text.trim().isEmpty ||
+          (widget.googleRegistrationToken == null &&
+              _emailVerificationToken == null) ||
+          _birthdayCtrl.text.isEmpty ||
+          _passwordCtrl.text.length < 8 ||
+          _passwordCtrl.text != _confirmPassCtrl.text ||
+          _validIdPath == null) {
+        _showError(
+          'Complete your personal details, ID, and matching passwords.',
+        );
         return;
       }
     } else if (_currentStep == 1) {
-      if (_vehicleType == null || _plateNumberCtrl.text.trim().isEmpty ||
-          _driversLicensePath == null || _orCrPath == null) {
-        _showError('Complete vehicle details and upload the license and OR/CR.');
+      if (_vehicleType == null ||
+          _plateNumberCtrl.text.trim().isEmpty ||
+          _driversLicensePath == null ||
+          _orCrPath == null) {
+        _showError(
+          'Complete vehicle details and upload the license and OR/CR.',
+        );
         return;
       }
     } else if (_currentStep == 2) {
-      if (_phoneCtrl.text.trim().isEmpty || _provinceCode == null ||
-          _cityCode == null || _barangayCode == null ||
-          _streetCtrl.text.trim().isEmpty || _zipCodeCtrl.text.trim().isEmpty) {
+      if (_phoneCtrl.text.trim().isEmpty ||
+          _provinceCode == null ||
+          _cityCode == null ||
+          _barangayCode == null ||
+          _streetCtrl.text.trim().isEmpty ||
+          _zipCodeCtrl.text.trim().isEmpty) {
         _showError('Complete your contact address and select a city.');
         return;
       }
@@ -232,35 +323,45 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
     setState(() => _submitting = true);
     try {
-      final result = await RiderApi.instance.register({
-        'first_name': _firstNameCtrl.text.trim(),
-        'last_name': _lastNameCtrl.text.trim(),
-        'middle_name': _middleInitialCtrl.text.trim(),
-        'sex': _selectedSex!.toLowerCase(),
-        'birthday': '${parts[2]}-${parts[0]}-${parts[1]}',
-        'email': _emailCtrl.text.trim(),
-        'password': _passwordCtrl.text,
-        'password_confirmation': _confirmPassCtrl.text,
-        'phone_number': _phoneCtrl.text.trim(),
-        'province_code': _provinceCode!,
-        'city_code': _cityCode!,
-        'barangay_code': _barangayCode!,
-        'street': _streetCtrl.text.trim(),
-        'zip_code': _zipCodeCtrl.text.trim(),
-        'vehicle_type': _vehicleType!,
-        'plate_number': _plateNumberCtrl.text.trim(),
-      }, {
-        'valid_id': _validIdPath!,
-        'drivers_license': _driversLicensePath!,
-        'or_cr': _orCrPath!,
-      });
+      final result = await RiderApi.instance.register(
+        {
+          'first_name': _firstNameCtrl.text.trim(),
+          'last_name': _lastNameCtrl.text.trim(),
+          'middle_name': _middleInitialCtrl.text.trim(),
+          'sex': _selectedSex!.toLowerCase(),
+          'birthday': '${parts[2]}-${parts[0]}-${parts[1]}',
+          'email': _emailCtrl.text.trim(),
+          if (widget.googleRegistrationToken != null)
+            'google_registration_token': widget.googleRegistrationToken!,
+          if (_emailVerificationToken != null)
+            'email_verification_token': _emailVerificationToken!,
+          'password': _passwordCtrl.text,
+          'password_confirmation': _confirmPassCtrl.text,
+          'phone_number': _phoneCtrl.text.trim(),
+          'province_code': _provinceCode!,
+          'city_code': _cityCode!,
+          'barangay_code': _barangayCode!,
+          'street': _streetCtrl.text.trim(),
+          'zip_code': _zipCodeCtrl.text.trim(),
+          'vehicle_type': _vehicleType!,
+          'plate_number': _plateNumberCtrl.text.trim(),
+        },
+        {
+          'valid_id': _validIdPath!,
+          'drivers_license': _driversLicensePath!,
+          'or_cr': _orCrPath!,
+        },
+      );
       if (!mounted) return;
-      _matchedCenterName = (result['logistics_center'] as Map)['name']?.toString();
+      _matchedCenterName = (result['logistics_center'] as Map)['name']
+          ?.toString();
       _showSuccessModal(context);
     } on RiderApiException catch (error) {
       if (mounted) _showError(error.message);
     } catch (_) {
-      if (mounted) _showError('Could not submit the application. Check your connection.');
+      if (mounted) {
+        _showError('Could not submit the application. Check your connection.');
+      }
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
@@ -397,7 +498,64 @@ class _RegisterScreenState extends State<RegisterScreen> {
           controller: _emailCtrl,
           hint: 'Enter email address',
           keyboard: TextInputType.emailAddress,
+          readOnly: widget.googleRegistrationToken != null,
+          onChanged: widget.googleRegistrationToken != null
+              ? null
+              : (_) {
+                  if (_emailVerificationToken != null) {
+                    setState(() => _emailVerificationToken = null);
+                  }
+                },
         ),
+        const SizedBox(height: 8),
+        if (widget.googleRegistrationToken != null)
+          const Row(
+            children: [
+              Icon(Icons.verified, color: Color(0xFF248A5A), size: 18),
+              SizedBox(width: 6),
+              Text(
+                'Verified with Google',
+                style: TextStyle(color: Color(0xFF248A5A)),
+              ),
+            ],
+          )
+        else if (_emailVerificationToken != null)
+          const Row(
+            children: [
+              Icon(Icons.verified, color: Color(0xFF248A5A), size: 18),
+              SizedBox(width: 6),
+              Text(
+                'Email verified',
+                style: TextStyle(color: Color(0xFF248A5A)),
+              ),
+            ],
+          )
+        else ...[
+          Row(
+            children: [
+              Expanded(
+                child: _Field(
+                  controller: _emailOtpCtrl,
+                  hint: '6-digit email code',
+                  keyboard: TextInputType.number,
+                ),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: _sendingEmailOtp ? null : _sendEmailOtp,
+                child: Text(_sendingEmailOtp ? 'Sending…' : 'Send code'),
+              ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: _verifyingEmailOtp ? null : _verifyEmailOtp,
+              icon: const Icon(Icons.verified_user_outlined, size: 18),
+              label: Text(_verifyingEmailOtp ? 'Checking…' : 'Verify email'),
+            ),
+          ),
+        ],
         const SizedBox(height: 12),
 
         Row(
@@ -466,7 +624,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
           hint: 'Upload Valid ID here',
           onTap: () => _showImageSourceSheet(
             context,
-            (file) => setState(() { _validIdFileName = file.name; _validIdPath = file.path; }),
+            (file) => setState(() {
+              _validIdFileName = file.name;
+              _validIdPath = file.path;
+            }),
           ),
         ),
         const SizedBox(height: 24),
@@ -787,7 +948,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
           hint: 'Upload OR / CR',
           onTap: () => _showImageSourceSheet(
             context,
-            (file) => setState(() { _orCrFile = file.name; _orCrPath = file.path; }),
+            (file) => setState(() {
+              _orCrFile = file.name;
+              _orCrPath = file.path;
+            }),
           ),
         ),
         const SizedBox(height: 20),
@@ -1009,28 +1173,40 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _label('Province', required: true),
         const SizedBox(height: 6),
         if (_loadingLocations) const LinearProgressIndicator(),
-        if (_locationsError != null) TextButton(
-          onPressed: _loadLocations,
-          child: Text('$_locationsError Tap to retry.'),
-        ),
+        if (_locationsError != null)
+          TextButton(
+            onPressed: _loadLocations,
+            child: Text('$_locationsError Tap to retry.'),
+          ),
         DropdownButtonFormField<String>(
           initialValue: _provinceCode,
           isExpanded: true,
           hint: const Text('Select province'),
-          items: _provinces.entries.map((entry) => DropdownMenuItem(
-            value: entry.key,
-            child: Text((entry.value as Map)['name'].toString(), overflow: TextOverflow.ellipsis),
-          )).toList(),
-          onChanged: _provinces.isEmpty ? null : (code) => setState(() {
-            _provinceCode = code;
-            _cityCode = null;
-            _barangayCode = null;
-            _barangayCtrl.clear();
-            _barangays = {};
-            _barangaysError = null;
-            _provinceCtrl.text = code == null ? '' : (_provinces[code] as Map)['name'].toString();
-            _municipalityCtrl.clear();
-          }),
+          items: _provinces.entries
+              .map(
+                (entry) => DropdownMenuItem(
+                  value: entry.key,
+                  child: Text(
+                    (entry.value as Map)['name'].toString(),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              )
+              .toList(),
+          onChanged: _provinces.isEmpty
+              ? null
+              : (code) => setState(() {
+                  _provinceCode = code;
+                  _cityCode = null;
+                  _barangayCode = null;
+                  _barangayCtrl.clear();
+                  _barangays = {};
+                  _barangaysError = null;
+                  _provinceCtrl.text = code == null
+                      ? ''
+                      : (_provinces[code] as Map)['name'].toString();
+                  _municipalityCtrl.clear();
+                }),
         ),
         const SizedBox(height: 12),
 
@@ -1041,52 +1217,76 @@ class _RegisterScreenState extends State<RegisterScreen> {
           initialValue: _cityCode,
           isExpanded: true,
           hint: const Text('Select municipality or city'),
-          items: _provinceCode == null ? [] :
-            Map<String, dynamic>.from((_provinces[_provinceCode] as Map)['cities'] as Map)
-              .entries.map((entry) => DropdownMenuItem(
-                value: entry.key,
-                child: Text(entry.value.toString(), overflow: TextOverflow.ellipsis),
-              )).toList(),
-          onChanged: _provinceCode == null ? null : (code) {
-            setState(() {
-              _cityCode = code;
-              _barangayCode = null;
-              _barangayCtrl.clear();
-              _barangays = {};
-              _barangaysError = null;
-              _municipalityCtrl.text = code == null ? '' :
-                (_provinces[_provinceCode] as Map)['cities'][code].toString();
-            });
-            if (code != null) _loadBarangays(code);
-          },
+          items: _provinceCode == null
+              ? []
+              : Map<String, dynamic>.from(
+                      (_provinces[_provinceCode] as Map)['cities'] as Map,
+                    ).entries
+                    .map(
+                      (entry) => DropdownMenuItem(
+                        value: entry.key,
+                        child: Text(
+                          entry.value.toString(),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    )
+                    .toList(),
+          onChanged: _provinceCode == null
+              ? null
+              : (code) {
+                  setState(() {
+                    _cityCode = code;
+                    _barangayCode = null;
+                    _barangayCtrl.clear();
+                    _barangays = {};
+                    _barangaysError = null;
+                    _municipalityCtrl.text = code == null
+                        ? ''
+                        : (_provinces[_provinceCode] as Map)['cities'][code]
+                              .toString();
+                  });
+                  if (code != null) _loadBarangays(code);
+                },
         ),
         const SizedBox(height: 12),
 
         _label('Barangay', required: true),
         const SizedBox(height: 6),
         if (_loadingBarangays) const LinearProgressIndicator(),
-        if (_barangaysError != null) TextButton(
-          onPressed: _cityCode == null ? null : () => _loadBarangays(_cityCode!),
-          child: Text('$_barangaysError Tap to retry.'),
+        if (_barangaysError != null)
+          TextButton(
+            onPressed: _cityCode == null
+                ? null
+                : () => _loadBarangays(_cityCode!),
+            child: Text('$_barangaysError Tap to retry.'),
+          ),
+        LayoutBuilder(
+          builder: (context, constraints) => DropdownMenu<String>(
+            key: ValueKey('barangay-$_cityCode'),
+            width: constraints.maxWidth,
+            enabled: _barangays.isNotEmpty && !_loadingBarangays,
+            enableFilter: true,
+            enableSearch: true,
+            requestFocusOnTap: true,
+            hintText: 'Select barangay',
+            initialSelection: _barangayCode,
+            dropdownMenuEntries: _barangays.entries
+                .map(
+                  (entry) => DropdownMenuEntry<String>(
+                    value: entry.key,
+                    label: entry.value.toString(),
+                  ),
+                )
+                .toList(),
+            onSelected: (code) => setState(() {
+              _barangayCode = code;
+              _barangayCtrl.text = code == null
+                  ? ''
+                  : _barangays[code].toString();
+            }),
+          ),
         ),
-        LayoutBuilder(builder: (context, constraints) => DropdownMenu<String>(
-          key: ValueKey('barangay-$_cityCode'),
-          width: constraints.maxWidth,
-          enabled: _barangays.isNotEmpty && !_loadingBarangays,
-          enableFilter: true,
-          enableSearch: true,
-          requestFocusOnTap: true,
-          hintText: 'Select barangay',
-          initialSelection: _barangayCode,
-          dropdownMenuEntries: _barangays.entries.map((entry) => DropdownMenuEntry<String>(
-            value: entry.key,
-            label: entry.value.toString(),
-          )).toList(),
-          onSelected: (code) => setState(() {
-            _barangayCode = code;
-            _barangayCtrl.text = code == null ? '' : _barangays[code].toString();
-          }),
-        )),
         const SizedBox(height: 12),
 
         _label('Street / House No.', required: true),
@@ -1574,7 +1774,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ),
     );
   }
-
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1893,6 +2092,7 @@ class _Field extends StatelessWidget {
   final TextInputType? keyboard;
   final Widget? suffix;
   final VoidCallback? onTap;
+  final ValueChanged<String>? onChanged;
 
   const _Field({
     required this.controller,
@@ -1902,6 +2102,7 @@ class _Field extends StatelessWidget {
     this.keyboard,
     this.suffix,
     this.onTap,
+    this.onChanged,
   });
 
   @override
@@ -1918,6 +2119,7 @@ class _Field extends StatelessWidget {
         readOnly: readOnly,
         keyboardType: keyboard,
         onTap: onTap,
+        onChanged: onChanged,
         style: const TextStyle(color: Color(0xFF333333), fontSize: 13.5),
         decoration: InputDecoration(
           hintText: hint,

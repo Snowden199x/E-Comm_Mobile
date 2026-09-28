@@ -1,16 +1,15 @@
-# vendo_rider
+# Vendo Rider
 
-A new Flutter project.
+Flutter app for approved Motorcycle, Van, L300, and Truck riders. Rider registration, assignments, scans, account approval, parcel status, and notifications use the Vendo Laravel API; the app does not access the database directly.
 
-## Getting Started
+## Run locally
 
-This project is a starting point for a Flutter application.
+From this directory, run `flutter pub get`, then `flutter run` for the connected target. Linux debug builds default to the web app at `http://127.0.0.1:8000/api/v1/rider`. Android emulators need the host alias, for example `--dart-define=VENDO_API_BASE_URL=http://10.0.2.2:8000/api/v1/rider`. Production defaults to `https://vendo-ph.app/api/v1/rider`.
 
-A few resources to get you started if this is your first Flutter project:
+The local Linux camera path uses `zbarcam`; Linux builds also need the platform `libsecret` development package. Android and iOS use the device camera through `mobile_scanner`.
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+## Current limits
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Before using Truck linehaul assignments, apply the web migration `2026_09_28_200000_add_linehaul_rider_to_orders.php` from the E-Comm_Web repository with `php artisan migrate`. The owner runs the migration.
+
+The app supports assigned seller pickup, origin Main Hub arrival, local delivery scans, and delivered reports. Truck linehaul assignments and planned routes are exposed read-only by the web API. Truck departure/arrival and SH arrival/sorting remain future API work; SH scans belong to the separate scanner app. See the mobile [Rider integration spec](../docs/features/rider-integration.md), [architecture](../docs/architecture.md), and [domain status](../docs/domain-feature-status.md). The owner performs device and workflow verification; no test or app walkthrough is implied by this README.

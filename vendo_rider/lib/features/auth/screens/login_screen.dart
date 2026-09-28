@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:vendo_rider/core/theme/app_colors.dart';
 import 'package:vendo_rider/features/auth/screens/register_screen.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/work/screens/rider_work_screen.dart';
+import 'package:vendo_rider/features/auth/screens/forgot_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -16,32 +19,117 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordCtrl = TextEditingController();
   bool _obscure = true;
   bool _loggingIn = false;
+  bool _googleBusy = false;
+  Future<void>? _googleInitialized;
 
   Future<void> _login() async {
     if (_loggingIn) return;
     if (_emailCtrl.text.trim().isEmpty || _passwordCtrl.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Enter your email and password.'),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter your email and password.')),
+      );
       return;
     }
     setState(() => _loggingIn = true);
     try {
       await RiderApi.instance.login(_emailCtrl.text, _passwordCtrl.text);
       if (!mounted) return;
-      Navigator.pushReplacement(context, MaterialPageRoute(
-        builder: (_) => const RiderWorkScreen(),
-      ));
-    } on RiderApiException catch (error) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(error.message)),
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const RiderWorkScreen()),
       );
+    } on RiderApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
     } catch (_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Cannot reach Vendo. Check your connection and retry.'),
-      ));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Cannot reach Vendo. Check your connection and retry.',
+            ),
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _loggingIn = false);
+    }
+  }
+
+  Future<void> _continueWithGoogle() async {
+    if (_googleBusy || _loggingIn) return;
+    if (defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.windows) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Google sign-in is available on Android, iOS, and macOS. Use email verification on Linux desktop.',
+          ),
+        ),
+      );
+      return;
+    }
+    setState(() => _googleBusy = true);
+    try {
+      const serverClientId = String.fromEnvironment('GOOGLE_WEB_CLIENT_ID');
+      const iosClientId = String.fromEnvironment('GOOGLE_IOS_CLIENT_ID');
+      const macosClientId = String.fromEnvironment('GOOGLE_MACOS_CLIENT_ID');
+      final nativeClientId = defaultTargetPlatform == TargetPlatform.macOS
+          ? macosClientId
+          : iosClientId;
+      _googleInitialized ??= GoogleSignIn.instance.initialize(
+        serverClientId: serverClientId.isEmpty ? null : serverClientId,
+        clientId: nativeClientId.isEmpty ? null : nativeClientId,
+      );
+      await _googleInitialized;
+      final account = await GoogleSignIn.instance.authenticate();
+      final idToken = account.authentication.idToken;
+      if (idToken == null || idToken.isEmpty) {
+        throw const RiderApiException(
+          'Google did not return a verified sign-in token. Check the app OAuth client configuration.',
+        );
+      }
+      final result = await RiderApi.instance.googleSignIn(idToken);
+      if (!mounted) return;
+      if (result['registration_required'] == true) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => RegisterScreen(
+              googleRegistrationToken: result['registration_token'] as String,
+              verifiedEmail: result['email'] as String,
+              googleFirstName: result['first_name']?.toString() ?? '',
+              googleLastName: result['last_name']?.toString() ?? '',
+            ),
+          ),
+        );
+        return;
+      }
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const RiderWorkScreen()),
+      );
+    } on RiderApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Google sign-in could not complete. Check the configured Android/iOS OAuth client and try again.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _googleBusy = false);
     }
   }
 
@@ -68,11 +156,10 @@ class _LoginScreenState extends State<LoginScreen> {
               onToggle: () => setState(() => _obscure = !_obscure),
               onLogin: _login,
               loggingIn: _loggingIn,
-              onGoogle: () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Google sign-in is not available yet.')),
-              ),
-              onForgot: () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Password reset is not available yet.')),
+              onGoogle: _continueWithGoogle,
+              onForgot: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
               ),
               onRegister: () => Navigator.push(
                 context,
