@@ -4,7 +4,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:vendo_rider/core/theme/app_colors.dart';
 import 'package:vendo_rider/features/auth/screens/register_screen.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
-import 'package:vendo_rider/features/work/screens/rider_work_screen.dart';
+import 'package:vendo_rider/features/dashboard/screens/dashboard_screen.dart';
 import 'package:vendo_rider/features/auth/screens/forgot_password_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -36,7 +36,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const RiderWorkScreen()),
+        MaterialPageRoute(builder: (_) => const DashboardScreen()),
       );
     } on RiderApiException catch (error) {
       if (mounted) {
@@ -110,7 +110,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const RiderWorkScreen()),
+        MaterialPageRoute(builder: (_) => const DashboardScreen()),
       );
     } on RiderApiException catch (error) {
       if (mounted) {

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:vendo_rider/features/dashboard/screens/home_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/deliveries_screen.dart';
+import 'package:vendo_rider/features/dashboard/screens/map_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/earnings_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/profile_screen.dart';
+import 'package:latlong2/latlong.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -14,11 +16,16 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   int _selectedTab = 0;
 
-  static const _pages = <Widget>[
-    HomeScreen(),
-    DeliveriesScreen(),
-    EarningsScreen(),
-    ProfileScreen(),
+  // Map tab uses a fixed placeholder destination — Bubukal, Santa Cruz, Laguna
+  static const _mapDestination = LatLng(14.2789, 121.4244);
+  static const _mapLabel = 'Brgy. Bubukal, Santa Cruz, Laguna';
+
+  List<Widget> get _pages => [
+    const HomeScreen(),
+    const DeliveriesScreen(),
+    MapScreen(destination: _mapDestination, destinationLabel: _mapLabel),
+    const EarningsScreen(),
+    const ProfileScreen(),
   ];
 
   static const _navItems = <_NavItem>[
@@ -28,9 +35,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       label: 'Home',
     ),
     _NavItem(
-      icon: Icons.local_shipping_outlined,
-      activeIcon: Icons.local_shipping_rounded,
-      label: 'Deliveries',
+      icon: Icons.receipt_long_outlined,
+      activeIcon: Icons.receipt_long_rounded,
+      label: 'Orders',
+    ),
+    _NavItem(
+      icon: Icons.location_on_outlined,
+      activeIcon: Icons.location_on_rounded,
+      label: 'Map',
     ),
     _NavItem(
       icon: Icons.account_balance_wallet_outlined,
@@ -47,7 +59,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F5FB),
+      backgroundColor: const Color(0xFFF0EEF8),
       body: IndexedStack(index: _selectedTab, children: _pages),
       bottomNavigationBar: _BottomNav(
         selectedIndex: _selectedTab,
@@ -59,7 +71,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bottom Navigation Bar
+// Bottom Navigation — purple underline active style matching reference
 // ─────────────────────────────────────────────────────────────────────────────
 class _BottomNav extends StatelessWidget {
   final int selectedIndex;
@@ -79,53 +91,37 @@ class _BottomNav extends StatelessWidget {
         color: Colors.white,
         boxShadow: [
           BoxShadow(
-            color: Color(0x18000000),
-            blurRadius: 16,
-            offset: Offset(0, -4),
+            color: Color(0x14000000),
+            blurRadius: 12,
+            offset: Offset(0, -2),
           ),
         ],
       ),
       child: SafeArea(
         top: false,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+        child: SizedBox(
+          height: 62,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: List.generate(items.length, (i) {
-              final item = items[i];
               final isActive = i == selectedIndex;
+              final item = items[i];
               return GestureDetector(
                 onTap: () => onTap(i),
                 behavior: HitTestBehavior.opaque,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
-                  ),
+                child: SizedBox(
+                  width: 64,
                   child: Column(
-                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isActive
-                              ? const Color(0xFFEEE6F5)
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Icon(
-                          isActive ? item.activeIcon : item.icon,
-                          color: isActive
-                              ? const Color(0xFF2D1B3D)
-                              : const Color(0xFFAAAAAA),
-                          size: 24,
-                        ),
+                      Icon(
+                        isActive ? item.activeIcon : item.icon,
+                        size: 24,
+                        color: isActive
+                            ? const Color(0xFF4A1E8C)
+                            : const Color(0xFFAAAAAA),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 3),
                       Text(
                         item.label,
                         style: TextStyle(
@@ -134,8 +130,19 @@ class _BottomNav extends StatelessWidget {
                               ? FontWeight.w700
                               : FontWeight.w400,
                           color: isActive
-                              ? const Color(0xFF2D1B3D)
+                              ? const Color(0xFF4A1E8C)
                               : const Color(0xFFAAAAAA),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      // Purple underline for active
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        height: 3,
+                        width: isActive ? 24 : 0,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4A1E8C),
+                          borderRadius: BorderRadius.circular(2),
                         ),
                       ),
                     ],
