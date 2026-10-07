@@ -1,7 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:vendo_rider/core/api/rider_api.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
+
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  String _riderName = '';
+
+  @override
+  void initState() {
+    super.initState();
+    RiderApi.instance.riderName().then((name) {
+      if (mounted) setState(() => _riderName = name ?? 'Rider');
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -62,8 +78,8 @@ class ProfileScreen extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  const Text(
-                    'Juan Dela Cruz',
+                  Text(
+                    _riderName.isEmpty ? 'Rider' : _riderName,
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 20,

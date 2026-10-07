@@ -1,9 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 
 class MapScreen extends StatefulWidget {
-  /// The drop-off destination coordinates
   final LatLng destination;
   final String destinationLabel;
 
@@ -18,11 +19,10 @@ class MapScreen extends StatefulWidget {
 }
 
 class _MapScreenState extends State<MapScreen> {
-  GoogleMapController? _mapController;
+  final MapController _mapController = MapController();
   LatLng? _currentLocation;
   bool _loadingLocation = true;
-  Set<Marker> _markers = {};
-  Set<Polyline> _polylines = {};
+  StreamSubscription<Position>? _locationStream;
 
   @override
   void initState() {
@@ -31,109 +31,106 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   Future<void> _initLocation() async {
-    // Request permission
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
+    // Check and request permission
+    LocationPermission perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+    }
+    if (perm == LocationPermission.deniedForever) {
+      // Permission permanently denied — use fallback
+      if (mounted) {
+        setState(() {
+          _currentLocation = const LatLng(14.2793, 121.4110);
+          _loadingLocation = false;
+        });
+      }
+      return;
     }
 
-    if (permission == LocationPermission.deniedForever ||
-        permission == LocationPermission.denied) {
-      // Use a fallback location (Metro Manila area) if denied
-      setState(() {
-        _currentLocation = const LatLng(14.5995, 120.9842);
-        _loadingLocation = false;
-        _buildMapElements();
-      });
+    // Check if location service is enabled
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      if (mounted) {
+        setState(() {
+          _currentLocation = const LatLng(14.2793, 121.4110);
+          _loadingLocation = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please enable location services on your device.'),
+          ),
+        );
+      }
       return;
     }
 
     try {
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      );
-      setState(() {
-        _currentLocation = LatLng(pos.latitude, pos.longitude);
-        _loadingLocation = false;
-        _buildMapElements();
-      });
-      _fitBounds();
+      // Get last known position immediately for fast first render
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null && mounted) {
+        setState(() {
+          _currentLocation = LatLng(last.latitude, last.longitude);
+          _loadingLocation = false;
+        });
+        _fitBounds();
+      }
+
+      // Then stream live updates
+      _locationStream =
+          Geolocator.getPositionStream(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+              distanceFilter: 10, // update every 10 metres
+            ),
+          ).listen(
+            (pos) {
+              if (mounted) {
+                setState(() {
+                  _currentLocation = LatLng(pos.latitude, pos.longitude);
+                  _loadingLocation = false;
+                });
+              }
+            },
+            onError: (_) {
+              if (mounted && _currentLocation == null) {
+                setState(() {
+                  _currentLocation = const LatLng(14.2793, 121.4110);
+                  _loadingLocation = false;
+                });
+              }
+            },
+          );
     } catch (_) {
-      setState(() {
-        _currentLocation = const LatLng(14.5995, 120.9842);
-        _loadingLocation = false;
-        _buildMapElements();
-      });
+      if (mounted) {
+        setState(() {
+          _currentLocation = const LatLng(14.2793, 121.4110);
+          _loadingLocation = false;
+        });
+      }
     }
   }
 
-  void _buildMapElements() {
-    if (_currentLocation == null) return;
-
-    _markers = {
-      // Current location marker
-      Marker(
-        markerId: const MarkerId('current'),
-        position: _currentLocation!,
-        infoWindow: const InfoWindow(title: 'Your Location'),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
-      ),
-      // Destination marker
-      Marker(
-        markerId: const MarkerId('destination'),
-        position: widget.destination,
-        infoWindow: InfoWindow(
-          title: 'Drop-off',
-          snippet: widget.destinationLabel,
-        ),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-      ),
-    };
-
-    // Simple straight-line polyline (replace with Directions API for real route)
-    _polylines = {
-      Polyline(
-        polylineId: const PolylineId('route'),
-        points: [_currentLocation!, widget.destination],
-        color: const Color(0xFF2D1B3D),
-        width: 4,
-        patterns: [PatternItem.dash(20), PatternItem.gap(10)],
-      ),
-    };
+  @override
+  void dispose() {
+    _locationStream?.cancel();
+    _mapController.dispose();
+    super.dispose();
   }
 
   void _fitBounds() {
-    if (_mapController == null || _currentLocation == null) return;
-    final bounds = LatLngBounds(
-      southwest: LatLng(
-        _currentLocation!.latitude < widget.destination.latitude
-            ? _currentLocation!.latitude
-            : widget.destination.latitude,
-        _currentLocation!.longitude < widget.destination.longitude
-            ? _currentLocation!.longitude
-            : widget.destination.longitude,
-      ),
-      northeast: LatLng(
-        _currentLocation!.latitude > widget.destination.latitude
-            ? _currentLocation!.latitude
-            : widget.destination.latitude,
-        _currentLocation!.longitude > widget.destination.longitude
-            ? _currentLocation!.longitude
-            : widget.destination.longitude,
-      ),
+    if (_currentLocation == null) return;
+    final bounds = LatLngBounds.fromPoints([
+      _currentLocation!,
+      widget.destination,
+    ]);
+    _mapController.fitCamera(
+      CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(80)),
     );
-    _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
   }
 
   void _goToMyLocation() {
-    if (_currentLocation == null || _mapController == null) return;
-    _mapController!.animateCamera(
-      CameraUpdate.newCameraPosition(
-        CameraPosition(target: _currentLocation!, zoom: 16),
-      ),
-    );
+    if (_currentLocation == null) return;
+    _mapController.move(_currentLocation!, 16);
   }
 
   @override
@@ -152,200 +149,279 @@ class _MapScreenState extends State<MapScreen> {
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      body: Stack(
-        children: [
-          // ── Map ──────────────────────────────────────────
-          _loadingLocation
-              ? const Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Color(0xFF2D1B3D),
-                        ),
-                      ),
-                      SizedBox(height: 16),
-                      Text(
-                        'Getting your location…',
-                        style: TextStyle(color: Color(0xFF888888)),
-                      ),
-                    ],
+      body: _loadingLocation
+          ? const Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      Color(0xFF2D1B3D),
+                    ),
                   ),
-                )
-              : GoogleMap(
-                  initialCameraPosition: CameraPosition(
-                    target: _currentLocation ?? widget.destination,
-                    zoom: 14,
+                  SizedBox(height: 16),
+                  Text(
+                    'Getting your location…',
+                    style: TextStyle(color: Color(0xFF888888)),
                   ),
-                  markers: _markers,
-                  polylines: _polylines,
-                  myLocationEnabled: true,
-                  myLocationButtonEnabled: false,
-                  zoomControlsEnabled: false,
-                  mapToolbarEnabled: false,
-                  onMapCreated: (controller) {
-                    _mapController = controller;
-                    _fitBounds();
-                  },
-                ),
+                ],
+              ),
+            )
+          : Stack(
+              children: [
+                // ── Map ───────────────────────────────────────
+                FlutterMap(
+                  mapController: _mapController,
+                  options: MapOptions(
+                    initialCenter: _currentLocation ?? widget.destination,
+                    initialZoom: 14,
+                  ),
+                  children: [
+                    // OpenStreetMap tile layer — free, no key needed
+                    TileLayer(
+                      urlTemplate:
+                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName: 'com.example.vendo_rider',
+                    ),
 
-          // ── Route info card at bottom ─────────────────────
-          if (!_loadingLocation)
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: EdgeInsets.fromLTRB(
-                  20,
-                  16,
-                  20,
-                  16 + MediaQuery.of(context).padding.bottom,
-                ),
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Color(0x22000000),
-                      blurRadius: 16,
-                      offset: Offset(0, -4),
+                    // Route line
+                    if (_currentLocation != null)
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points: [_currentLocation!, widget.destination],
+                            color: const Color(0xFF2D1B3D),
+                            strokeWidth: 4,
+                          ),
+                        ],
+                      ),
+
+                    // Markers
+                    MarkerLayer(
+                      markers: [
+                        // Current location — blue
+                        if (_currentLocation != null)
+                          Marker(
+                            point: _currentLocation!,
+                            width: 40,
+                            height: 40,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF4285F4),
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 3,
+                                ),
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Color(0x44000000),
+                                    blurRadius: 6,
+                                  ),
+                                ],
+                              ),
+                              child: const Icon(
+                                Icons.person_pin_rounded,
+                                color: Colors.white,
+                                size: 22,
+                              ),
+                            ),
+                          ),
+                        // Destination — red
+                        Marker(
+                          point: widget.destination,
+                          width: 40,
+                          height: 48,
+                          child: Column(
+                            children: [
+                              Container(
+                                width: 36,
+                                height: 36,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE53935),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: Colors.white,
+                                    width: 3,
+                                  ),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x44000000),
+                                      blurRadius: 6,
+                                    ),
+                                  ],
+                                ),
+                                child: const Icon(
+                                  Icons.location_on_rounded,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                              ),
+                              Container(
+                                width: 2,
+                                height: 10,
+                                color: const Color(0xFFE53935),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    // Attribution (required by OSM)
+                    const RichAttributionWidget(
+                      attributions: [
+                        TextSourceAttribution('OpenStreetMap contributors'),
+                      ],
                     ),
                   ],
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Handle
-                    Container(
-                      width: 36,
-                      height: 4,
-                      margin: const EdgeInsets.only(bottom: 14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFDDDDDD),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
 
-                    // Pickup row
-                    Row(
+                // ── My location FAB ────────────────────────────
+                Positioned(
+                  right: 16,
+                  bottom: 180,
+                  child: FloatingActionButton.small(
+                    heroTag: 'locate',
+                    backgroundColor: Colors.white,
+                    elevation: 4,
+                    onPressed: _goToMyLocation,
+                    child: const Icon(
+                      Icons.my_location_rounded,
+                      color: Color(0xFF2D1B3D),
+                    ),
+                  ),
+                ),
+
+                // ── Bottom info card ───────────────────────────
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    padding: EdgeInsets.fromLTRB(
+                      20,
+                      16,
+                      20,
+                      16 + MediaQuery.of(context).padding.bottom,
+                    ),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(20),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Color(0x22000000),
+                          blurRadius: 16,
+                          offset: Offset(0, -4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Container(
-                          width: 10,
-                          height: 10,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF2ECC71),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Text(
-                            'Vendo Warehouse, Quezon City',
-                            style: TextStyle(
-                              color: Color(0xFF1A1A2E),
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    // Dashed line
-                    Padding(
-                      padding: const EdgeInsets.only(
-                        left: 4,
-                        top: 3,
-                        bottom: 3,
-                      ),
-                      child: Column(
-                        children: List.generate(
-                          3,
-                          (_) => Container(
-                            width: 2,
-                            height: 4,
-                            margin: const EdgeInsets.symmetric(vertical: 1),
+                          width: 36,
+                          height: 4,
+                          margin: const EdgeInsets.only(bottom: 14),
+                          decoration: BoxDecoration(
                             color: const Color(0xFFDDDDDD),
+                            borderRadius: BorderRadius.circular(2),
                           ),
                         ),
-                      ),
-                    ),
 
-                    // Drop-off row
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.location_on_rounded,
-                          color: Color(0xFFE53935),
-                          size: 14,
+                        Row(
+                          children: [
+                            Container(
+                              width: 10,
+                              height: 10,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFF2ECC71),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Text(
+                                'Vendo Warehouse, Quezon City',
+                                style: TextStyle(
+                                  color: Color(0xFF1A1A2E),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            widget.destinationLabel,
-                            style: const TextStyle(
-                              color: Color(0xFF1A1A2E),
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
+                        Padding(
+                          padding: const EdgeInsets.only(
+                            left: 4,
+                            top: 3,
+                            bottom: 3,
+                          ),
+                          child: Column(
+                            children: List.generate(
+                              3,
+                              (_) => Container(
+                                width: 2,
+                                height: 4,
+                                margin: const EdgeInsets.symmetric(vertical: 1),
+                                color: const Color(0xFFDDDDDD),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.location_on_rounded,
+                              color: Color(0xFFE53935),
+                              size: 14,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                widget.destinationLabel,
+                                style: const TextStyle(
+                                  color: Color(0xFF1A1A2E),
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 14),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: _goToMyLocation,
+                            icon: const Icon(
+                              Icons.my_location_rounded,
+                              size: 18,
+                            ),
+                            label: const Text('Center on my location'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF2D1B3D),
+                              side: const BorderSide(
+                                color: Color(0xFF2D1B3D),
+                                width: 1.2,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
                             ),
                           ),
                         ),
                       ],
                     ),
-
-                    const SizedBox(height: 14),
-
-                    // My location button
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: _goToMyLocation,
-                        icon: const Icon(Icons.my_location_rounded, size: 18),
-                        label: const Text('Center on my location'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF2D1B3D),
-                          side: const BorderSide(
-                            color: Color(0xFF2D1B3D),
-                            width: 1.2,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
-              ),
+              ],
             ),
-
-          // ── My location FAB ────────────────────────────────
-          if (!_loadingLocation)
-            Positioned(
-              right: 16,
-              bottom: 200,
-              child: FloatingActionButton.small(
-                heroTag: 'locate',
-                backgroundColor: Colors.white,
-                elevation: 4,
-                onPressed: _goToMyLocation,
-                child: const Icon(
-                  Icons.my_location_rounded,
-                  color: Color(0xFF2D1B3D),
-                ),
-              ),
-            ),
-        ],
-      ),
     );
-  }
-
-  @override
-  void dispose() {
-    _mapController?.dispose();
-    super.dispose();
   }
 }

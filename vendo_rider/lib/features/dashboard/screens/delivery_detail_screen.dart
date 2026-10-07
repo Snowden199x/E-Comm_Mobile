@@ -1,12 +1,13 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:vendo_rider/features/dashboard/screens/map_screen.dart';
 
-const _kDestination = LatLng(14.6219, 121.0070);
-const _kDestinationLabel = '88 Del Monte Ave., Brgy. Manresa, QC';
+const _kDestination = LatLng(14.2789, 121.4244);
+const _kDestinationLabel = 'Brgy. Bubukal, Santa Cruz, Laguna';
 
 class DeliveryDetailScreen extends StatefulWidget {
   const DeliveryDetailScreen({super.key});
@@ -20,11 +21,11 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   bool _confirmed = false;
   bool _showMapPreview = false;
   LatLng? _currentLocation;
-  GoogleMapController? _previewMapCtrl;
+  final MapController _previewMapCtrl = MapController();
 
   @override
   void dispose() {
-    _previewMapCtrl?.dispose();
+    _previewMapCtrl.dispose();
     super.dispose();
   }
 
@@ -45,7 +46,9 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       }
     } catch (_) {
       if (mounted) {
-        setState(() => _currentLocation = const LatLng(14.5995, 120.9842));
+        setState(
+          () => _currentLocation = const LatLng(14.2793, 121.4110),
+        ); // Santa Cruz, Laguna fallback
       }
     }
   }
@@ -257,33 +260,6 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   @override
   Widget build(BuildContext context) {
     final bool canConfirm = _proofImagePath != null;
-    final markers = <Marker>{
-      const Marker(
-        markerId: MarkerId('dest'),
-        position: _kDestination,
-        infoWindow: InfoWindow(title: 'Drop-off'),
-      ),
-      if (_currentLocation != null)
-        Marker(
-          markerId: const MarkerId('me'),
-          position: _currentLocation!,
-          infoWindow: const InfoWindow(title: 'You'),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueAzure,
-          ),
-        ),
-    };
-    final polylines = _currentLocation != null
-        ? <Polyline>{
-            Polyline(
-              polylineId: const PolylineId('route'),
-              points: [_currentLocation!, _kDestination],
-              color: const Color(0xFF2D1B3D),
-              width: 4,
-              patterns: [PatternItem.dash(20), PatternItem.gap(10)],
-            ),
-          }
-        : <Polyline>{};
 
     return Scaffold(
       backgroundColor: const Color(0xFFF8F5FB),
@@ -507,18 +483,79 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                           height: 220,
                           child: Stack(
                             children: [
-                              GoogleMap(
-                                initialCameraPosition: const CameraPosition(
-                                  target: _kDestination,
-                                  zoom: 13,
+                              FlutterMap(
+                                mapController: _previewMapCtrl,
+                                options: MapOptions(
+                                  initialCenter:
+                                      _currentLocation ?? _kDestination,
+                                  initialZoom: 13,
                                 ),
-                                markers: markers,
-                                polylines: polylines,
-                                myLocationEnabled: true,
-                                myLocationButtonEnabled: false,
-                                zoomControlsEnabled: false,
-                                mapToolbarEnabled: false,
-                                onMapCreated: (c) => _previewMapCtrl = c,
+                                children: [
+                                  TileLayer(
+                                    urlTemplate:
+                                        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                    userAgentPackageName:
+                                        'com.example.vendo_rider',
+                                  ),
+                                  if (_currentLocation != null)
+                                    PolylineLayer(
+                                      polylines: [
+                                        Polyline(
+                                          points: [
+                                            _currentLocation!,
+                                            _kDestination,
+                                          ],
+                                          color: const Color(0xFF2D1B3D),
+                                          strokeWidth: 4,
+                                        ),
+                                      ],
+                                    ),
+                                  MarkerLayer(
+                                    markers: [
+                                      if (_currentLocation != null)
+                                        Marker(
+                                          point: _currentLocation!,
+                                          width: 30,
+                                          height: 30,
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF4285F4),
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                color: Colors.white,
+                                                width: 2,
+                                              ),
+                                            ),
+                                            child: const Icon(
+                                              Icons.person_pin_rounded,
+                                              color: Colors.white,
+                                              size: 16,
+                                            ),
+                                          ),
+                                        ),
+                                      Marker(
+                                        point: _kDestination,
+                                        width: 30,
+                                        height: 30,
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            color: const Color(0xFFE53935),
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                              color: Colors.white,
+                                              width: 2,
+                                            ),
+                                          ),
+                                          child: const Icon(
+                                            Icons.location_on_rounded,
+                                            color: Colors.white,
+                                            size: 16,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ),
                               // Full map button
                               Positioned(

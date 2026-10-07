@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:vendo_rider/features/dashboard/widgets/shared_widgets.dart';
 import 'package:vendo_rider/features/dashboard/screens/delivery_detail_screen.dart';
+import 'package:vendo_rider/core/api/rider_api.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -11,218 +11,629 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   bool _isOnline = true;
+  String _riderName = '';
 
-  static const _recentDeliveries = [
-    DeliveryData(
-      id: '#VD-00124',
-      customer: 'Maria Santos',
-      address: '45 Rizal St., Brgy. Pag-asa, QC',
-      status: 'Delivered',
-      amount: '₱ 80',
-      time: '10:42 AM',
-    ),
-    DeliveryData(
-      id: '#VD-00123',
-      customer: 'Jose Reyes',
-      address: '12 Mabini Ave., Sampaloc, Manila',
-      status: 'Delivered',
-      amount: '₱ 95',
-      time: '9:15 AM',
-    ),
-    DeliveryData(
-      id: '#VD-00122',
-      customer: 'Ana Cruz',
-      address: '7 Lapu-Lapu St., Pasay City',
-      status: 'Delivered',
-      amount: '₱ 70',
-      time: '8:05 AM',
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    RiderApi.instance.riderName().then((name) {
+      if (mounted) setState(() => _riderName = name ?? 'Rider');
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: SingleChildScrollView(
+    return Scaffold(
+      backgroundColor: const Color(0xFFF0EEF8),
+      body: SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Header ──────────────────────────────────────
+              _buildHeader(),
+
+              // ── Earnings Card ────────────────────────────────
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+                child: _buildEarningsCard(),
+              ),
+
+              const SizedBox(height: 20),
+
+              // ── Today's Summary ──────────────────────────────
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: _buildSummarySection(),
+              ),
+
+              const SizedBox(height: 20),
+
+              // ── Active Delivery ───────────────────────────────
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: _buildActiveDelivery(),
+              ),
+
+              const SizedBox(height: 20),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── Header ──────────────────────────────────────────────────────────────
+  Widget _buildHeader() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF3D1A6E), Color(0xFF2A1050)],
+        ),
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(24),
+          bottomRight: Radius.circular(24),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Name + greeting
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Good morning,',
+                      style: TextStyle(
+                        color: Color(0xBBFFFFFF),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _riderName.isEmpty ? 'Rider' : _riderName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    // Online pill
+                    GestureDetector(
+                      onTap: () => setState(() => _isOnline = !_isOnline),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withAlpha(30),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: _isOnline
+                                    ? const Color(0xFF2ECC71)
+                                    : const Color(0xFFAAAAAA),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              _isOnline ? 'Online' : 'Offline',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 3),
+                            const Icon(
+                              Icons.chevron_right_rounded,
+                              color: Colors.white,
+                              size: 14,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Avatar with online dot
+              Stack(
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withAlpha(40),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white.withAlpha(60),
+                        width: 2,
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.person_rounded,
+                      color: Colors.white,
+                      size: 28,
+                    ),
+                  ),
+                  Positioned(
+                    bottom: 1,
+                    right: 1,
+                    child: Container(
+                      width: 13,
+                      height: 13,
+                      decoration: BoxDecoration(
+                        color: _isOnline
+                            ? const Color(0xFF2ECC71)
+                            : const Color(0xFFAAAAAA),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: const Color(0xFF2A1050),
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Earnings Card ────────────────────────────────────────────────────────
+  Widget _buildEarningsCard() {
+    return Transform.translate(
+      offset: const Offset(0, -16),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: const Color(0xFF2D1B5E),
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF2D1B5E).withAlpha(80),
+              blurRadius: 16,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Header ────────────────────────────────────────
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF3B1F52), Color(0xFF2A1440)],
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Wallet icon
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withAlpha(25),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(
+                    Icons.account_balance_wallet_rounded,
+                    color: Colors.white,
+                    size: 24,
+                  ),
                 ),
-                borderRadius: BorderRadius.only(
-                  bottomLeft: Radius.circular(28),
-                  bottomRight: Radius.circular(28),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.3),
-                            width: 2,
-                          ),
-                        ),
-                        child: const Icon(
-                          Icons.person_rounded,
-                          color: Colors.white,
-                          size: 28,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      Text(
+                        "Today's Earnings",
+                        style: TextStyle(
+                          color: Color(0xAAFFFFFF),
+                          fontSize: 12,
                         ),
                       ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Good morning,',
-                              style: TextStyle(
-                                color: Color(0xAAFFFFFF),
-                                fontSize: 13,
-                              ),
-                            ),
-                            Text(
-                              'Juan Dela Cruz',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      // Notification bell
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.12),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            const Icon(
-                              Icons.notifications_outlined,
+                      SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Text(
+                            '₱ 1,250.00',
+                            style: TextStyle(
                               color: Colors.white,
-                              size: 22,
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
                             ),
-                            Positioned(
-                              top: 8,
-                              right: 8,
-                              child: Container(
-                                width: 8,
-                                height: 8,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFFE8873A),
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                            ),
-                          ],
+                          ),
+                          SizedBox(width: 4),
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                // Go Online button
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF7B3FE4),
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.play_arrow_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                      SizedBox(width: 4),
+                      Text(
+                        'Go Online',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ],
                   ),
+                ),
+              ],
+            ),
 
-                  const SizedBox(height: 20),
+            const SizedBox(height: 18),
+            const Divider(color: Color(0x33FFFFFF), height: 1),
+            const SizedBox(height: 14),
 
-                  // Online / Offline toggle
-                  GestureDetector(
-                    onTap: () => setState(() => _isOnline = !_isOnline),
-                    child: Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: Colors.white.withOpacity(0.15),
-                        ),
-                      ),
-                      child: Row(
+            // Stats row
+            Row(
+              children: [
+                _EarningsStat(value: '5', label: 'Deliveries'),
+                _VerticalDivider(),
+                _EarningsStat(value: '4', label: 'Completed'),
+                _VerticalDivider(),
+                _EarningsStat(value: '1', label: 'Pending'),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Today's Summary ──────────────────────────────────────────────────────
+  Widget _buildSummarySection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              "Today's Summary",
+              style: TextStyle(
+                color: Color(0xFF1A1A2E),
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const Spacer(),
+            Row(
+              children: const [
+                Icon(
+                  Icons.calendar_today_outlined,
+                  size: 12,
+                  color: Color(0xFF888888),
+                ),
+                SizedBox(width: 4),
+                Text(
+                  'Aug 11, 2026',
+                  style: TextStyle(color: Color(0xFF888888), fontSize: 11),
+                ),
+              ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _SummaryCard(
+                icon: Icons.local_shipping_rounded,
+                iconBg: const Color(0xFFEEE6F5),
+                iconColor: const Color(0xFF7B3FE4),
+                value: '8',
+                label: 'Deliveries',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _SummaryCard(
+                icon: Icons.account_balance_wallet_rounded,
+                iconBg: const Color(0xFFE0F7EE),
+                iconColor: const Color(0xFF2ECC71),
+                value: '₱ 640',
+                label: 'Earnings',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _SummaryCard(
+                icon: Icons.route_rounded,
+                iconBg: const Color(0xFFFFF0E0),
+                iconColor: const Color(0xFFE8873A),
+                value: '34 km',
+                label: 'Distance',
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // ── Active Delivery ──────────────────────────────────────────────────────
+  Widget _buildActiveDelivery() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(
+              Icons.electric_bike_rounded,
+              color: Color(0xFF2D1B5E),
+              size: 20,
+            ),
+            const SizedBox(width: 6),
+            const Text(
+              'Active Delivery',
+              style: TextStyle(
+                color: Color(0xFF1A1A2E),
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFF3E0),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.circle, size: 7, color: Color(0xFFE8873A)),
+                  SizedBox(width: 4),
+                  Text(
+                    'On the way',
+                    style: TextStyle(
+                      color: Color(0xFFE8873A),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        GestureDetector(
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const DeliveryDetailScreen()),
+          ),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x0D000000),
+                  blurRadius: 12,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Order ID + map thumbnail
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: _isOnline
-                                  ? const Color(0xFF2ECC71)
-                                  : const Color(0xFF888888),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.two_wheeler_rounded,
-                              color: Colors.white,
-                              size: 22,
+                          const Text(
+                            '#VD-00125',
+                            style: TextStyle(
+                              color: Color(0xFF1A1A2E),
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
                             ),
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _isOnline
-                                      ? 'You are Online'
-                                      : 'You are Offline',
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                Text(
-                                  _isOnline
-                                      ? 'Ready to accept deliveries'
-                                      : 'Tap to go online',
-                                  style: const TextStyle(
-                                    color: Color(0xAAFFFFFF),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          // Animated toggle
-                          AnimatedContainer(
-                            duration: const Duration(milliseconds: 250),
-                            width: 50,
-                            height: 28,
-                            decoration: BoxDecoration(
-                              color: _isOnline
-                                  ? const Color(0xFF2ECC71)
-                                  : const Color(0xFF666666),
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            child: AnimatedAlign(
-                              duration: const Duration(milliseconds: 250),
-                              alignment: _isOnline
-                                  ? Alignment.centerRight
-                                  : Alignment.centerLeft,
-                              child: Container(
-                                width: 24,
-                                height: 24,
-                                margin: const EdgeInsets.symmetric(
-                                  horizontal: 2,
-                                ),
+                          const SizedBox(height: 12),
+                          // Pickup
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                width: 14,
+                                height: 14,
+                                margin: const EdgeInsets.only(top: 2),
                                 decoration: const BoxDecoration(
-                                  color: Colors.white,
+                                  color: Color(0xFF2ECC71),
                                   shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.circle,
+                                  color: Colors.white,
+                                  size: 6,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: const [
+                                    Text(
+                                      'Pickup',
+                                      style: TextStyle(
+                                        color: Color(0xFF888888),
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Vendo Warehouse, Quezon City',
+                                      style: TextStyle(
+                                        color: Color(0xFF1A1A2E),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          // Dropoff
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                width: 14,
+                                height: 14,
+                                margin: const EdgeInsets.only(top: 2),
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFFE53935),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(
+                                  Icons.location_on_rounded,
+                                  color: Colors.white,
+                                  size: 8,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: const [
+                                    Text(
+                                      'Dropoff',
+                                      style: TextStyle(
+                                        color: Color(0xFF888888),
+                                        fontSize: 10,
+                                      ),
+                                    ),
+                                    Text(
+                                      '88 Del Monte Ave., Brgy. Manresa, QC',
+                                      style: TextStyle(
+                                        color: Color(0xFF1A1A2E),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    // Map thumbnail
+                    Container(
+                      width: 90,
+                      height: 90,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEDE7F6),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          const Icon(
+                            Icons.map_rounded,
+                            color: Color(0xFFB39DDB),
+                            size: 36,
+                          ),
+                          // Route line simulation
+                          Positioned(
+                            top: 20,
+                            left: 18,
+                            child: Container(
+                              width: 10,
+                              height: 10,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFF7B3FE4),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            bottom: 18,
+                            right: 16,
+                            child: Container(
+                              width: 10,
+                              height: 10,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFFE53935),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                          // Distance badge
+                          Positioned(
+                            top: 8,
+                            right: 6,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF2D1B5E),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Text(
+                                '2.2 km · 8 min',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ),
@@ -230,141 +641,211 @@ class _HomeScreenState extends State<HomeScreen> {
                         ],
                       ),
                     ),
-                  ),
-                ],
-              ),
-            ),
+                  ],
+                ),
 
-            const SizedBox(height: 20),
+                const SizedBox(height: 14),
+                const Divider(color: Color(0xFFF0F0F0), height: 1),
+                const SizedBox(height: 12),
 
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // ── Today's Summary ──────────────────────────
-                  const Text(
-                    "Today's Summary",
-                    style: TextStyle(
-                      color: Color(0xFF1A1A2E),
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Row(
-                    children: [
-                      Expanded(
-                        child: StatCard(
-                          label: 'Deliveries',
-                          value: '8',
-                          icon: Icons.local_shipping_rounded,
-                          color: Color(0xFF3B1F52),
-                        ),
+                // Customer + actions
+                Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFEEE6F5),
+                        shape: BoxShape.circle,
                       ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: StatCard(
-                          label: 'Earnings',
-                          value: '₱ 640',
-                          icon: Icons.account_balance_wallet_rounded,
-                          color: Color(0xFF2ECC71),
-                        ),
-                      ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: StatCard(
-                          label: 'Distance',
-                          value: '34 km',
-                          icon: Icons.route_rounded,
-                          color: Color(0xFFE8873A),
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 24),
-
-                  // ── Active Delivery ──────────────────────────
-                  const Text(
-                    'Active Delivery',
-                    style: TextStyle(
-                      color: Color(0xFF1A1A2E),
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  GestureDetector(
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const DeliveryDetailScreen(),
+                      child: const Icon(
+                        Icons.person_rounded,
+                        color: Color(0xFF7B3FE4),
+                        size: 20,
                       ),
                     ),
-                    child: _ActiveDeliveryCard(),
-                  ),
-
-                  const SizedBox(height: 24),
-
-                  // ── Recent Deliveries ────────────────────────
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        'Recent Deliveries',
-                        style: TextStyle(
-                          color: Color(0xFF1A1A2E),
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                        ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Pedro Bautista',
+                            style: TextStyle(
+                              color: Color(0xFF1A1A2E),
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Text(
+                            '+63 912 345 6789',
+                            style: TextStyle(
+                              color: Color(0xFF888888),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
                       ),
-                      GestureDetector(
-                        onTap: () {},
-                        child: const Text(
-                          'See all',
-                          style: TextStyle(
-                            color: Color(0xFF7B2FBE),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
+                    ),
+                    // Call
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF2D1B5E),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.call_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Chat
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEEE6F5),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.chat_bubble_outline_rounded,
+                        color: Color(0xFF2D1B5E),
+                        size: 18,
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 14),
+
+                // View Details + Confirm Delivered
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const DeliveryDetailScreen(),
                           ),
                         ),
+                        icon: const Icon(Icons.info_outline_rounded, size: 16),
+                        label: const Text('View Details'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFF2D1B5E),
+                          side: const BorderSide(
+                            color: Color(0xFFDDD0EE),
+                            width: 1.2,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 11),
+                        ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  ..._recentDeliveries.map(
-                    (d) => DeliveryListTile(delivery: d),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-              ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const DeliveryDetailScreen(),
+                          ),
+                        ),
+                        icon: const Icon(
+                          Icons.check_circle_outline_rounded,
+                          size: 16,
+                        ),
+                        label: const Text('Confirm Delivered'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF2D1B5E),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 11),
+                          elevation: 0,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-          ],
+          ),
         ),
-      ),
+      ],
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Active Delivery Card
+// Earnings stat cell
 // ─────────────────────────────────────────────────────────────────────────────
-class _ActiveDeliveryCard extends StatelessWidget {
+class _EarningsStat extends StatelessWidget {
+  final String value, label;
+  const _EarningsStat({required this.value, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: const TextStyle(color: Color(0xAAFFFFFF), fontSize: 11),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _VerticalDivider extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(width: 1, height: 32, color: Colors.white.withAlpha(40));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Summary card
+// ─────────────────────────────────────────────────────────────────────────────
+class _SummaryCard extends StatelessWidget {
+  final IconData icon;
+  final Color iconBg, iconColor;
+  final String value, label;
+  const _SummaryCard({
+    required this.icon,
+    required this.iconBg,
+    required this.iconColor,
+    required this.value,
+    required this.label,
+  });
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: const Color(0xFFE8873A).withOpacity(0.4),
-          width: 1.5,
-        ),
         boxShadow: const [
           BoxShadow(
-            color: Color(0x0A000000),
+            color: Color(0x08000000),
             blurRadius: 8,
             offset: Offset(0, 2),
           ),
@@ -373,205 +854,44 @@ class _ActiveDeliveryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: iconBg,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: iconColor, size: 20),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Color(0xFF1A1A2E),
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 2),
           Row(
             children: [
-              const Text(
-                '#VD-00125',
-                style: TextStyle(
-                  color: Color(0xFF1A1A2E),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF3E0),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Text(
-                  'On the way',
-                  style: TextStyle(
-                    color: Color(0xFFE8873A),
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: Color(0xFF888888),
                     fontSize: 11,
-                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 14),
-
-          _AddressRow(
-            icon: Icons.radio_button_checked,
-            iconColor: const Color(0xFF2ECC71),
-            label: 'Pickup',
-            value: 'Vendo Warehouse, Quezon City',
-          ),
-          _DashedDivider(),
-          _AddressRow(
-            icon: Icons.location_on_rounded,
-            iconColor: const Color(0xFFE53935),
-            label: 'Drop-off',
-            value: '88 Del Monte Ave., Brgy. Manresa, QC',
-          ),
-
-          const SizedBox(height: 14),
-          const Divider(color: Color(0xFFF0F0F0)),
-          const SizedBox(height: 10),
-
-          Row(
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFEEE6F5),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.person_rounded,
-                  color: Color(0xFF7B2FBE),
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Pedro Bautista',
-                      style: TextStyle(
-                        color: Color(0xFF1A1A2E),
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    Text(
-                      '+63 912 345 6789',
-                      style: TextStyle(color: Color(0xFF888888), fontSize: 11),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF2D1B3D),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.call_rounded,
-                  color: Colors.white,
-                  size: 18,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEEE6F5),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.chat_bubble_outline_rounded,
-                  color: Color(0xFF2D1B3D),
-                  size: 18,
-                ),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: Color(0xFFCCCCCC),
+                size: 14,
               ),
             ],
-          ),
-
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () {},
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2D1B3D),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                elevation: 0,
-              ),
-              child: const Text(
-                'Confirm Delivered',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-              ),
-            ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _AddressRow extends StatelessWidget {
-  final IconData icon;
-  final Color iconColor;
-  final String label, value;
-  const _AddressRow({
-    required this.icon,
-    required this.iconColor,
-    required this.label,
-    required this.value,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, color: iconColor, size: 18),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(color: Color(0xFF888888), fontSize: 11),
-              ),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: Color(0xFF1A1A2E),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _DashedDivider extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 8, top: 4, bottom: 4),
-      child: Column(
-        children: List.generate(
-          3,
-          (_) => Container(
-            width: 2,
-            height: 4,
-            margin: const EdgeInsets.symmetric(vertical: 1),
-            color: const Color(0xFFDDDDDD),
-          ),
-        ),
       ),
     );
   }
