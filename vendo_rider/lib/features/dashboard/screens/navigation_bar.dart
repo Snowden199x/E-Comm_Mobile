@@ -27,6 +27,7 @@ class _Tab {
   static const map = 2;
   static const earnings = 3;
   static const profile = 4;
+  // ignore_for_file: unused_field
 }
 
 class DashboardScreen extends StatefulWidget {
@@ -43,9 +44,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   static const _mapDestination = LatLng(14.2789, 121.4244);
   static const _mapLabel = 'Brgy. Bubukal, Santa Cruz, Laguna';
 
-  // Built once so the pages are not recreated on every rebuild
   late final List<Widget> _pages = [
-    HomeScreen(onViewEarnings: () => _onTabSelected(_Tab.earnings)),
+    HomeScreen(onViewEarnings: () => _onTabSelected(_Tab.parcels)),
     const DeliveriesScreen(),
     MapScreen(destination: _mapDestination, destinationLabel: _mapLabel),
     const EarningsScreen(),
@@ -192,8 +192,11 @@ class _BottomNavState extends State<_BottomNav>
     final leftT = movingRight ? trailT : leadT;
     final rightT = movingRight ? leadT : trailT;
 
-    final left = (fromCenter - half) + ((toCenter - half) - (fromCenter - half)) * leftT;
-    final right = (fromCenter + half) + ((toCenter + half) - (fromCenter + half)) * rightT;
+    final left =
+        (fromCenter - half) + ((toCenter - half) - (fromCenter - half)) * leftT;
+    final right =
+        (fromCenter + half) +
+        ((toCenter + half) - (fromCenter + half)) * rightT;
 
     // Flatten a little in the middle of the trip, then bounce back
     final height = _pillHeight * (1 - _squash * math.sin(math.pi * t));
