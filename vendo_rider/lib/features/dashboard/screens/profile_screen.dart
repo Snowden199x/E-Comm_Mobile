@@ -452,15 +452,12 @@ class _MenuItem extends StatelessWidget {
   final IconData icon;
   final String label;
 
-  /// Add a screen to open here later (for example Personal Information)
-  final VoidCallback? onTap;
-
-  const _MenuItem({required this.icon, required this.label, this.onTap});
+  const _MenuItem({required this.icon, required this.label});
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: onTap,
+      onTap: null,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
