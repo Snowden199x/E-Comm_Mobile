@@ -1,5 +1,31 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Same Vendo palette as the Home, Deliveries and Earnings screens
+//  • Prune   → dark header, main text
+//  • Brique  → accent (camera badge, section bars, log out)
+//  • Lin     → soft gold for key details on dark
+//  • Raisin  → icons and secondary tones
+// ─────────────────────────────────────────────────────────────────────────────
+class _C {
+  static const prune = Color(0xFF412143);
+  static const pruneLight = Color(0xFF55295A);
+  static const brique = Color(0xFFBF5E40);
+  static const lin = Color(0xFFDBC583);
+  static const raisin = Color(0xFF815488);
+
+  static const background = Color(0xFFFAF7F5);
+  static const ink = Color(0xFF2A1B2C);
+  static const muted = Color(0xFF8C8290);
+  static const border = Color(0xFFECE6EA);
+
+  static const raisinSoft = Color(0xFFF4EDF5);
+  static const briqueSoft = Color(0xFFF8EAE5);
+}
+
+const double _radius = 16;
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -11,6 +37,9 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   String _riderName = '';
 
+  // Placeholder until the API returns the real rider ID
+  static const _riderId = 'RID-45821';
+
   @override
   void initState() {
     super.initState();
@@ -19,247 +48,349 @@ class _ProfileScreenState extends State<ProfileScreen> {
     });
   }
 
+  // Ask first, so the rider can't log out by accident
+  Future<void> _confirmLogout() async {
+    HapticFeedback.selectionClick();
+    final shouldLogOut = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(_radius + 4),
+        ),
+        title: const Text(
+          'Log out?',
+          style: TextStyle(
+            color: _C.ink,
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: const Text(
+          'You will need to sign in again to see your deliveries.',
+          style: TextStyle(color: _C.muted, fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text(
+              'Stay',
+              style: TextStyle(color: _C.muted, fontWeight: FontWeight.w600),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text(
+              'Log Out',
+              style: TextStyle(color: _C.brique, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldLogOut == true && mounted) {
+      Navigator.of(context).popUntil((r) => r.isFirst);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: SingleChildScrollView(
-        child: Column(
-          children: [
-            // ── Header ──────────────────────────────────────
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(20, 24, 20, 32),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Color(0xFF3B1F52), Color(0xFF2A1440)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      // Light status bar icons because the header is dark
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
+        backgroundColor: _C.background,
+        body: SingleChildScrollView(
+          child: Column(
+            children: [
+              _buildHeader(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 24, 20, 28),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const _ProfileSection(
+                      title: 'Account',
+                      items: [
+                        _MenuItem(
+                          icon: Icons.person_outline_rounded,
+                          label: 'Personal Information',
+                        ),
+                        _MenuItem(
+                          icon: Icons.two_wheeler_outlined,
+                          label: 'Vehicle Details',
+                        ),
+                        _MenuItem(
+                          icon: Icons.lock_outline_rounded,
+                          label: 'Change Password',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    const _ProfileSection(
+                      title: 'Support',
+                      items: [
+                        _MenuItem(
+                          icon: Icons.help_outline_rounded,
+                          label: 'Help & FAQ',
+                        ),
+                        _MenuItem(
+                          icon: Icons.headset_mic_outlined,
+                          label: 'Contact Support',
+                        ),
+                        _MenuItem(
+                          icon: Icons.star_outline_rounded,
+                          label: 'Rate the App',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    const _ProfileSection(
+                      title: 'Legal',
+                      items: [
+                        _MenuItem(
+                          icon: Icons.description_outlined,
+                          label: 'Terms & Conditions',
+                        ),
+                        _MenuItem(
+                          icon: Icons.privacy_tip_outlined,
+                          label: 'Privacy Policy',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 28),
+                    _buildLogoutButton(),
+                  ],
                 ),
-                borderRadius: BorderRadius.only(
-                  bottomLeft: Radius.circular(28),
-                  bottomRight: Radius.circular(28),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── Dark header: avatar, name, status, quick stats ───────────────────────
+  Widget _buildHeader() {
+    final topInset = MediaQuery.of(context).padding.top;
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.fromLTRB(20, topInset + 24, 20, 24),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [_C.pruneLight, _C.prune],
+        ),
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(28),
+          bottomRight: Radius.circular(28),
+        ),
+      ),
+      child: Column(
+        children: [
+          // Avatar with gold ring and camera badge
+          Stack(
+            children: [
+              Container(
+                width: 92,
+                height: 92,
+                padding: const EdgeInsets.all(3),
+                decoration: const BoxDecoration(
+                  color: _C.lin,
+                  shape: BoxShape.circle,
+                ),
+                child: Container(
+                  decoration: const BoxDecoration(
+                    color: _C.raisin,
+                    shape: BoxShape.circle,
+                  ),
+                  // Swap this Icon for an Image / NetworkImage when you have photos
+                  child: const Icon(
+                    Icons.person_rounded,
+                    color: Colors.white,
+                    size: 50,
+                  ),
                 ),
               ),
-              child: Column(
-                children: [
-                  Stack(
-                    alignment: Alignment.bottomRight,
-                    children: [
-                      Container(
-                        width: 88,
-                        height: 88,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.4),
-                            width: 3,
-                          ),
-                        ),
-                        child: const Icon(
-                          Icons.person_rounded,
-                          color: Colors.white,
-                          size: 50,
-                        ),
-                      ),
-                      Container(
-                        width: 28,
-                        height: 28,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFE8873A),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.camera_alt_rounded,
-                          color: Colors.white,
-                          size: 15,
-                        ),
-                      ),
-                    ],
+              Positioned(
+                bottom: 0,
+                right: 0,
+                child: Container(
+                  width: 30,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: _C.brique,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: _C.prune, width: 2.5),
                   ),
-                  const SizedBox(height: 12),
-                  Text(
-                    _riderName.isEmpty ? 'Rider' : _riderName,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                    ),
+                  child: const Icon(
+                    Icons.camera_alt_rounded,
+                    color: Colors.white,
+                    size: 15,
                   ),
-                  const SizedBox(height: 4),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2ECC71).withOpacity(0.2),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: const Color(0xFF2ECC71).withOpacity(0.4),
-                      ),
-                    ),
-                    child: const Text(
-                      'Active Rider',
-                      style: TextStyle(
-                        color: Color(0xFF2ECC71),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      const _ProfileStat(label: 'Total Trips', value: '248'),
-                      Container(
-                        width: 1,
-                        height: 32,
-                        color: Colors.white.withOpacity(0.2),
-                      ),
-                      const _ProfileStat(label: 'Rating', value: '4.9 ★'),
-                      Container(
-                        width: 1,
-                        height: 32,
-                        color: Colors.white.withOpacity(0.2),
-                      ),
-                      const _ProfileStat(label: 'Since', value: 'Jan 2024'),
-                    ],
-                  ),
-                ],
+                ),
               ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            _riderName.isEmpty ? 'Rider' : _riderName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
             ),
+          ),
+          const SizedBox(height: 8),
+          // Status pill + rider ID (same style as the pill on Home)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0x1AFFFFFF),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0x26FFFFFF)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: const BoxDecoration(
+                    color: _C.lin,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                const Text(
+                  'Active Rider',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(width: 1, height: 10, color: const Color(0x40FFFFFF)),
+                const SizedBox(width: 8),
+                const Text(
+                  _riderId,
+                  style: TextStyle(color: Color(0xB3FFFFFF), fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          // Glass-style stats strip
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            decoration: BoxDecoration(
+              color: const Color(0x14FFFFFF),
+              borderRadius: BorderRadius.circular(_radius),
+              border: Border.all(color: const Color(0x26FFFFFF)),
+            ),
+            child: const Row(
+              children: [
+                _ProfileStat(label: 'Total Trips', value: '248'),
+                _StatDivider(),
+                _ProfileStat(label: 'Rating', value: '4.9 ★'),
+                _StatDivider(),
+                _ProfileStat(label: 'Since', value: 'Jan 2024'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
-            const SizedBox(height: 20),
-
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Column(
-                children: [
-                  _ProfileSection(
-                    title: 'Account',
-                    items: const [
-                      _MenuItem(
-                        icon: Icons.person_outline_rounded,
-                        label: 'Personal Information',
-                      ),
-                      _MenuItem(
-                        icon: Icons.two_wheeler_outlined,
-                        label: 'Vehicle Details',
-                      ),
-                      _MenuItem(
-                        icon: Icons.lock_outline_rounded,
-                        label: 'Change Password',
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  _ProfileSection(
-                    title: 'Support',
-                    items: const [
-                      _MenuItem(
-                        icon: Icons.help_outline_rounded,
-                        label: 'Help & FAQ',
-                      ),
-                      _MenuItem(
-                        icon: Icons.headset_mic_outlined,
-                        label: 'Contact Support',
-                      ),
-                      _MenuItem(
-                        icon: Icons.star_outline_rounded,
-                        label: 'Rate the App',
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  _ProfileSection(
-                    title: 'Legal',
-                    items: const [
-                      _MenuItem(
-                        icon: Icons.description_outlined,
-                        label: 'Terms & Conditions',
-                      ),
-                      _MenuItem(
-                        icon: Icons.privacy_tip_outlined,
-                        label: 'Privacy Policy',
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-
-                  // Log Out
-                  GestureDetector(
-                    onTap: () =>
-                        Navigator.of(context).popUntil((r) => r.isFirst),
-                    child: Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFEBEE),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFFFFCDD2)),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(
-                            Icons.logout_rounded,
-                            color: Color(0xFFE53935),
-                            size: 22,
-                          ),
-                          SizedBox(width: 12),
-                          Text(
-                            'Log Out',
-                            style: TextStyle(
-                              color: Color(0xFFE53935),
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                ],
+  // ── Log out: soft accent color, asks before leaving ──────────────────────
+  Widget _buildLogoutButton() {
+    return Material(
+      color: _C.briqueSoft,
+      borderRadius: BorderRadius.circular(_radius),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: _confirmLogout,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(_radius),
+            border: Border.all(color: const Color(0xFFF0D3C9)),
+          ),
+          child: const Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.logout_rounded, color: _C.brique, size: 20),
+              SizedBox(width: 10),
+              Text(
+                'Log Out',
+                style: TextStyle(
+                  color: _C.brique,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Small widgets
+// ─────────────────────────────────────────────────────────────────────────────
+
 class _ProfileStat extends StatelessWidget {
   final String label, value;
+
   const _ProfileStat({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            value,
+            style: const TextStyle(
+              color: _C.lin,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+            ),
           ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          label,
-          style: const TextStyle(color: Color(0xAAFFFFFF), fontSize: 11),
-        ),
-      ],
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: const TextStyle(color: Color(0xB3FFFFFF), fontSize: 12),
+          ),
+        ],
+      ),
     );
+  }
+}
+
+class _StatDivider extends StatelessWidget {
+  const _StatDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(width: 1, height: 32, color: const Color(0x26FFFFFF));
   }
 }
 
 class _ProfileSection extends StatelessWidget {
   final String title;
   final List<_MenuItem> items;
+
   const _ProfileSection({required this.title, required this.items});
 
   @override
@@ -267,38 +398,49 @@ class _ProfileSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: const TextStyle(
-            color: Color(0xFF888888),
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-          ),
+        // Section title with the small accent bar (same as other screens)
+        Row(
+          children: [
+            Container(
+              width: 3,
+              height: 16,
+              decoration: BoxDecoration(
+                color: _C.brique,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              title,
+              style: const TextStyle(
+                color: _C.ink,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
         Container(
+          clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-            boxShadow: const [
-              BoxShadow(color: Color(0x08000000), blurRadius: 6),
-            ],
+            borderRadius: BorderRadius.circular(_radius),
+            border: Border.all(color: _C.border),
           ),
           child: Column(
-            children: items.asMap().entries.map((e) {
-              final isLast = e.key == items.length - 1;
-              return Column(
-                children: [
-                  e.value,
-                  if (!isLast)
-                    const Divider(
-                      height: 1,
-                      indent: 54,
-                      color: Color(0xFFF5F5F5),
-                    ),
-                ],
-              );
-            }).toList(),
+            children: [
+              for (int i = 0; i < items.length; i++) ...[
+                items[i],
+                if (i != items.length - 1)
+                  const Divider(
+                    height: 1,
+                    thickness: 1,
+                    indent: 68,
+                    color: _C.border,
+                  ),
+              ],
+            ],
           ),
         ),
       ],
@@ -309,40 +451,43 @@ class _ProfileSection extends StatelessWidget {
 class _MenuItem extends StatelessWidget {
   final IconData icon;
   final String label;
-  const _MenuItem({required this.icon, required this.label});
+
+  /// Add a screen to open here later (for example Personal Information)
+  final VoidCallback? onTap;
+
+  const _MenuItem({required this.icon, required this.label, this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              color: const Color(0xFFF0E8F8),
-              borderRadius: BorderRadius.circular(10),
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Row(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: const BoxDecoration(
+                color: _C.raisinSoft,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: _C.raisin, size: 20),
             ),
-            child: Icon(icon, color: const Color(0xFF2D1B3D), size: 18),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: Color(0xFF1A1A2E),
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  color: _C.ink,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
-          ),
-          const Icon(
-            Icons.chevron_right_rounded,
-            color: Color(0xFFCCCCCC),
-            size: 20,
-          ),
-        ],
+            const Icon(Icons.chevron_right_rounded, color: _C.muted, size: 20),
+          ],
+        ),
       ),
     );
   }

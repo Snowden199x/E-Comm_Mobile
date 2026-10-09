@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/dashboard/screens/delivery_detail_screen.dart';
-import 'package:vendo_rider/features/work/screens/rider_work_screen.dart';
+import 'package:vendo_rider/features/scanner/screens/parcel_scanner_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vendo brand palette (from the logo)
@@ -95,10 +95,24 @@ class _HomeScreenState extends State<HomeScreen>
 
   void _onAssignParcel() {
     HapticFeedback.mediumImpact();
-    Navigator.push(
+    Navigator.push<String>(
       context,
-      MaterialPageRoute(builder: (_) => const RiderWorkScreen()),
-    );
+      MaterialPageRoute(builder: (_) => const ParcelScannerScreen()),
+    ).then((scannedCode) {
+      if (!mounted || scannedCode == null) return;
+      // Scanned successfully — jump to Deliveries tab (index 1)
+      widget.onViewEarnings?.call();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Scanned: $scannedCode'),
+          backgroundColor: const Color(0xFF2D1B3D),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      );
+    });
   }
 
   @override

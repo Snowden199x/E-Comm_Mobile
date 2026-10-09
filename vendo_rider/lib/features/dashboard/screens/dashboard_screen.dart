@@ -34,7 +34,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Built once so the pages are not recreated on every rebuild
   late final List<Widget> _pages = [
-    HomeScreen(onViewEarnings: () => _onTabSelected(3)),
+    HomeScreen(onViewEarnings: () => _onTabSelected(1)),
     const DeliveriesScreen(),
     MapScreen(destination: _mapDestination, destinationLabel: _mapLabel),
     const EarningsScreen(),
