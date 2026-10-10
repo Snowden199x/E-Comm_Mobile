@@ -1,7 +1,80 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/auth/services/license_ocr_service.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Same Vendo palette as the login screen
+//  • Prune   → header, main buttons, main text
+//  • Brique  → small accent (required star, active step)
+//  • Lin     → soft gold for highlights
+//  • Raisin  → icons and links
+// ─────────────────────────────────────────────────────────────────────────────
+class _C {
+  static const prune = Color(0xFF412143);
+  static const pruneLight = Color(0xFF55295A);
+  static const brique = Color(0xFFBF5E40);
+  static const lin = Color(0xFFDBC583);
+  static const raisin = Color(0xFF815488);
+
+  static const background = Color(0xFFFAF7F5);
+  static const ink = Color(0xFF2A1B2C);
+  static const muted = Color(0xFF8C8290);
+  static const border = Color(0xFFECE6EA);
+  static const raisinSoft = Color(0xFFF4EDF5);
+  static const success = Color(0xFF248A5A);
+  static const error = Color(0xFFE53935);
+  static const errorSoft = Color(0xFFFFF4F3);
+}
+
+const double _radius = 14;
+
+// Rider picture size in the header (same 4:3 shape as the login rider)
+const double _riderW = 112;
+const double _riderH = 84;
+
+// Stable pseudo-random number in [0, 1), so the stars stay in the same places.
+double _hash(int n) {
+  final x = math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return x - x.floorToDouble();
+}
+
+// ── Shared input look (same as the login fields) ────────────────────────────
+OutlineInputBorder _border(Color color, double width) => OutlineInputBorder(
+  borderRadius: BorderRadius.circular(_radius),
+  borderSide: BorderSide(color: color, width: width),
+);
+
+InputDecoration _decoration({
+  String? hint,
+  IconData? icon,
+  Widget? suffix,
+  bool error = false,
+}) {
+  final side = error ? _C.error : _C.border;
+  final width = error ? 1.6 : 1.2;
+  return InputDecoration(
+    hintText: hint,
+    hintStyle: const TextStyle(color: _C.muted, fontSize: 15),
+    filled: true,
+    fillColor: error ? _C.errorSoft : _C.background,
+    prefixIcon: icon == null
+        ? null
+        : Icon(icon, color: error ? _C.error : _C.raisin, size: 20),
+    suffixIcon: suffix == null
+        ? null
+        : Padding(padding: const EdgeInsets.only(right: 14), child: suffix),
+    suffixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+    border: _border(side, width),
+    enabledBorder: _border(side, width),
+    disabledBorder: _border(side, width),
+    focusedBorder: _border(error ? _C.error : _C.prune, 1.6),
+  );
+}
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({
@@ -23,6 +96,7 @@ class RegisterScreen extends StatefulWidget {
 
 class _RegisterScreenState extends State<RegisterScreen> {
   int _currentStep = 0; // 0,1,2,3
+  final _scroll = ScrollController();
 
   // ── Step 1: Personal Information ──────────────────────────────
   final _lastNameCtrl = TextEditingController();
@@ -99,6 +173,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String? _barangayCode;
   String? _matchedCenterName;
 
+  // The fields that were wrong at the moment the user tapped Next.
+  // Only these go red, and each one goes back to normal once it is fixed.
+  Set<String> _flagged = {};
+  bool _termsError = false;
+  late final Listenable _allInputs;
+
   static const int _totalSteps = 4;
 
   final List<String> _sexOptions = ['Male', 'Female'];
@@ -110,6 +190,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _emailCtrl.text = widget.verifiedEmail ?? '';
     _firstNameCtrl.text = widget.googleFirstName;
     _lastNameCtrl.text = widget.googleLastName;
+    _allInputs = Listenable.merge([
+      _lastNameCtrl, _firstNameCtrl, _emailCtrl, _birthdayCtrl,
+      _passwordCtrl, _confirmPassCtrl, _plateNumberCtrl,
+      _dlLastNameCtrl, _dlFirstNameCtrl, _dlAddressCtrl, _dlLicenseNoCtrl,
+      _dlExpirationCtrl, _dlNationalityCtrl, _orCrMVFileNoCtrl,
+      _orCrPlateNoCtrl, _orCrMakeCtrl, _orCrBodyTypeCtrl, _orCrYearModelCtrl,
+      _orCrEngineNoCtrl, _orCrChassisNoCtrl, _orCrOwnerCtrl, _orCrAddressCtrl,
+      _orCrExpirationCtrl, _phoneCtrl, _streetCtrl, _zipCodeCtrl,
+    ])..addListener(_onInputChanged);
     _loadLocations();
   }
 
@@ -183,6 +272,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   @override
   void dispose() {
+    _allInputs.removeListener(_onInputChanged);
     _lastNameCtrl.dispose();
     _firstNameCtrl.dispose();
     _middleInitialCtrl.dispose();
@@ -219,6 +309,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _barangayCtrl.dispose();
     _streetCtrl.dispose();
     _zipCodeCtrl.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -270,49 +361,24 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   Future<void> _nextStep() async {
     if (_submitting) return;
-    if (_currentStep == 0) {
-      if (_firstNameCtrl.text.trim().isEmpty ||
-          _lastNameCtrl.text.trim().isEmpty ||
-          _selectedSex == null ||
-          _emailCtrl.text.trim().isEmpty ||
-          (widget.googleRegistrationToken == null &&
-              _emailVerificationToken == null) ||
-          _birthdayCtrl.text.isEmpty ||
-          _passwordCtrl.text.length < 8 ||
-          _passwordCtrl.text != _confirmPassCtrl.text ||
-          _validIdPath == null) {
-        _showError(
-          'Complete your personal details, ID, and matching passwords.',
-        );
-        return;
-      }
-    } else if (_currentStep == 1) {
-      if (_vehicleType == null ||
-          _plateNumberCtrl.text.trim().isEmpty ||
-          _driversLicensePath == null ||
-          _orCrPath == null) {
-        _showError(
-          'Complete vehicle details and upload the license and OR/CR.',
-        );
-        return;
-      }
-    } else if (_currentStep == 2) {
-      if (_phoneCtrl.text.trim().isEmpty ||
-          _provinceCode == null ||
-          _cityCode == null ||
-          _barangayCode == null ||
-          _streetCtrl.text.trim().isEmpty ||
-          _zipCodeCtrl.text.trim().isEmpty) {
-        _showError('Complete your contact address and select a city.');
-        return;
-      }
-    }
-
     if (_currentStep < _totalSteps - 1) {
-      setState(() => _currentStep++);
+      final invalid = _invalidIds(_currentStep);
+      if (invalid.isNotEmpty) {
+        // Snapshot taken NOW: only these fields turn red
+        setState(() => _flagged = invalid.toSet());
+        _showError('Please complete the fields marked in red.');
+        _scrollToField(invalid.first);
+        return;
+      }
+      setState(() {
+        _currentStep++;
+        _flagged = {};
+      });
+      _scrollToTop();
       return;
     }
     if (!_agreedToTerms) {
+      setState(() => _termsError = true);
       _showError('Please agree to the terms before submitting.');
       return;
     }
@@ -394,65 +460,362 @@ class _RegisterScreenState extends State<RegisterScreen> {
     Icons.fact_check_outlined,
   ];
 
+  // ────────────────────────────────────────────────────────────────
+  // Page layout: purple header with the rider + rounded white card
+  // ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8F5FB),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _TopBar(onLoginTap: () => Navigator.pop(context)),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 20),
-                    const Text(
-                      'Rider Registration',
-                      style: TextStyle(
-                        color: Color(0xFF1A1A2E),
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                      ),
+    if (_flagged.isNotEmpty) _flagged.retainAll(_invalidIds(_currentStep));
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      // Light status bar icons because the header is dark
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
+        backgroundColor: _C.prune,
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_C.pruneLight, _C.prune],
+            ),
+          ),
+          child: Column(
+            children: [
+              _buildHeader(context),
+              Expanded(
+                child: Container(
+                  width: double.infinity,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(28),
                     ),
-                    const SizedBox(height: 2),
-                    const Text(
-                      'Create your rider account',
-                      style: TextStyle(color: Color(0xFF888888), fontSize: 13),
+                  ),
+                  child: SingleChildScrollView(
+                    controller: _scroll,
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _MobileStepBar(
+                          currentStep: _currentStep,
+                          totalSteps: _totalSteps,
+                          labels: _stepLabels,
+                          icons: _stepIcons,
+                        ),
+                        const SizedBox(height: 28),
+                        if (_currentStep == 0) _buildStep1(),
+                        if (_currentStep == 1) _buildStep2(),
+                        if (_currentStep == 2) _buildStep3(),
+                        if (_currentStep == 3) _buildStep4(),
+                      ],
                     ),
-                    const SizedBox(height: 20),
-
-                    // ── Progress stepper ──────────────────────────
-                    _MobileStepBar(
-                      currentStep: _currentStep,
-                      totalSteps: _totalSteps,
-                      labels: _stepLabels,
-                      icons: _stepIcons,
-                    ),
-
-                    const SizedBox(height: 28),
-                    if (_currentStep == 0) _buildStep1(),
-                    if (_currentStep == 1) _buildStep2(),
-                    if (_currentStep == 2) _buildStep3(),
-                    if (_currentStep == 3) _buildStep4(),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-      bottomNavigationBar: _BottomNextBar(
-        currentStep: _currentStep,
-        totalSteps: _totalSteps,
-        onNext: _submitting ? null : _nextStep,
-        submitting: _submitting,
-        onBack: _currentStep > 0 ? () => setState(() => _currentStep--) : null,
+        bottomNavigationBar: _BottomNextBar(
+          currentStep: _currentStep,
+          totalSteps: _totalSteps,
+          onNext: _submitting ? null : _nextStep,
+          submitting: _submitting,
+          onBack: _currentStep > 0 ? _goBack : null,
+        ),
       ),
     );
   }
+
+  Widget _buildHeader(BuildContext context) {
+    final topInset = MediaQuery.of(context).padding.top;
+    final keyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+
+    return ClipRect(
+      child: Stack(
+        children: [
+          // Soft circles and stars (still, not moving)
+          const Positioned.fill(
+            child: IgnorePointer(child: CustomPaint(painter: _DecorPainter())),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(20, topInset + 10, 20, 26),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withAlpha(30),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.arrow_back_ios_new_rounded,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    const Text(
+                      'Have an account?  ',
+                      style: TextStyle(color: Color(0xB3FFFFFF), fontSize: 12),
+                    ),
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: _C.lin, width: 1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          'Login',
+                          style: TextStyle(
+                            color: _C.lin,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                // The rider hides while the keyboard is open to save space
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 200),
+                  alignment: Alignment.topCenter,
+                  child: keyboardOpen
+                      ? const SizedBox(width: double.infinity)
+                      : const Padding(
+                          padding: EdgeInsets.only(top: 6),
+                          child: SizedBox(
+                            width: _riderW,
+                            height: _riderH,
+                            child: _RiderPicture(),
+                          ),
+                        ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Rider Registration',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Create your rider account',
+                  style: TextStyle(color: Color(0xB3FFFFFF), fontSize: 14),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Small helpers to keep the steps short
+  // ────────────────────────────────────────────────────────────────
+  static const SizedBox _gap = SizedBox(height: 18);
+
+  bool _blank(TextEditingController c) => c.text.trim().isEmpty;
+
+  // While the user fixes a red field, it turns normal. It never turns red
+  // again by itself: only the next tap on Next can do that.
+  void _onInputChanged() {
+    if (_flagged.isEmpty) return;
+    final still = _invalidIds(_currentStep).toSet();
+    if (_flagged.any((id) => !still.contains(id))) {
+      setState(() => _flagged.retainAll(still));
+    }
+  }
+
+  void _goBack() {
+    setState(() {
+      _currentStep--;
+      _flagged = {};
+    });
+    _scrollToTop();
+  }
+
+  void _scrollToTop() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) _scroll.jumpTo(0);
+    });
+  }
+
+  void _scrollToField(String id) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = (_keys[id] ?? _keys['email'])?.currentContext;
+      if (ctx != null && ctx.mounted) {
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOutCubic,
+          alignment: 0.12,
+        );
+      }
+    });
+  }
+
+  // Every field (in screen order) that is empty or not valid.
+  // Every field marked with a red * is checked here.
+  List<String> _invalidIds(int step) {
+    final checks = <(String, bool)>[];
+    if (step == 0) {
+      checks.addAll([
+        ('lastName', _blank(_lastNameCtrl)),
+        ('firstName', _blank(_firstNameCtrl)),
+        ('sex', _selectedSex == null),
+        ('email', _blank(_emailCtrl)),
+        (
+          'emailVerify',
+          widget.googleRegistrationToken == null &&
+              _emailVerificationToken == null,
+        ),
+        ('birthday', _birthdayCtrl.text.isEmpty),
+        ('password', _passwordCtrl.text.length < 8),
+        (
+          'confirm',
+          _confirmPassCtrl.text.isEmpty ||
+              _passwordCtrl.text != _confirmPassCtrl.text,
+        ),
+        ('validId', _validIdPath == null),
+      ]);
+    } else if (step == 1) {
+      checks.addAll([
+        ('vehicleType', _vehicleType == null),
+        ('plate', _blank(_plateNumberCtrl)),
+        ('license', _driversLicensePath == null),
+        ('dlLast', _blank(_dlLastNameCtrl)),
+        ('dlFirst', _blank(_dlFirstNameCtrl)),
+        ('dlAddress', _blank(_dlAddressCtrl)),
+        ('dlLicenseNo', _blank(_dlLicenseNoCtrl)),
+        ('dlExpiration', _blank(_dlExpirationCtrl)),
+        ('dlNationality', _blank(_dlNationalityCtrl)),
+        ('dlCode', _dlRestrictionCode == null),
+        ('orCr', _orCrPath == null),
+        ('mvFile', _blank(_orCrMVFileNoCtrl)),
+        ('orPlate', _blank(_orCrPlateNoCtrl)),
+        ('make', _blank(_orCrMakeCtrl)),
+        ('body', _blank(_orCrBodyTypeCtrl)),
+        ('year', _blank(_orCrYearModelCtrl)),
+        ('engine', _blank(_orCrEngineNoCtrl)),
+        ('chassis', _blank(_orCrChassisNoCtrl)),
+        ('owner', _blank(_orCrOwnerCtrl)),
+        ('ownerAddress', _blank(_orCrAddressCtrl)),
+        ('regExp', _blank(_orCrExpirationCtrl)),
+      ]);
+    } else if (step == 2) {
+      checks.addAll([
+        ('phone', _blank(_phoneCtrl)),
+        ('province', _provinceCode == null),
+        ('city', _cityCode == null),
+        ('barangay', _barangayCode == null),
+        ('street', _blank(_streetCtrl)),
+        ('zip', _blank(_zipCodeCtrl)),
+      ]);
+    }
+    return [for (final c in checks) if (c.$2) c.$1];
+  }
+
+  // One key per field, so the page can scroll to the first red one
+  final Map<String, GlobalKey> _keys = {};
+  GlobalKey _k(String id) => _keys.putIfAbsent(id, () => GlobalKey());
+
+  Widget _col(String id, String label, Widget child, {bool required = false}) {
+    return KeyedSubtree(
+      key: _k(id),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _label(label, required: required),
+          const SizedBox(height: 8),
+          // Tells the field below it which id it has, so it can check if it is flagged
+          _FieldScope(id: id, flagged: _flagged, child: child),
+        ],
+      ),
+    );
+  }
+
+  Widget _row2(Widget a, Widget b) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: a),
+        const SizedBox(width: 12),
+        Expanded(child: b),
+      ],
+    );
+  }
+
+  String _fmtDate(DateTime p) =>
+      '${p.month.toString().padLeft(2, '0')}/${p.day.toString().padLeft(2, '0')}/${p.year}';
+
+  Future<DateTime?> _pickDate({
+    required DateTime initial,
+    required DateTime first,
+    required DateTime last,
+  }) {
+    return showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: first,
+      lastDate: last,
+      builder: (c, child) => Theme(
+        data: Theme.of(c).copyWith(
+          colorScheme: const ColorScheme.light(primary: _C.prune),
+        ),
+        child: child!,
+      ),
+    );
+  }
+
+  // Date field that opens a date picker for a date in the future
+  Widget _futureDateField(TextEditingController controller) {
+    return _Field(
+      controller: controller,
+      hint: 'mm/dd/yyyy',
+      readOnly: true,
+      suffix: const Icon(
+        Icons.calendar_today_outlined,
+        size: 18,
+        color: _C.muted,
+      ),
+      onTap: () async {
+        final p = await _pickDate(
+          initial: DateTime.now().add(const Duration(days: 365)),
+          first: DateTime.now(),
+          last: DateTime(2060),
+        );
+        if (p != null) {
+          controller.text = _fmtDate(p);
+          setState(() {});
+        }
+      },
+    );
+  }
+
+  static final ButtonStyle _linkStyle = TextButton.styleFrom(
+    foregroundColor: _C.raisin,
+    textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+  );
 
   // ────────────────────────────────────────────────────────────────
   // STEP 1 — Personal Information
@@ -461,73 +824,91 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(
+        const _SectionHeader(
           title: 'Personal Information',
           subtitle: 'Please provide your personal details',
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 18),
 
-        _label('Last Name', required: true),
-        const SizedBox(height: 6),
-        _Field(controller: _lastNameCtrl, hint: 'Enter last name'),
-        const SizedBox(height: 12),
-
-        _label('First Name', required: true),
-        const SizedBox(height: 6),
-        _Field(controller: _firstNameCtrl, hint: 'Enter first name'),
-        const SizedBox(height: 12),
-
-        _label('Middle Initial'),
-        const SizedBox(height: 6),
-        _Field(controller: _middleInitialCtrl, hint: 'Enter middle initial'),
-        const SizedBox(height: 12),
-
-        _label('Sex', required: true),
-        const SizedBox(height: 6),
-        _Dropdown(
-          value: _selectedSex,
-          hint: 'Select Sex',
-          options: _sexOptions,
-          onChanged: (v) => setState(() => _selectedSex = v),
+        _col(
+          'lastName',
+          'Last Name',
+          _Field(
+            controller: _lastNameCtrl,
+            hint: 'Enter last name',
+            icon: Icons.person_outline_rounded,
+          ),
+          required: true,
         ),
-        const SizedBox(height: 12),
-
-        _label('Email', required: true),
-        const SizedBox(height: 6),
-        _Field(
-          controller: _emailCtrl,
-          hint: 'Enter email address',
-          keyboard: TextInputType.emailAddress,
-          readOnly: widget.googleRegistrationToken != null,
-          onChanged: widget.googleRegistrationToken != null
-              ? null
-              : (_) {
-                  if (_emailVerificationToken != null) {
-                    setState(() => _emailVerificationToken = null);
-                  }
-                },
+        _gap,
+        _col(
+          'firstName',
+          'First Name',
+          _Field(
+            controller: _firstNameCtrl,
+            hint: 'Enter first name',
+            icon: Icons.person_outline_rounded,
+          ),
+          required: true,
         ),
-        const SizedBox(height: 8),
+        _gap,
+        _col(
+          'middleInitial',
+          'Middle Initial',
+          _Field(
+            controller: _middleInitialCtrl,
+            hint: 'Enter middle initial',
+            icon: Icons.person_outline_rounded,
+          ),
+        ),
+        _gap,
+        _col(
+          'sex',
+          'Sex',
+          _Dropdown(
+            value: _selectedSex,
+            hint: 'Select Sex',
+            options: _sexOptions,
+            onChanged: (v) => setState(() => _selectedSex = v),
+          ),
+          required: true,
+        ),
+        _gap,
+
+        _col(
+          'email',
+          'Email',
+          _Field(
+            controller: _emailCtrl,
+            hint: 'Enter email address',
+            icon: Icons.mail_outline_rounded,
+            keyboard: TextInputType.emailAddress,
+            readOnly: widget.googleRegistrationToken != null,
+            onChanged: widget.googleRegistrationToken != null
+                ? null
+                : (_) {
+                    if (_emailVerificationToken != null) {
+                      setState(() => _emailVerificationToken = null);
+                    }
+                  },
+          ),
+          required: true,
+        ),
+        const SizedBox(height: 10),
         if (widget.googleRegistrationToken != null)
           const Row(
             children: [
-              Icon(Icons.verified, color: Color(0xFF248A5A), size: 18),
+              Icon(Icons.verified, color: _C.success, size: 18),
               SizedBox(width: 6),
-              Text(
-                'Verified with Google',
-                style: TextStyle(color: Color(0xFF248A5A)),
-              ),
+              Text('Verified with Google', style: TextStyle(color: _C.success)),
             ],
           )
         else if (_emailVerificationToken != null)
           const Row(
             children: [
-              Icon(Icons.verified, color: Color(0xFF248A5A), size: 18),
+              Icon(Icons.verified, color: _C.success, size: 18),
               SizedBox(width: 6),
-              Text(
-                'Email verified',
-                style: TextStyle(color: Color(0xFF248A5A)),
-              ),
+              Text('Email verified', style: TextStyle(color: _C.success)),
             ],
           )
         else ...[
@@ -537,11 +918,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 child: _Field(
                   controller: _emailOtpCtrl,
                   hint: '6-digit email code',
+                  forceError: _flagged.contains('emailVerify'),
+                  errorText: 'Verify your email to continue.',
+                  icon: Icons.pin_outlined,
                   keyboard: TextInputType.number,
                 ),
               ),
               const SizedBox(width: 8),
               TextButton(
+                style: _linkStyle,
                 onPressed: _sendingEmailOtp ? null : _sendEmailOtp,
                 child: Text(_sendingEmailOtp ? 'Sending…' : 'Send code'),
               ),
@@ -550,137 +935,134 @@ class _RegisterScreenState extends State<RegisterScreen> {
           Align(
             alignment: Alignment.centerRight,
             child: TextButton.icon(
+              style: _linkStyle,
               onPressed: _verifyingEmailOtp ? null : _verifyEmailOtp,
               icon: const Icon(Icons.verified_user_outlined, size: 18),
               label: Text(_verifyingEmailOtp ? 'Checking…' : 'Verify email'),
             ),
           ),
         ],
-        const SizedBox(height: 12),
+        _gap,
 
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Birthday', required: true),
-                  const SizedBox(height: 6),
-                  _Field(
-                    controller: _birthdayCtrl,
-                    hint: 'mm/dd/yyyy',
-                    readOnly: true,
-                    suffix: const Icon(
-                      Icons.calendar_today_outlined,
-                      size: 18,
-                      color: Color(0xFF888888),
-                    ),
-                    onTap: () async {
-                      final p = await showDatePicker(
-                        context: context,
-                        initialDate: DateTime(2000),
-                        firstDate: DateTime(1900),
-                        lastDate: DateTime.now(),
-                        builder: (c, child) => Theme(
-                          data: Theme.of(c).copyWith(
-                            colorScheme: const ColorScheme.light(
-                              primary: Color(0xFF3B1F52),
-                            ),
-                          ),
-                          child: child!,
-                        ),
-                      );
-                      if (p != null) {
-                        _birthdayCtrl.text =
-                            '${p.month.toString().padLeft(2, '0')}/${p.day.toString().padLeft(2, '0')}/${p.year}';
-                        _ageCtrl.text = (DateTime.now().year - p.year)
-                            .toString();
-                        setState(() {});
-                      }
-                    },
-                  ),
-                ],
+        _row2(
+          _col(
+          'birthday',
+          'Birthday',
+            _Field(
+              controller: _birthdayCtrl,
+              hint: 'mm/dd/yyyy',
+              readOnly: true,
+              suffix: const Icon(
+                Icons.calendar_today_outlined,
+                size: 18,
+                color: _C.muted,
               ),
+              onTap: () async {
+                final p = await _pickDate(
+                  initial: DateTime(2000),
+                  first: DateTime(1900),
+                  last: DateTime.now(),
+                );
+                if (p != null) {
+                  _birthdayCtrl.text = _fmtDate(p);
+                  _ageCtrl.text = (DateTime.now().year - p.year).toString();
+                  setState(() {});
+                }
+              },
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Age', required: true),
-                  const SizedBox(height: 6),
-                  _Field(controller: _ageCtrl, hint: '--', readOnly: true),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-
-        _label('Valid ID', required: true),
-        const SizedBox(height: 6),
-        _UploadField(
-          fileName: _validIdFileName,
-          hint: 'Upload Valid ID here',
-          onTap: () => _showImageSourceSheet(
-            context,
-            (file) => setState(() {
-              _validIdFileName = file.name;
-              _validIdPath = file.path;
-            }),
+            required: true,
+          ),
+          _col(
+          'age',
+          'Age',
+            _Field(controller: _ageCtrl, hint: '--', readOnly: true),
+            required: true,
           ),
         ),
-        const SizedBox(height: 24),
+        _gap,
 
-        _SectionHeader(
+        _col(
+          'validId',
+          'Valid ID',
+          _UploadField(
+            fileName: _validIdFileName,
+            hint: 'Upload Valid ID here',
+            onTap: () => _showImageSourceSheet((file) {
+              setState(() {
+                _validIdFileName = file.name;
+                _validIdPath = file.path;
+              });
+            }),
+          ),
+          required: true,
+        ),
+        const SizedBox(height: 28),
+
+        const _SectionHeader(
           title: 'Account Security',
           subtitle: 'Set a password to secure your account.',
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 18),
 
-        _label('Password', required: true),
-        const SizedBox(height: 6),
-        _Field(
-          controller: _passwordCtrl,
-          hint: 'Create a password',
-          obscure: _obscurePass,
-          suffix: GestureDetector(
-            onTap: () => setState(() => _obscurePass = !_obscurePass),
-            child: Icon(
-              _obscurePass
-                  ? Icons.remove_red_eye_outlined
-                  : Icons.visibility_off_outlined,
-              size: 20,
-              color: const Color(0xFF888888),
+        _col(
+          'password',
+          'Password',
+          _Field(
+            controller: _passwordCtrl,
+            hint: 'Create a password',
+            icon: Icons.lock_outline_rounded,
+            obscure: _obscurePass,
+            forceError: _flagged.contains('password') && _passwordCtrl.text.isNotEmpty,
+            errorText: 'Password must be at least 8 characters.',
+            
+            suffix: GestureDetector(
+              onTap: () => setState(() => _obscurePass = !_obscurePass),
+              behavior: HitTestBehavior.opaque,
+              child: Icon(
+                _obscurePass
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+                size: 22,
+                color: _C.muted,
+              ),
             ),
           ),
+          required: true,
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 6),
         const Padding(
           padding: EdgeInsets.only(left: 2),
           child: Text(
             'Minimum 8 characters with letters and numbers',
-            style: TextStyle(color: Color(0xFF999999), fontSize: 11),
+            style: TextStyle(color: _C.muted, fontSize: 11.5),
           ),
         ),
-        const SizedBox(height: 12),
+        _gap,
 
-        _label('Confirm Password', required: true),
-        const SizedBox(height: 6),
-        _Field(
-          controller: _confirmPassCtrl,
-          hint: 'Confirm your password',
-          obscure: _obscureConfirm,
-          suffix: GestureDetector(
-            onTap: () => setState(() => _obscureConfirm = !_obscureConfirm),
-            child: Icon(
-              _obscureConfirm
-                  ? Icons.remove_red_eye_outlined
-                  : Icons.visibility_off_outlined,
-              size: 20,
-              color: const Color(0xFF888888),
+        _col(
+          'confirm',
+          'Confirm Password',
+          _Field(
+            controller: _confirmPassCtrl,
+            hint: 'Confirm your password',
+            icon: Icons.lock_outline_rounded,
+            obscure: _obscureConfirm,
+            forceError: _flagged.contains('confirm') && _confirmPassCtrl.text.isNotEmpty,
+            errorText: 'Passwords do not match.',
+            
+            suffix: GestureDetector(
+              onTap: () => setState(() => _obscureConfirm = !_obscureConfirm),
+              behavior: HitTestBehavior.opaque,
+              child: Icon(
+                _obscureConfirm
+                    ? Icons.visibility_outlined
+                    : Icons.visibility_off_outlined,
+                size: 22,
+                color: _C.muted,
+              ),
             ),
           ),
+          required: true,
         ),
       ],
     );
@@ -693,43 +1075,56 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(
+        const _SectionHeader(
           title: 'Vehicle Details',
           subtitle: 'Provide your vehicle and license information',
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 18),
 
-        _label('Type of Vehicle', required: true),
-        const SizedBox(height: 6),
-        _Dropdown(
-          value: _vehicleType,
-          hint: 'Select vehicle type',
-          options: _vehicleOptions,
-          onChanged: (v) => setState(() => _vehicleType = v),
+        _col(
+          'vehicleType',
+          'Type of Vehicle',
+          _Dropdown(
+            value: _vehicleType,
+            hint: 'Select vehicle type',
+            options: _vehicleOptions,
+            onChanged: (v) => setState(() => _vehicleType = v),
+          ),
+          required: true,
         ),
-        const SizedBox(height: 12),
+        _gap,
 
-        _label('Plate Number', required: true),
-        const SizedBox(height: 6),
-        _Field(controller: _plateNumberCtrl, hint: 'e.g. ABC 1234'),
-        const SizedBox(height: 12),
+        _col(
+          'plate',
+          'Plate Number',
+          _Field(
+            controller: _plateNumberCtrl,
+            hint: 'e.g. ABC 1234',
+            icon: Icons.pin_outlined,
+          ),
+          required: true,
+        ),
+        _gap,
 
-        _label("Driver's License", required: true),
-        const SizedBox(height: 6),
-        _UploadField(
-          fileName: _driversLicenseFile,
-          hint: "Upload Driver's License",
-          onTap: () => _showLicenseSourceSheet(context),
+        _col(
+          'license',
+          "Driver's License",
+          _UploadField(
+            fileName: _driversLicenseFile,
+            hint: "Upload Driver's License",
+            onTap: _showLicenseSourceSheet,
+          ),
+          required: true,
         ),
         // Scanning indicator
         if (_scanningLicense)
           Container(
-            margin: const EdgeInsets.only(top: 10),
+            margin: const EdgeInsets.only(top: 12),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             decoration: BoxDecoration(
-              color: const Color(0xFFF0E8F8),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFDDD0EE)),
+              color: _C.raisinSoft,
+              borderRadius: BorderRadius.circular(_radius),
+              border: Border.all(color: _C.raisin.withAlpha(60)),
             ),
             child: const Row(
               children: [
@@ -738,193 +1133,114 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   height: 18,
                   child: CircularProgressIndicator(
                     strokeWidth: 2.5,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      Color(0xFF2D1B3D),
-                    ),
+                    valueColor: AlwaysStoppedAnimation<Color>(_C.prune),
                   ),
                 ),
                 SizedBox(width: 12),
                 Text(
                   'Scanning license, please wait…',
                   style: TextStyle(
-                    color: Color(0xFF2D1B3D),
+                    color: _C.prune,
                     fontSize: 13,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
             ),
           ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 28),
 
         // ── Driver's License Information ───────────────────────
-        _SectionHeader(
+        const _SectionHeader(
           title: "Driver's License Information",
           subtitle: 'Fill in the details as shown on your license',
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 18),
 
-        // Last Name / First Name side by side
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Last Name', required: true),
-                  const SizedBox(height: 6),
-                  _Field(
-                    controller: _dlLastNameCtrl,
-                    hint: 'Last name on license',
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('First Name', required: true),
-                  const SizedBox(height: 6),
-                  _Field(
-                    controller: _dlFirstNameCtrl,
-                    hint: 'First name on license',
-                  ),
-                ],
-              ),
-            ),
-          ],
+        _row2(
+          _col(
+          'dlLast',
+          'Last Name',
+            _Field(controller: _dlLastNameCtrl, hint: 'Last name on license'),
+            required: true,
+          ),
+          _col(
+          'dlFirst',
+          'First Name',
+            _Field(controller: _dlFirstNameCtrl, hint: 'First name on license'),
+            required: true,
+          ),
         ),
-        const SizedBox(height: 12),
+        _gap,
 
-        _label('Middle Name'),
-        const SizedBox(height: 6),
-        _Field(controller: _dlMiddleNameCtrl, hint: 'Middle name on license'),
-        const SizedBox(height: 12),
-
-        _label('Address', required: true),
-        const SizedBox(height: 6),
-        _Field(controller: _dlAddressCtrl, hint: 'Address as shown on license'),
-        const SizedBox(height: 12),
-
-        // License No. / Expiration Date side by side
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('License No.', required: true),
-                  const SizedBox(height: 6),
-                  _Field(
-                    controller: _dlLicenseNoCtrl,
-                    hint: 'e.g. N01-23-456789',
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Expiration Date', required: true),
-                  const SizedBox(height: 6),
-                  _Field(
-                    controller: _dlExpirationCtrl,
-                    hint: 'mm/dd/yyyy',
-                    readOnly: true,
-                    suffix: const Icon(
-                      Icons.calendar_today_outlined,
-                      size: 18,
-                      color: Color(0xFF888888),
-                    ),
-                    onTap: () async {
-                      final p = await showDatePicker(
-                        context: context,
-                        initialDate: DateTime.now().add(
-                          const Duration(days: 365),
-                        ),
-                        firstDate: DateTime.now(),
-                        lastDate: DateTime(2060),
-                        builder: (c, child) => Theme(
-                          data: Theme.of(c).copyWith(
-                            colorScheme: const ColorScheme.light(
-                              primary: Color(0xFF3B1F52),
-                            ),
-                          ),
-                          child: child!,
-                        ),
-                      );
-                      if (p != null) {
-                        _dlExpirationCtrl.text =
-                            '${p.month.toString().padLeft(2, '0')}/${p.day.toString().padLeft(2, '0')}/${p.year}';
-                        setState(() {});
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ],
+        _col(
+          'dlMiddle',
+          'Middle Name',
+          _Field(controller: _dlMiddleNameCtrl, hint: 'Middle name on license'),
         ),
-        const SizedBox(height: 12),
+        _gap,
 
-        // Nationality / Blood Type side by side
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Nationality', required: true),
-                  const SizedBox(height: 6),
-                  _Field(controller: _dlNationalityCtrl, hint: 'e.g. Filipino'),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Blood Type'),
-                  const SizedBox(height: 6),
-                  _Dropdown(
-                    value: _dlBloodTypeCtrl.text.isEmpty
-                        ? null
-                        : _dlBloodTypeCtrl.text,
-                    hint: 'Select',
-                    options: const [
-                      'A+',
-                      'A-',
-                      'B+',
-                      'B-',
-                      'AB+',
-                      'AB-',
-                      'O+',
-                      'O-',
-                    ],
-                    onChanged: (v) =>
-                        setState(() => _dlBloodTypeCtrl.text = v ?? ''),
-                  ),
-                ],
-              ),
-            ),
-          ],
+        _col(
+          'dlAddress',
+          'Address',
+          _Field(
+            controller: _dlAddressCtrl,
+            hint: 'Address as shown on license',
+            icon: Icons.home_outlined,
+          ),
+          required: true,
         ),
-        const SizedBox(height: 12),
+        _gap,
 
-        _label('Driver\'s License Code', required: true),
+        _row2(
+          _col(
+          'dlLicenseNo',
+          'License No.',
+            _Field(controller: _dlLicenseNoCtrl, hint: 'e.g. N01-23-456789'),
+            required: true,
+          ),
+          _col(
+          'dlExpiration',
+          'Expiration Date',
+            _futureDateField(_dlExpirationCtrl),
+            required: true,
+          ),
+        ),
+        _gap,
+
+        _row2(
+          _col(
+          'dlNationality',
+          'Nationality',
+            _Field(controller: _dlNationalityCtrl, hint: 'e.g. Filipino'),
+            required: true,
+          ),
+          _col(
+          'bloodType',
+          'Blood Type',
+            _Dropdown(
+              value: _dlBloodTypeCtrl.text.isEmpty ? null : _dlBloodTypeCtrl.text,
+              hint: 'Select',
+              options: const ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
+              onChanged: (v) => setState(() => _dlBloodTypeCtrl.text = v ?? ''),
+            ),
+          ),
+        ),
+        _gap,
+
+        KeyedSubtree(
+          key: _k('dlCode'),
+          child: _label("Driver's License Code", required: true),
+        ),
         const SizedBox(height: 4),
         const Text(
           'Vehicle classification you are authorized to drive',
-          style: TextStyle(color: Color(0xFF999999), fontSize: 11),
+          style: TextStyle(color: _C.muted, fontSize: 11.5),
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 8),
         _Dropdown(
           value: _dlRestrictionCode,
+          forceError: _flagged.contains('dlCode'),
           hint: 'Select license code',
           options: const [
             'A — Motorcycle',
@@ -933,211 +1249,138 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ],
           onChanged: (v) => setState(() => _dlRestrictionCode = v),
         ),
+        const SizedBox(height: 28),
 
-        const SizedBox(height: 24),
-
-        _label('OR / CR', required: true),
+        KeyedSubtree(key: _k('orCr'), child: _label('OR / CR', required: true)),
         const SizedBox(height: 4),
         const Text(
           'Official Receipt / Certificate of Registration',
-          style: TextStyle(color: Color(0xFF999999), fontSize: 11),
+          style: TextStyle(color: _C.muted, fontSize: 11.5),
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 8),
         _UploadField(
           fileName: _orCrFile,
+          forceError: _flagged.contains('orCr'),
           hint: 'Upload OR / CR',
-          onTap: () => _showImageSourceSheet(
-            context,
-            (file) => setState(() {
+          onTap: () => _showImageSourceSheet((file) {
+            setState(() {
               _orCrFile = file.name;
               _orCrPath = file.path;
-            }),
-          ),
+            });
+          }),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 28),
 
         // ── OR / CR Information ────────────────────────────────
-        _SectionHeader(
+        const _SectionHeader(
           title: 'OR / CR Information',
           subtitle: 'Fill in the details as shown on your OR / CR',
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 18),
 
-        // MV File No. + Plate No.
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('MV File No.', required: true),
-                  const SizedBox(height: 6),
-                  _Field(
-                    controller: _orCrMVFileNoCtrl,
-                    hint: 'e.g. 1234567890',
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Plate No.', required: true),
-                  const SizedBox(height: 6),
-                  _Field(controller: _orCrPlateNoCtrl, hint: 'e.g. ABC 1234'),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-
-        // Make / Series (model name)
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Make', required: true),
-                  const SizedBox(height: 6),
-                  _Field(controller: _orCrMakeCtrl, hint: 'e.g. Honda, Yamaha'),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Series / Model'),
-                  const SizedBox(height: 6),
-                  _Field(controller: _orCrSeriesCtrl, hint: 'e.g. Click 125i'),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-
-        // Body Type + Color
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Body Type', required: true),
-                  const SizedBox(height: 6),
-                  _Field(
-                    controller: _orCrBodyTypeCtrl,
-                    hint: 'e.g. Motorcycle',
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Color'),
-                  const SizedBox(height: 6),
-                  _Field(controller: _orCrColorCtrl, hint: 'e.g. Black'),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-
-        // Year Model + Engine No.
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Year Model', required: true),
-                  const SizedBox(height: 6),
-                  _Field(
-                    controller: _orCrYearModelCtrl,
-                    hint: 'e.g. 2022',
-                    keyboard: TextInputType.number,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _label('Engine No.', required: true),
-                  const SizedBox(height: 6),
-                  _Field(controller: _orCrEngineNoCtrl, hint: 'Engine number'),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-
-        _label('Chassis No.', required: true),
-        const SizedBox(height: 6),
-        _Field(controller: _orCrChassisNoCtrl, hint: 'Chassis / VIN number'),
-        const SizedBox(height: 12),
-
-        _label('Registered Owner', required: true),
-        const SizedBox(height: 6),
-        _Field(
-          controller: _orCrOwnerCtrl,
-          hint: 'Full name of registered owner',
-        ),
-        const SizedBox(height: 12),
-
-        _label('Owner\'s Address', required: true),
-        const SizedBox(height: 6),
-        _Field(
-          controller: _orCrAddressCtrl,
-          hint: 'Address of registered owner',
-        ),
-        const SizedBox(height: 12),
-
-        _label('Registration Expiration', required: true),
-        const SizedBox(height: 6),
-        _Field(
-          controller: _orCrExpirationCtrl,
-          hint: 'mm/dd/yyyy',
-          readOnly: true,
-          suffix: const Icon(
-            Icons.calendar_today_outlined,
-            size: 18,
-            color: Color(0xFF888888),
+        _row2(
+          _col(
+          'mvFile',
+          'MV File No.',
+            _Field(controller: _orCrMVFileNoCtrl, hint: 'e.g. 1234567890'),
+            required: true,
           ),
-          onTap: () async {
-            final p = await showDatePicker(
-              context: context,
-              initialDate: DateTime.now().add(const Duration(days: 365)),
-              firstDate: DateTime.now(),
-              lastDate: DateTime(2060),
-              builder: (c, child) => Theme(
-                data: Theme.of(c).copyWith(
-                  colorScheme: const ColorScheme.light(
-                    primary: Color(0xFF3B1F52),
-                  ),
-                ),
-                child: child!,
-              ),
-            );
-            if (p != null) {
-              _orCrExpirationCtrl.text =
-                  '${p.month.toString().padLeft(2, '0')}/${p.day.toString().padLeft(2, '0')}/${p.year}';
-              setState(() {});
-            }
-          },
+          _col(
+          'orPlate',
+          'Plate No.',
+            _Field(controller: _orCrPlateNoCtrl, hint: 'e.g. ABC 1234'),
+            required: true,
+          ),
+        ),
+        _gap,
+
+        _row2(
+          _col(
+          'make',
+          'Make',
+            _Field(controller: _orCrMakeCtrl, hint: 'e.g. Honda, Yamaha'),
+            required: true,
+          ),
+          _col(
+          'series',
+          'Series / Model',
+            _Field(controller: _orCrSeriesCtrl, hint: 'e.g. Click 125i'),
+          ),
+        ),
+        _gap,
+
+        _row2(
+          _col(
+          'body',
+          'Body Type',
+            _Field(controller: _orCrBodyTypeCtrl, hint: 'e.g. Motorcycle'),
+            required: true,
+          ),
+          _col(
+          'color',
+          'Color',
+            _Field(controller: _orCrColorCtrl, hint: 'e.g. Black'),
+          ),
+        ),
+        _gap,
+
+        _row2(
+          _col(
+          'year',
+          'Year Model',
+            _Field(
+              controller: _orCrYearModelCtrl,
+              hint: 'e.g. 2022',
+              keyboard: TextInputType.number,
+            ),
+            required: true,
+          ),
+          _col(
+          'engine',
+          'Engine No.',
+            _Field(controller: _orCrEngineNoCtrl, hint: 'Engine number'),
+            required: true,
+          ),
+        ),
+        _gap,
+
+        _col(
+          'chassis',
+          'Chassis No.',
+          _Field(controller: _orCrChassisNoCtrl, hint: 'Chassis / VIN number'),
+          required: true,
+        ),
+        _gap,
+
+        _col(
+          'owner',
+          'Registered Owner',
+          _Field(
+            controller: _orCrOwnerCtrl,
+            hint: 'Full name of registered owner',
+            icon: Icons.person_outline_rounded,
+          ),
+          required: true,
+        ),
+        _gap,
+
+        _col(
+          'ownerAddress',
+          "Owner's Address",
+          _Field(
+            controller: _orCrAddressCtrl,
+            hint: 'Address of registered owner',
+            icon: Icons.home_outlined,
+          ),
+          required: true,
+        ),
+        _gap,
+
+        _col(
+          'regExp',
+          'Registration Expiration',
+          _futureDateField(_orCrExpirationCtrl),
+          required: true,
         ),
       ],
     );
@@ -1147,41 +1390,58 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // STEP 3 — Contact & Address
   // ────────────────────────────────────────────────────────────────
   Widget _buildStep3() {
+    const hintStyle = TextStyle(color: _C.muted, fontSize: 15);
+    const itemStyle = TextStyle(color: _C.ink, fontSize: 15);
+    const arrow = Icon(Icons.keyboard_arrow_down_rounded, color: _C.muted);
+    final barangayError = _flagged.contains('barangay');
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(
+        const _SectionHeader(
           title: 'Contact & Address',
           subtitle: 'Tell us about your contact and where you live.',
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 18),
 
-        _label('Phone Number', required: true),
-        const SizedBox(height: 6),
-        _Field(
-          controller: _phoneCtrl,
-          hint: 'e.g. 09XX XXX XXXX',
-          keyboard: TextInputType.phone,
-          suffix: const Icon(
-            Icons.phone_outlined,
-            size: 18,
-            color: Color(0xFF888888),
+        _col(
+          'phone',
+          'Phone Number',
+          _Field(
+            controller: _phoneCtrl,
+            hint: 'e.g. 09XX XXX XXXX',
+            icon: Icons.phone_outlined,
+            keyboard: TextInputType.phone,
           ),
+          required: true,
         ),
-        const SizedBox(height: 12),
+        _gap,
 
-        _label('Province', required: true),
-        const SizedBox(height: 6),
-        if (_loadingLocations) const LinearProgressIndicator(),
+        KeyedSubtree(key: _k('province'), child: _label('Province', required: true)),
+        const SizedBox(height: 8),
+        if (_loadingLocations)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 8),
+            child: LinearProgressIndicator(
+              color: _C.brique,
+              backgroundColor: _C.raisinSoft,
+            ),
+          ),
         if (_locationsError != null)
           TextButton(
+            style: _linkStyle,
             onPressed: _loadLocations,
             child: Text('$_locationsError Tap to retry.'),
           ),
         DropdownButtonFormField<String>(
           initialValue: _provinceCode,
           isExpanded: true,
-          hint: const Text('Select province'),
+          icon: arrow,
+          borderRadius: BorderRadius.circular(_radius),
+          dropdownColor: Colors.white,
+          style: itemStyle,
+          decoration: _decoration(error: _flagged.contains('province')),
+          hint: const Text('Select province', style: hintStyle),
           items: _provinces.entries
               .map(
                 (entry) => DropdownMenuItem(
@@ -1208,15 +1468,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   _municipalityCtrl.clear();
                 }),
         ),
-        const SizedBox(height: 12),
+        _gap,
 
-        _label('Municipality / City', required: true),
-        const SizedBox(height: 6),
+        KeyedSubtree(key: _k('city'), child: _label('Municipality / City', required: true)),
+        const SizedBox(height: 8),
         DropdownButtonFormField<String>(
           key: ValueKey(_provinceCode),
           initialValue: _cityCode,
           isExpanded: true,
-          hint: const Text('Select municipality or city'),
+          icon: arrow,
+          borderRadius: BorderRadius.circular(_radius),
+          dropdownColor: Colors.white,
+          style: itemStyle,
+          decoration: _decoration(error: _flagged.contains('city')),
+          hint: const Text('Select municipality or city', style: hintStyle),
           items: _provinceCode == null
               ? []
               : Map<String, dynamic>.from(
@@ -1249,13 +1514,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   if (code != null) _loadBarangays(code);
                 },
         ),
-        const SizedBox(height: 12),
+        _gap,
 
-        _label('Barangay', required: true),
-        const SizedBox(height: 6),
-        if (_loadingBarangays) const LinearProgressIndicator(),
+        KeyedSubtree(key: _k('barangay'), child: _label('Barangay', required: true)),
+        const SizedBox(height: 8),
+        if (_loadingBarangays)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 8),
+            child: LinearProgressIndicator(
+              color: _C.brique,
+              backgroundColor: _C.raisinSoft,
+            ),
+          ),
         if (_barangaysError != null)
           TextButton(
+            style: _linkStyle,
             onPressed: _cityCode == null
                 ? null
                 : () => _loadBarangays(_cityCode!),
@@ -1270,7 +1543,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
             enableSearch: true,
             requestFocusOnTap: true,
             hintText: 'Select barangay',
+            textStyle: itemStyle,
             initialSelection: _barangayCode,
+            inputDecorationTheme: InputDecorationTheme(
+              filled: true,
+              fillColor: barangayError ? _C.errorSoft : _C.background,
+              hintStyle: hintStyle,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 16,
+              ),
+              border: _border(barangayError ? _C.error : _C.border, barangayError ? 1.6 : 1.2),
+              enabledBorder: _border(barangayError ? _C.error : _C.border, barangayError ? 1.6 : 1.2),
+              disabledBorder: _border(barangayError ? _C.error : _C.border, barangayError ? 1.6 : 1.2),
+              focusedBorder: _border(barangayError ? _C.error : _C.prune, 1.6),
+            ),
+            menuStyle: const MenuStyle(
+              backgroundColor: WidgetStatePropertyAll(Colors.white),
+            ),
+            menuHeight: 280,
             dropdownMenuEntries: _barangays.entries
                 .map(
                   (entry) => DropdownMenuEntry<String>(
@@ -1287,19 +1578,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
             }),
           ),
         ),
-        const SizedBox(height: 12),
+        _gap,
 
-        _label('Street / House No.', required: true),
-        const SizedBox(height: 6),
-        _Field(controller: _streetCtrl, hint: 'Enter street or house number'),
-        const SizedBox(height: 12),
+        _col(
+          'street',
+          'Street / House No.',
+          _Field(
+            controller: _streetCtrl,
+            hint: 'Enter street or house number',
+            icon: Icons.home_outlined,
+          ),
+          required: true,
+        ),
+        _gap,
 
-        _label('Zip Code', required: true),
-        const SizedBox(height: 6),
-        _Field(
-          controller: _zipCodeCtrl,
-          hint: 'Enter zip code',
-          keyboard: TextInputType.number,
+        _col(
+          'zip',
+          'Zip Code',
+          _Field(
+            controller: _zipCodeCtrl,
+            hint: 'Enter zip code',
+            icon: Icons.markunread_mailbox_outlined,
+            keyboard: TextInputType.number,
+          ),
+          required: true,
         ),
       ],
     );
@@ -1318,24 +1620,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Review your Information',
-          style: TextStyle(
-            color: Color(0xFF1A1A2E),
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-          ),
+        const _SectionHeader(
+          title: 'Review your Information',
+          subtitle:
+              'Please review all the details below before submitting your registration',
         ),
-        const SizedBox(height: 4),
-        const Text(
-          'Please review all the details below before submitting your registration',
-          style: TextStyle(color: Color(0xFF888888), fontSize: 12.5),
-        ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 18),
 
         _ReviewCard(
           title: 'Rider Information',
-          onEdit: () => setState(() => _currentStep = 0),
+          onEdit: () {
+            setState(() {
+              _currentStep = 0;
+              _flagged = {};
+            });
+            _scrollToTop();
+          },
           rows: [
             _ReviewRow4(
               item1: _RC(
@@ -1390,9 +1690,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
           width: double.infinity,
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: const Color(0xFFF0E8F8),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFDDD0EE), width: 1),
+            color: _C.raisinSoft,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _C.raisin.withAlpha(60), width: 1),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1403,14 +1703,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     width: 34,
                     height: 34,
                     decoration: const BoxDecoration(
-                      color: Color(0xFF2D1B3D),
+                      color: _C.prune,
                       shape: BoxShape.circle,
                     ),
                     child: const Center(
                       child: Text(
                         '!',
                         style: TextStyle(
-                          color: Colors.white,
+                          color: _C.lin,
                           fontSize: 17,
                           fontWeight: FontWeight.w800,
                         ),
@@ -1421,8 +1721,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   const Text(
                     'Please Review Carefully',
                     style: TextStyle(
-                      color: Color(0xFF1A1A2E),
-                      fontSize: 14,
+                      color: _C.ink,
+                      fontSize: 14.5,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -1432,61 +1732,55 @@ class _RegisterScreenState extends State<RegisterScreen> {
               const Text(
                 'By submitting this registration, you confirm that all information provided is true and correct. '
                 'The matched logistics hub will review your application. You can sign in after approval.',
-                style: TextStyle(
-                  color: Color(0xFF555555),
-                  fontSize: 12,
-                  height: 1.5,
-                ),
+                style: TextStyle(color: _C.muted, fontSize: 12.5, height: 1.5),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               GestureDetector(
-                onTap: () => setState(() => _agreedToTerms = !_agreedToTerms),
+                onTap: () => setState(() {
+                  _agreedToTerms = !_agreedToTerms;
+                  if (_agreedToTerms) _termsError = false;
+                }),
+                behavior: HitTestBehavior.opaque,
                 child: Row(
                   children: [
-                    Container(
-                      width: 16,
-                      height: 16,
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      width: 20,
+                      height: 20,
                       decoration: BoxDecoration(
-                        color: _agreedToTerms
-                            ? const Color(0xFF2D1B3D)
-                            : Colors.white,
-                        borderRadius: BorderRadius.circular(3),
+                        color: _agreedToTerms ? _C.prune : Colors.white,
+                        borderRadius: BorderRadius.circular(6),
                         border: Border.all(
-                          color: const Color(0xFF888888),
-                          width: 1.2,
+                          color: _agreedToTerms
+                              ? _C.prune
+                              : (_termsError ? _C.error : _C.muted),
+                          width: 1.4,
                         ),
                       ),
                       child: _agreedToTerms
-                          ? const Icon(
-                              Icons.check,
-                              color: Colors.white,
-                              size: 11,
-                            )
+                          ? const Icon(Icons.check, color: _C.lin, size: 14)
                           : null,
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: RichText(
                         text: const TextSpan(
                           text: 'I agree to the ',
-                          style: TextStyle(
-                            color: Color(0xFF555555),
-                            fontSize: 12,
-                          ),
+                          style: TextStyle(color: _C.muted, fontSize: 12.5),
                           children: [
                             TextSpan(
                               text: 'Terms and Conditions',
                               style: TextStyle(
-                                color: Color(0xFF2D1B3D),
-                                fontWeight: FontWeight.w700,
+                                color: _C.raisin,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
                             TextSpan(text: ' and '),
                             TextSpan(
                               text: 'Privacy Policy',
                               style: TextStyle(
-                                color: Color(0xFF2D1B3D),
-                                fontWeight: FontWeight.w700,
+                                color: _C.raisin,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
                             TextSpan(text: '.'),
@@ -1500,7 +1794,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
             ],
           ),
         ),
-        const SizedBox(height: 8),
       ],
     );
   }
@@ -1510,15 +1803,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
       text: TextSpan(
         text: text,
         style: const TextStyle(
-          color: Color(0xFF1A1A2E),
-          fontSize: 13.5,
+          color: _C.ink,
+          fontSize: 14.5,
           fontWeight: FontWeight.w700,
         ),
         children: required
             ? const [
                 TextSpan(
                   text: ' *',
-                  style: TextStyle(color: Color(0xFFE53935)),
+                  style: TextStyle(color: _C.brique),
                 ),
               ]
             : [],
@@ -1526,85 +1819,116 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  void _showLicenseSourceSheet(BuildContext context) {
+  // ────────────────────────────────────────────────────────────────
+  // Camera / gallery sheets
+  // ────────────────────────────────────────────────────────────────
+  void _showLicenseSourceSheet() {
+    _showSourceSheet(
+      title: "Scan Driver's License",
+      subtitle: 'Take or upload a photo — fields will be auto-filled',
+      cameraIcon: Icons.document_scanner_outlined,
+      cameraTitle: 'Scan with Camera',
+      cameraSubtitle: 'Point camera at your license to auto-fill',
+      gallerySubtitle: 'Select a photo of your license from gallery',
+      quality: 90,
+      onPicked: (file) => _runLicenseOcr(file.path, file.name),
+    );
+  }
+
+  void _showImageSourceSheet(void Function(XFile) onPicked) {
+    _showSourceSheet(
+      title: 'Upload Document',
+      subtitle: 'Choose how you want to upload',
+      cameraIcon: Icons.camera_alt_outlined,
+      cameraTitle: 'Take a Photo',
+      cameraSubtitle: 'Use your camera to capture the document',
+      gallerySubtitle: 'Select an existing photo from your device',
+      quality: 85,
+      onPicked: (file) async => onPicked(file),
+    );
+  }
+
+  void _showSourceSheet({
+    required String title,
+    required String subtitle,
+    required IconData cameraIcon,
+    required String cameraTitle,
+    required String cameraSubtitle,
+    required String gallerySubtitle,
+    required int quality,
+    required Future<void> Function(XFile) onPicked,
+  }) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (_) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: EdgeInsets.fromLTRB(
-          24,
-          20,
-          24,
-          20 + MediaQuery.of(context).padding.bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFDDDDDD),
-                  borderRadius: BorderRadius.circular(2),
+      builder: (sheetContext) {
+        Future<void> pick(ImageSource source) async {
+          Navigator.pop(sheetContext);
+          final file = await ImagePicker().pickImage(
+            source: source,
+            imageQuality: quality,
+          );
+          if (file != null) await onPicked(file);
+        }
+
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          padding: EdgeInsets.fromLTRB(
+            24,
+            14,
+            24,
+            20 + MediaQuery.of(sheetContext).padding.bottom,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: _C.border,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              "Scan Driver's License",
-              style: TextStyle(
-                color: Color(0xFF1A1A2E),
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
+              const SizedBox(height: 20),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: _C.ink,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Take or upload a photo — fields will be auto-filled',
-              style: TextStyle(color: Color(0xFF888888), fontSize: 13),
-            ),
-            const SizedBox(height: 20),
-            _SourceTile(
-              icon: Icons.document_scanner_outlined,
-              title: 'Scan with Camera',
-              subtitle: 'Point camera at your license to auto-fill',
-              onTap: () async {
-                Navigator.pop(context);
-                final file = await ImagePicker().pickImage(
-                  source: ImageSource.camera,
-                  imageQuality: 90,
-                );
-                if (file != null) {
-                  await _runLicenseOcr(file.path, file.name);
-                }
-              },
-            ),
-            const SizedBox(height: 12),
-            _SourceTile(
-              icon: Icons.photo_library_outlined,
-              title: 'Choose from Gallery',
-              subtitle: 'Select a photo of your license from gallery',
-              onTap: () async {
-                Navigator.pop(context);
-                final file = await ImagePicker().pickImage(
-                  source: ImageSource.gallery,
-                  imageQuality: 90,
-                );
-                if (file != null) {
-                  await _runLicenseOcr(file.path, file.name);
-                }
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: const TextStyle(color: _C.muted, fontSize: 13),
+              ),
+              const SizedBox(height: 20),
+              _SourceTile(
+                icon: cameraIcon,
+                title: cameraTitle,
+                subtitle: cameraSubtitle,
+                onTap: () => pick(ImageSource.camera),
+              ),
+              const SizedBox(height: 12),
+              _SourceTile(
+                icon: Icons.photo_library_outlined,
+                title: 'Choose from Gallery',
+                subtitle: gallerySubtitle,
+                onTap: () => pick(ImageSource.gallery),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -1662,12 +1986,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ? 'Scanned successfully — $filled field${filled == 1 ? '' : 's'} auto-filled'
                   : 'Could not read license text clearly. Please fill in manually.',
             ),
-            backgroundColor: filled > 0
-                ? const Color(0xFF2D1B3D)
-                : const Color(0xFFCC4444),
+            backgroundColor: filled > 0 ? _C.prune : _C.brique,
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(_radius),
             ),
             duration: const Duration(seconds: 3),
           ),
@@ -1676,10 +1998,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Scan failed. Please fill in the fields manually.'),
-            backgroundColor: Color(0xFFCC4444),
+          SnackBar(
+            content: const Text(
+              'Scan failed. Please fill in the fields manually.',
+            ),
+            backgroundColor: _C.brique,
             behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(_radius),
+            ),
           ),
         );
       }
@@ -1689,95 +2016,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       }
     }
   }
-
-  void _showImageSourceSheet(
-    BuildContext context,
-    void Function(XFile) onPicked,
-  ) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: EdgeInsets.fromLTRB(
-          24,
-          20,
-          24,
-          20 + MediaQuery.of(context).padding.bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFDDDDDD),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Upload Document',
-              style: TextStyle(
-                color: Color(0xFF1A1A2E),
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Choose how you want to upload',
-              style: TextStyle(color: Color(0xFF888888), fontSize: 13),
-            ),
-            const SizedBox(height: 20),
-            _SourceTile(
-              icon: Icons.camera_alt_outlined,
-              title: 'Take a Photo',
-              subtitle: 'Use your camera to capture the document',
-              onTap: () async {
-                Navigator.pop(context);
-                final file = await ImagePicker().pickImage(
-                  source: ImageSource.camera,
-                  imageQuality: 85,
-                );
-                if (file != null) {
-                  onPicked(file);
-                }
-              },
-            ),
-            const SizedBox(height: 12),
-            _SourceTile(
-              icon: Icons.photo_library_outlined,
-              title: 'Choose from Gallery',
-              subtitle: 'Select an existing photo from your device',
-              onTap: () async {
-                Navigator.pop(context);
-                final file = await ImagePicker().pickImage(
-                  source: ImageSource.gallery,
-                  imageQuality: 85,
-                );
-                if (file != null) {
-                  onPicked(file);
-                }
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Mobile Step Bar — card-style active step with icon + label + progress line
+// Step bar: dark gradient card for the active step + segmented progress
 // ─────────────────────────────────────────────────────────────────────────────
 class _MobileStepBar extends StatelessWidget {
   final int currentStep;
@@ -1797,13 +2039,16 @@ class _MobileStepBar extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Active step card
         Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: BoxDecoration(
-            color: const Color(0xFF2D1B3D),
-            borderRadius: BorderRadius.circular(14),
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_C.pruneLight, _C.prune],
+            ),
+            borderRadius: BorderRadius.circular(16),
           ),
           child: Row(
             children: [
@@ -1811,10 +2056,10 @@ class _MobileStepBar extends StatelessWidget {
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.15),
+                  color: Colors.white.withAlpha(30),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(icons[currentStep], color: Colors.white, size: 20),
+                child: Icon(icons[currentStep], color: _C.lin, size: 20),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1824,9 +2069,10 @@ class _MobileStepBar extends StatelessWidget {
                     Text(
                       'Step ${currentStep + 1} of $totalSteps',
                       style: const TextStyle(
-                        color: Color(0xAAFFFFFF),
+                        color: _C.lin,
                         fontSize: 11,
-                        fontWeight: FontWeight.w500,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -1834,26 +2080,28 @@ class _MobileStepBar extends StatelessWidget {
                       labels[currentStep],
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
                   ],
                 ),
               ),
-              // Next step preview
               if (currentStep < totalSteps - 1)
-                Text(
-                  'Next: ${labels[currentStep + 1]}',
-                  style: const TextStyle(
-                    color: Color(0xAAFFFFFF),
-                    fontSize: 10,
+                Flexible(
+                  child: Text(
+                    'Next: ${labels[currentStep + 1]}',
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      color: Color(0xB3FFFFFF),
+                      fontSize: 10.5,
+                    ),
                   ),
                 ),
             ],
           ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 12),
 
         // Segmented progress bar
         Row(
@@ -1869,9 +2117,11 @@ class _MobileStepBar extends StatelessWidget {
                       duration: const Duration(milliseconds: 300),
                       height: 5,
                       decoration: BoxDecoration(
-                        color: (isDone || isActive)
-                            ? const Color(0xFF2D1B3D)
-                            : const Color(0xFFDDDDDD),
+                        color: isDone
+                            ? _C.prune
+                            : isActive
+                            ? _C.brique
+                            : _C.border,
                         borderRadius: BorderRadius.circular(4),
                       ),
                     ),
@@ -1879,12 +2129,10 @@ class _MobileStepBar extends StatelessWidget {
                     Text(
                       '${i + 1}',
                       style: TextStyle(
-                        fontSize: 9,
-                        color: (isDone || isActive)
-                            ? const Color(0xFF2D1B3D)
-                            : const Color(0xFFBBBBBB),
+                        fontSize: 10,
+                        color: (isDone || isActive) ? _C.prune : _C.muted,
                         fontWeight: (isDone || isActive)
-                            ? FontWeight.w700
+                            ? FontWeight.w800
                             : FontWeight.w400,
                       ),
                     ),
@@ -1900,163 +2148,12 @@ class _MobileStepBar extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Top Bar
-// ─────────────────────────────────────────────────────────────────────────────
-class _TopBar extends StatelessWidget {
-  final VoidCallback onLoginTap;
-  const _TopBar({required this.onLoginTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF3B1F52), Color(0xFF2A1440)],
-        ),
-      ),
-      child: Row(
-        children: [
-          _SmallBagLogo(),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Text(
-                'vendo',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
-                ),
-              ),
-              Text(
-                'BUY. SELL. DELIVERED',
-                style: TextStyle(
-                  color: Color(0xFFE8873A),
-                  fontSize: 7,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 1.5,
-                ),
-              ),
-            ],
-          ),
-          const Spacer(),
-          const Text(
-            'Already have an account?  ',
-            style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 11),
-          ),
-          GestureDetector(
-            onTap: onLoginTap,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white, width: 1),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const Text(
-                'Login',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SmallBagLogo extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    width: 36,
-    height: 40,
-    child: CustomPaint(painter: _SmallBagPainter()),
-  );
-}
-
-class _SmallBagPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-    void draw(double l, double r, double t, double b, Color c, double rad) {
-      final p = Paint()
-        ..color = c
-        ..style = PaintingStyle.fill;
-      final path = Path()
-        ..moveTo(l + rad, t)
-        ..lineTo(r - rad, t)
-        ..quadraticBezierTo(r, t, r, t + rad)
-        ..lineTo(r, b - rad)
-        ..quadraticBezierTo(r, b, r - rad, b)
-        ..lineTo(l + rad, b)
-        ..quadraticBezierTo(l, b, l, b - rad)
-        ..lineTo(l, t + rad)
-        ..quadraticBezierTo(l, t, l + rad, t)
-        ..close();
-      canvas.drawPath(path, p);
-    }
-
-    draw(w * .18, w * .98, h * .28, h * .98, const Color(0xFFE8873A), 5);
-    draw(w * .10, w * .90, h * .28, h * .94, const Color(0xFFB8860B), 5);
-    draw(w * .02, w * .82, h * .28, h * .90, const Color(0xFFF0EEF5), 5);
-    final cx = (w * .02 + w * .82) / 2;
-    canvas.drawArc(
-      Rect.fromCenter(
-        center: Offset(cx, h * .28),
-        width: (w * .80) * .40,
-        height: h * .22,
-      ),
-      3.14159,
-      3.14159,
-      false,
-      Paint()
-        ..color = const Color(0xFFF0EEF5)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5
-        ..strokeCap = StrokeCap.round,
-    );
-    final eyeY = h * .28 + (h * .62) * .28;
-    final dp = Paint()
-      ..color = const Color(0xFFE8873A)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(cx - w * .18, eyeY), 2, dp);
-    canvas.drawCircle(Offset(cx + w * .18, eyeY), 2, dp);
-    final tp = TextPainter(
-      text: const TextSpan(
-        text: 'v',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: 13,
-          fontWeight: FontWeight.bold,
-          fontStyle: FontStyle.italic,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(canvas, Offset(cx - tp.width / 2 - 1, h * .50));
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Section Header
+// Section header
 // ─────────────────────────────────────────────────────────────────────────────
 class _SectionHeader extends StatelessWidget {
   final String title, subtitle;
   const _SectionHeader({required this.title, required this.subtitle});
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -2065,84 +2162,116 @@ class _SectionHeader extends StatelessWidget {
         Text(
           title,
           style: const TextStyle(
-            color: Color(0xFF1A1A2E),
-            fontSize: 16,
+            color: _C.ink,
+            fontSize: 18,
             fontWeight: FontWeight.w800,
           ),
         ),
         const SizedBox(height: 2),
-        Text(
-          subtitle,
-          style: const TextStyle(color: Color(0xFF888888), fontSize: 12.5),
-        ),
-        const SizedBox(height: 8),
-        const Divider(color: Color(0xFFE0E0E0), thickness: 1),
+        Text(subtitle, style: const TextStyle(color: _C.muted, fontSize: 13)),
+        const SizedBox(height: 10),
+        const Divider(color: _C.border, thickness: 1, height: 1),
       ],
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Input Field
+// Input field (same look as the login fields)
 // ─────────────────────────────────────────────────────────────────────────────
+// Tells the fields below it which id they have and which ids are flagged
+// (wrong when the user tapped Next).
+class _FieldScope extends InheritedWidget {
+  final String id;
+  final Set<String> flagged;
+
+  const _FieldScope({
+    required this.id,
+    required this.flagged,
+    required super.child,
+  });
+
+  static _FieldScope? of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_FieldScope>();
+
+  // The set is changed in place, so always tell the fields to check again
+  @override
+  bool updateShouldNotify(_FieldScope old) => true;
+}
+
+// True when this field was flagged by the last tap on Next and is not fixed yet
+bool _scopeError(BuildContext context) {
+  final s = _FieldScope.of(context);
+  return s != null && s.flagged.contains(s.id);
+}
+
 class _Field extends StatelessWidget {
   final TextEditingController controller;
   final String hint;
+  final IconData? icon;
   final bool obscure, readOnly;
   final TextInputType? keyboard;
   final Widget? suffix;
   final VoidCallback? onTap;
   final ValueChanged<String>? onChanged;
 
+  /// Red border even if the field is not empty (for example: password too
+  /// short). `errorText` is shown in red under the field.
+  final bool forceError;
+  final String? errorText;
+
   const _Field({
     required this.controller,
     required this.hint,
+    this.icon,
     this.obscure = false,
     this.readOnly = false,
     this.keyboard,
     this.suffix,
     this.onTap,
     this.onChanged,
+    this.forceError = false,
+    this.errorText,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE0E0E0), width: 1.2),
-      ),
-      child: TextField(
-        controller: controller,
-        obscureText: obscure,
-        readOnly: readOnly,
-        keyboardType: keyboard,
-        onTap: onTap,
-        onChanged: onChanged,
-        style: const TextStyle(color: Color(0xFF333333), fontSize: 13.5),
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: const TextStyle(color: Color(0xFFBBBBBB), fontSize: 13.5),
-          suffixIcon: suffix != null
-              ? Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: suffix,
-                )
-              : null,
-          suffixIconConstraints: const BoxConstraints(
-            minWidth: 36,
-            minHeight: 36,
-          ),
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 14,
-            vertical: 13,
-          ),
-          border: InputBorder.none,
-          enabledBorder: InputBorder.none,
-          focusedBorder: InputBorder.none,
-        ),
-      ),
+    // Listens to the text, so the red border goes away as soon as the user types
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final hasError = forceError || _scopeError(context);
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              obscureText: obscure,
+              readOnly: readOnly,
+              keyboardType: keyboard,
+              onTap: onTap,
+              onChanged: onChanged,
+              cursorColor: _C.prune,
+              style: const TextStyle(color: _C.ink, fontSize: 15),
+              decoration: _decoration(
+                hint: hint,
+                icon: icon,
+                suffix: suffix,
+                error: hasError,
+              ),
+            ),
+            if (forceError && errorText != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6, left: 2),
+                child: Text(
+                  errorText!,
+                  style: const TextStyle(color: _C.error, fontSize: 11.5),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -2150,39 +2279,50 @@ class _Field extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 // Dropdown
 // ─────────────────────────────────────────────────────────────────────────────
+
 class _Dropdown extends StatelessWidget {
   final String? value;
   final String hint;
   final List<String> options;
   final ValueChanged<String?> onChanged;
+  final bool forceError;
+
   const _Dropdown({
     required this.value,
     required this.hint,
     required this.options,
     required this.onChanged,
+    this.forceError = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final error = forceError || _scopeError(context);
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE0E0E0), width: 1.2),
+        color: error ? _C.errorSoft : _C.background,
+        borderRadius: BorderRadius.circular(_radius),
+        border: Border.all(
+          color: error ? _C.error : _C.border,
+          width: error ? 1.6 : 1.2,
+        ),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: value,
           hint: Text(
             hint,
-            style: const TextStyle(color: Color(0xFFBBBBBB), fontSize: 13.5),
+            style: const TextStyle(color: _C.muted, fontSize: 15),
           ),
           isExpanded: true,
-          icon: const Icon(
-            Icons.keyboard_arrow_down,
-            color: Color(0xFF888888),
-            size: 20,
+          borderRadius: BorderRadius.circular(_radius),
+          dropdownColor: Colors.white,
+          icon: Icon(
+            Icons.keyboard_arrow_down_rounded,
+            color: error ? _C.error : _C.muted,
           ),
           items: options
               .map(
@@ -2190,10 +2330,7 @@ class _Dropdown extends StatelessWidget {
                   value: s,
                   child: Text(
                     s,
-                    style: const TextStyle(
-                      color: Color(0xFF333333),
-                      fontSize: 13.5,
-                    ),
+                    style: const TextStyle(color: _C.ink, fontSize: 15),
                   ),
                 ),
               )
@@ -2206,46 +2343,75 @@ class _Dropdown extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Upload Field
+// Upload field
 // ─────────────────────────────────────────────────────────────────────────────
+
 class _UploadField extends StatelessWidget {
   final String? fileName;
   final String hint;
   final VoidCallback onTap;
+  final bool forceError;
+
   const _UploadField({
     required this.fileName,
     required this.hint,
     required this.onTap,
+    this.forceError = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final picked = fileName != null;
+    final error = forceError || _scopeError(context);
+
     return GestureDetector(
       onTap: onTap,
+      behavior: HitTestBehavior.opaque,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        height: 56,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFE0E0E0), width: 1.2),
+          color: error
+              ? _C.errorSoft
+              : picked
+              ? _C.raisinSoft
+              : _C.background,
+          borderRadius: BorderRadius.circular(_radius),
+          border: Border.all(
+            color: error
+                ? _C.error
+                : picked
+                ? _C.raisin.withAlpha(90)
+                : _C.border,
+            width: error ? 1.6 : 1.2,
+          ),
         ),
         child: Row(
           children: [
+            Icon(
+              picked ? Icons.insert_drive_file_outlined : Icons.attach_file,
+              color: error ? _C.error : _C.raisin,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
             Expanded(
               child: Text(
                 fileName ?? hint,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: fileName != null
-                      ? const Color(0xFF333333)
-                      : const Color(0xFFBBBBBB),
-                  fontSize: 13.5,
+                  color: picked ? _C.ink : (error ? _C.error : _C.muted),
+                  fontSize: 15,
                 ),
               ),
             ),
-            const Icon(
-              Icons.upload_outlined,
-              color: Color(0xFF888888),
-              size: 20,
+            Icon(
+              picked ? Icons.check_circle_rounded : Icons.upload_outlined,
+              color: picked
+                  ? _C.success
+                  : error
+                  ? _C.error
+                  : _C.muted,
+              size: 22,
             ),
           ],
         ),
@@ -2255,12 +2421,13 @@ class _UploadField extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Source Tile
+// Source tile (camera / gallery)
 // ─────────────────────────────────────────────────────────────────────────────
 class _SourceTile extends StatelessWidget {
   final IconData icon;
   final String title, subtitle;
   final VoidCallback onTap;
+
   const _SourceTile({
     required this.icon,
     required this.title,
@@ -2272,12 +2439,13 @@ class _SourceTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
+      behavior: HitTestBehavior.opaque,
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: const Color(0xFFF8F5FB),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE0E0E0), width: 1.2),
+          color: _C.background,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _C.border, width: 1.2),
         ),
         child: Row(
           children: [
@@ -2285,10 +2453,10 @@ class _SourceTile extends StatelessWidget {
               width: 46,
               height: 46,
               decoration: const BoxDecoration(
-                color: Color(0xFFEEE6F5),
+                color: _C.raisinSoft,
                 shape: BoxShape.circle,
               ),
-              child: Icon(icon, color: const Color(0xFF2D1B3D), size: 22),
+              child: Icon(icon, color: _C.prune, size: 22),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -2298,23 +2466,20 @@ class _SourceTile extends StatelessWidget {
                   Text(
                     title,
                     style: const TextStyle(
-                      color: Color(0xFF1A1A2E),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
+                      color: _C.ink,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     subtitle,
-                    style: const TextStyle(
-                      color: Color(0xFF888888),
-                      fontSize: 12,
-                    ),
+                    style: const TextStyle(color: _C.muted, fontSize: 12),
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: Color(0xFFAAAAAA), size: 20),
+            const Icon(Icons.chevron_right_rounded, color: _C.muted, size: 22),
           ],
         ),
       ),
@@ -2323,12 +2488,13 @@ class _SourceTile extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Review Card
+// Review card + rows
 // ─────────────────────────────────────────────────────────────────────────────
 class _ReviewCard extends StatelessWidget {
   final String title;
   final VoidCallback onEdit;
   final List<Widget> rows;
+
   const _ReviewCard({
     required this.title,
     required this.onEdit,
@@ -2341,8 +2507,8 @@ class _ReviewCard extends StatelessWidget {
       width: double.infinity,
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFDDDDDD), width: 1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _C.border, width: 1.2),
       ),
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -2354,45 +2520,43 @@ class _ReviewCard extends StatelessWidget {
                 width: 46,
                 height: 46,
                 decoration: const BoxDecoration(
-                  color: Color(0xFFEEE6F5),
+                  color: _C.raisinSoft,
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
                   Icons.person_outline_rounded,
-                  color: Color(0xFF7B2FBE),
+                  color: _C.raisin,
                   size: 26,
                 ),
               ),
               const SizedBox(width: 12),
-              Text(
-                title,
-                style: const TextStyle(
-                  color: Color(0xFF1A1A2E),
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: _C.ink,
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
-              const Spacer(),
               GestureDetector(
                 onTap: onEdit,
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 16,
-                    vertical: 6,
+                    vertical: 7,
                   ),
                   decoration: BoxDecoration(
-                    border: Border.all(
-                      color: const Color(0xFFAAAAAA),
-                      width: 1,
-                    ),
-                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: _C.prune, width: 1.2),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: const Text(
                     'Edit',
                     style: TextStyle(
-                      color: Color(0xFF1A1A2E),
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                      color: _C.prune,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
@@ -2400,7 +2564,7 @@ class _ReviewCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          const Divider(color: Color(0xFFF0F0F0), height: 1),
+          const Divider(color: _C.border, height: 1),
           const SizedBox(height: 14),
           ...rows.map(
             (r) =>
@@ -2412,11 +2576,9 @@ class _ReviewCard extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Review Row 4-col
-// ─────────────────────────────────────────────────────────────────────────────
 class _ReviewRow4 extends StatelessWidget {
   final _RC item1, item2, item3, item4;
+
   const _ReviewRow4({
     required this.item1,
     required this.item2,
@@ -2446,16 +2608,16 @@ class _ReviewRow4 extends StatelessWidget {
       children: [
         Text(
           item.label,
-          style: const TextStyle(color: Color(0xFF999999), fontSize: 10.5),
+          style: const TextStyle(color: _C.muted, fontSize: 10.5),
         ),
         const SizedBox(height: 3),
         item.isFile
             ? Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(5),
-                  border: Border.all(color: const Color(0xFFDDDDDD), width: 1),
+                  color: _C.raisinSoft,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _C.raisin.withAlpha(60), width: 1),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -2463,16 +2625,16 @@ class _ReviewRow4 extends StatelessWidget {
                     const Icon(
                       Icons.insert_drive_file_outlined,
                       size: 12,
-                      color: Color(0xFF555555),
+                      color: _C.raisin,
                     ),
                     const SizedBox(width: 3),
                     Flexible(
                       child: Text(
                         item.value,
                         style: const TextStyle(
-                          color: Color(0xFF333333),
+                          color: _C.ink,
                           fontSize: 11,
-                          fontWeight: FontWeight.w500,
+                          fontWeight: FontWeight.w600,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -2483,9 +2645,9 @@ class _ReviewRow4 extends StatelessWidget {
             : Text(
                 item.value,
                 style: const TextStyle(
-                  color: Color(0xFF1A1A2E),
+                  color: _C.ink,
                   fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
       ],
@@ -2500,13 +2662,14 @@ class _RC {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bottom Bar
+// Bottom bar: Back + Next / Submit (same buttons as the login screen)
 // ─────────────────────────────────────────────────────────────────────────────
 class _BottomNextBar extends StatelessWidget {
   final int currentStep, totalSteps;
   final VoidCallback? onNext;
   final VoidCallback? onBack;
   final bool submitting;
+
   const _BottomNextBar({
     required this.currentStep,
     required this.totalSteps,
@@ -2525,95 +2688,101 @@ class _BottomNextBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isLast = currentStep == totalSteps - 1;
+
     return Container(
       padding: EdgeInsets.fromLTRB(
-        20,
+        24,
         12,
-        20,
+        24,
         12 + MediaQuery.of(context).padding.bottom,
       ),
       decoration: const BoxDecoration(
-        color: Color(0xFFF8F5FB),
-        border: Border(top: BorderSide(color: Color(0xFFE8E8E8), width: 1)),
+        color: Colors.white,
+        border: Border(top: BorderSide(color: _C.border, width: 1)),
       ),
       child: Row(
-        mainAxisAlignment: isLast
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start,
         children: [
           if (onBack != null) ...[
-            OutlinedButton(
-              onPressed: onBack,
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Color(0xFF2D1B3D), width: 1.2),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+            SizedBox(
+              height: 54,
+              child: OutlinedButton(
+                onPressed: onBack,
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: _C.prune, width: 1.4),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(_radius),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 26),
                 ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 28,
-                  vertical: 14,
-                ),
-              ),
-              child: const Text(
-                'Back',
-                style: TextStyle(
-                  color: Color(0xFF2D1B3D),
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
+                child: const Text(
+                  'Back',
+                  style: TextStyle(
+                    color: _C.prune,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                  ),
                 ),
               ),
             ),
             const SizedBox(width: 12),
           ],
-          if (isLast)
-            ElevatedButton(
-              onPressed: onNext,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2D1B3D),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 36,
-                  vertical: 14,
-                ),
-                elevation: 0,
-              ),
-              child: Text(
-                submitting ? 'Submitting…' : 'Submit',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-              ),
-            )
-          else
-            Expanded(
+          Expanded(
+            child: SizedBox(
+              height: 54,
               child: ElevatedButton(
                 onPressed: onNext,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2D1B3D),
+                  backgroundColor: _C.prune,
+                  disabledBackgroundColor: _C.prune,
                   foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  disabledForegroundColor: Colors.white,
                   elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(_radius),
+                  ),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      _nextLabels[currentStep],
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
+                child: submitting
+                    ? const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.2,
+                              color: _C.lin,
+                            ),
+                          ),
+                          SizedBox(width: 12),
+                          Text(
+                            'Submitting…',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _nextLabels[currentStep],
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          if (!isLast) ...[
+                            const SizedBox(width: 6),
+                            const Icon(Icons.chevron_right_rounded, size: 22),
+                          ],
+                        ],
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    const Icon(Icons.chevron_right, size: 20),
-                  ],
-                ),
               ),
             ),
+          ),
         ],
       ),
     );
@@ -2621,11 +2790,12 @@ class _BottomNextBar extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Success Modal
+// Success modal
 // ─────────────────────────────────────────────────────────────────────────────
 class _SuccessModal extends StatelessWidget {
   final VoidCallback onBackToLogin;
   final String? centerName;
+
   const _SuccessModal({required this.onBackToLogin, this.centerName});
 
   @override
@@ -2637,7 +2807,7 @@ class _SuccessModal extends StatelessWidget {
       ),
       padding: EdgeInsets.fromLTRB(
         28,
-        28,
+        14,
         28,
         28 + MediaQuery.of(context).padding.bottom,
       ),
@@ -2648,102 +2818,68 @@ class _SuccessModal extends StatelessWidget {
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: const Color(0xFFDDDDDD),
+              color: _C.border,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
           const SizedBox(height: 32),
+
+          // The rider on a purple card, with a green check badge
           SizedBox(
-            width: 180,
-            height: 180,
+            width: 210,
+            height: 150,
             child: Stack(
-              alignment: Alignment.center,
+              clipBehavior: Clip.none,
               children: [
-                Positioned(
-                  top: 18,
-                  right: 28,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: const Color(0xFF9B59B6),
-                        width: 2,
+                Positioned.fill(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(28),
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [_C.pruneLight, _C.prune],
+                        ),
                       ),
+                      child: const CustomPaint(painter: _DecorPainter()),
                     ),
                   ),
                 ),
-                Positioned(
-                  top: 28,
-                  right: 10,
-                  child: Container(
-                    width: 9,
-                    height: 9,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF2D1B3D),
-                      shape: BoxShape.circle,
-                    ),
+                const Center(
+                  child: SizedBox(
+                    width: 140,
+                    height: 105,
+                    child: _RiderPicture(),
                   ),
                 ),
                 Positioned(
-                  top: 48,
-                  right: 4,
+                  top: -10,
+                  right: -10,
                   child: Container(
-                    width: 12,
-                    height: 12,
+                    width: 46,
+                    height: 46,
                     decoration: BoxDecoration(
+                      color: const Color(0xFF2ECC71),
                       shape: BoxShape.circle,
-                      border: Border.all(
-                        color: const Color(0xFFE8873A),
-                        width: 2,
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  bottom: 42,
-                  right: 18,
-                  child: Container(
-                    width: 11,
-                    height: 11,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFE8B84B),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-                SizedBox(
-                  width: 140,
-                  height: 155,
-                  child: CustomPaint(painter: _SuccessBagPainter()),
-                ),
-                Positioned(
-                  top: 38,
-                  right: 22,
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF2ECC71),
-                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 3),
                     ),
                     child: const Icon(
                       Icons.check_rounded,
                       color: Colors.white,
-                      size: 24,
+                      size: 26,
                     ),
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 28),
           const Text(
             'Thank you for Registering',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Color(0xFF1A1A2E),
+              color: _C.ink,
               fontSize: 22,
               fontWeight: FontWeight.w800,
             ),
@@ -2753,8 +2889,8 @@ class _SuccessModal extends StatelessWidget {
             'Your registration is pending review',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Color(0xFF1A1A2E),
-              fontSize: 14,
+              color: _C.raisin,
+              fontSize: 14.5,
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -2762,101 +2898,371 @@ class _SuccessModal extends StatelessWidget {
           Text(
             'Your application was sent to ${centerName ?? 'your logistics hub'}. Sign in after that hub approves it.',
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Color(0xFF888888),
-              fontSize: 14,
-              height: 1.5,
-            ),
+            style: const TextStyle(color: _C.muted, fontSize: 14, height: 1.5),
           ),
           const SizedBox(height: 28),
           SizedBox(
             width: double.infinity,
-            height: 52,
+            height: 54,
             child: ElevatedButton(
               onPressed: onBackToLogin,
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2D1B3D),
+                backgroundColor: _C.prune,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
                 elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(_radius),
+                ),
               ),
               child: const Text(
                 'Back to Login',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
+                ),
               ),
             ),
           ),
-          const SizedBox(height: 8),
         ],
       ),
     );
   }
 }
 
-class _SuccessBagPainter extends CustomPainter {
+// ─────────────────────────────────────────────────────────────────────────────
+// Still decoration for purple areas: soft circles and stars (no movement)
+// ─────────────────────────────────────────────────────────────────────────────
+class _DecorPainter extends CustomPainter {
+  const _DecorPainter();
+
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
-    void draw(double l, double r, double t, double b, Color c, double rad) {
-      final p = Paint()
-        ..color = c
-        ..style = PaintingStyle.fill;
-      final path = Path()
-        ..moveTo(l + rad, t)
-        ..lineTo(r - rad, t)
-        ..quadraticBezierTo(r, t, r, t + rad)
-        ..lineTo(r, b - rad)
-        ..quadraticBezierTo(r, b, r - rad, b)
-        ..lineTo(l + rad, b)
-        ..quadraticBezierTo(l, b, l, b - rad)
-        ..lineTo(l, t + rad)
-        ..quadraticBezierTo(l, t, l + rad, t)
-        ..close();
-      canvas.drawPath(path, p);
-    }
 
-    draw(w * .22, w * 1.0, h * .30, h * 1.0, const Color(0xFFE8C97A), 14);
-    draw(w * .12, w * .90, h * .30, h * .96, const Color(0xFFC0663A), 14);
-    draw(w * .02, w * .78, h * .30, h * .92, const Color(0xFF2D1B3D), 14);
-    final cx = (w * .02 + w * .78) / 2;
-    canvas.drawArc(
-      Rect.fromCenter(
-        center: Offset(cx, h * .30),
-        width: (w * .76) * .44,
-        height: h * .26,
-      ),
-      3.14159,
-      3.14159,
-      false,
-      Paint()
-        ..color = const Color(0xFF2D1B3D)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 7
-        ..strokeCap = StrokeCap.round,
+    canvas.drawCircle(
+      Offset(w * 0.88, h * 0.14),
+      90,
+      Paint()..color = Colors.white.withAlpha(16),
     );
-    final eyeY = h * .30 + (h * .62) * .22;
-    final ep = Paint()
-      ..color = const Color(0xFFE8873A)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(cx - (w * .76) * .18, eyeY), 5, ep);
-    canvas.drawCircle(Offset(cx + (w * .76) * .18, eyeY), 5, ep);
-    final tp = TextPainter(
-      text: const TextSpan(
-        text: 'V',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: 38,
-          fontWeight: FontWeight.w900,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(canvas, Offset(cx - tp.width / 2, h * .44));
+    canvas.drawCircle(
+      Offset(w * 0.06, h * 0.78),
+      80,
+      Paint()..color = _C.raisin.withAlpha(46),
+    );
+
+    final star = Paint();
+    for (int i = 0; i < 26; i++) {
+      final x = _hash(i * 3 + 1) * w;
+      final y = _hash(i * 3 + 2) * h * 0.92;
+      final r = 0.7 + _hash(i * 3 + 3) * 1.2;
+      star.color = Colors.white.withAlpha((25 + 105 * _hash(i * 3 + 4)).round());
+      canvas.drawCircle(Offset(x, y), r, star);
+    }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _DecorPainter old) => false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The rider: the same drawing used on the splash and login screens
+//
+// Drawn in the pose the splash rider has when it stops (engine idling, wheels
+// at rest, brake light off). If you ever change the rider in the splash
+// screen, change it here too.
+// ─────────────────────────────────────────────────────────────────────────────
+class _RiderPicture extends StatelessWidget {
+  const _RiderPicture();
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _RiderPainter(
+        wheelAngle: 2600 / 20, // wheel position when the splash rider stops
+        speed: 0,
+        brake: 0,
+        phase: 1,
+      ),
+    );
+  }
+}
+
+// Person on a motorcycle with a delivery box, drawn in a 160 x 120 box and
+// scaled to fit. Faces right.
+class _RiderPainter extends CustomPainter {
+  final double wheelAngle, speed, brake, phase;
+
+  _RiderPainter({
+    required this.wheelAngle,
+    required this.speed,
+    required this.brake,
+    required this.phase,
+  });
+
+  static Paint _stroke(Color c, double w) => Paint()
+    ..color = c
+    ..strokeWidth = w
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round
+    ..strokeJoin = StrokeJoin.round;
+
+  static Paint _fill(Color c) => Paint()..color = c;
+
+  void _wheel(Canvas canvas, Offset c) {
+    final blur = (speed * 2.2).clamp(0.0, 1.0); // 1 = blurry, 0 = clear
+
+    if (blur > 0.02) {
+      canvas.drawCircle(
+        c,
+        15,
+        _fill(Colors.white.withAlpha((blur * 50).round())),
+      );
+    }
+    // tire + rim
+    canvas.drawCircle(c, 17.5, _stroke(const Color(0xFFEFE6F2), 5.5));
+    canvas.drawCircle(c, 11.5, _stroke(_C.lin.withAlpha(150), 1.5));
+
+    // spokes + a marker dot, only visible when the wheel is slower
+    final clear = ((1 - blur) * 255).round();
+    if (clear > 4) {
+      final spoke = _stroke(_C.lin.withAlpha(clear), 2);
+      for (int i = 0; i < 3; i++) {
+        final a = wheelAngle + i * math.pi / 3;
+        final d = Offset(math.cos(a), math.sin(a)) * 11.5;
+        canvas.drawLine(c - d, c + d, spoke);
+      }
+      final m = c + Offset(math.cos(wheelAngle), math.sin(wheelAngle)) * 11.5;
+      canvas.drawCircle(m, 1.8, _fill(_C.brique.withAlpha(clear)));
+    }
+    canvas.drawCircle(c, 3.5, _fill(_C.lin));
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.scale(size.width / 160, size.height / 120);
+
+    const rear = Offset(40, 76);
+    const front = Offset(122, 76);
+    const jacket = Color(0xFFEADFF0);
+    const jacketShade = Color(0xFFCDB9D6);
+    const pants = Color(0xFF2B1530);
+    const dark = Color(0xFF1F0F21);
+    const red = Color(0xFFFF3B30);
+
+    // Headlight glow
+    canvas.drawCircle(
+      const Offset(123, 50),
+      12,
+      Paint()
+        ..color = _C.lin.withAlpha(90)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+    );
+
+    // Wheels and fenders
+    _wheel(canvas, rear);
+    _wheel(canvas, front);
+    canvas.drawArc(
+      Rect.fromCircle(center: rear, radius: 23),
+      math.pi * 1.1,
+      math.pi * 0.75,
+      false,
+      _stroke(_C.lin, 3),
+    );
+    canvas.drawArc(
+      Rect.fromCircle(center: front, radius: 23),
+      math.pi * 1.2,
+      math.pi * 0.7,
+      false,
+      _stroke(_C.lin, 3),
+    );
+
+    // Delivery box on a rack
+    canvas.drawLine(
+      const Offset(14, 61),
+      const Offset(52, 61),
+      _stroke(_C.lin, 3),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(12, 31, 40, 29),
+        const Radius.circular(5),
+      ),
+      _fill(_C.brique),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(12, 31, 40, 8),
+        const Radius.circular(4),
+      ),
+      _fill(Colors.black.withAlpha(45)),
+    );
+    // "V" logo on the box
+    canvas.drawPath(
+      Path()
+        ..moveTo(25, 43)
+        ..lineTo(32, 55)
+        ..lineTo(39, 43),
+      _stroke(Colors.white, 3.2),
+    );
+
+    // Tail light (glows when braking)
+    if (brake > 0.02) {
+      canvas.drawCircle(
+        const Offset(10, 50),
+        10,
+        Paint()
+          ..color = red.withAlpha((160 * brake).round())
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+      );
+    }
+    canvas.drawCircle(
+      const Offset(12, 50),
+      2.6,
+      _fill(Color.lerp(const Color(0xFF7A2A22), red, brake)!),
+    );
+
+    // Bike body
+    final bike = _stroke(_C.lin, 5);
+    canvas.drawLine(rear, const Offset(68, 69), bike); // swingarm
+    canvas.drawLine(const Offset(110, 41), front, bike); // fork
+    canvas.drawLine(
+      const Offset(113, 52),
+      const Offset(120, 70),
+      _stroke(Colors.white.withAlpha(150), 1.8),
+    ); // fork shine
+    canvas.drawLine(
+      const Offset(64, 78),
+      const Offset(34, 82),
+      _stroke(_C.raisin, 4.5),
+    ); // exhaust
+    canvas.drawCircle(const Offset(33, 82), 2.8, _fill(_C.raisin));
+
+    // engine
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(62, 62, 28, 18),
+        const Radius.circular(5),
+      ),
+      _fill(_C.lin),
+    );
+    canvas.drawRect(
+      const Rect.fromLTWH(70, 66, 12, 8),
+      _fill(_C.prune.withAlpha(120)),
+    );
+    // seat
+    canvas.drawPath(
+      Path()
+        ..moveTo(44, 57)
+        ..lineTo(78, 55)
+        ..lineTo(80, 61)
+        ..lineTo(46, 63)
+        ..close(),
+      _fill(dark),
+    );
+    // fuel tank
+    canvas.drawPath(
+      Path()
+        ..moveTo(72, 56)
+        ..quadraticBezierTo(88, 38, 108, 50)
+        ..lineTo(106, 60)
+        ..lineTo(76, 62)
+        ..close(),
+      _fill(_C.lin),
+    );
+    // handlebar + headlight
+    canvas.drawLine(
+      const Offset(106, 41),
+      const Offset(115, 38),
+      _stroke(Colors.white, 3.5),
+    );
+    canvas.drawCircle(const Offset(122, 50), 6, _fill(Colors.white));
+    canvas.drawCircle(const Offset(122, 50), 3.5, _fill(_C.lin));
+
+    // ── Rider ──────────────────────────────────────────────────────────
+    // leg (outlined so it stands out from the dark background)
+    final leg = Path()
+      ..moveTo(68, 52)
+      ..lineTo(92, 59)
+      ..lineTo(83, 79);
+    canvas.drawPath(leg, _stroke(_C.raisin.withAlpha(200), 12));
+    canvas.drawPath(leg, _stroke(pants, 9));
+    canvas.drawLine(
+      const Offset(83, 80),
+      const Offset(95, 82),
+      _stroke(Colors.white, 5.5),
+    );
+
+    // torso, leaning forward
+    canvas.drawLine(
+      const Offset(66, 53),
+      const Offset(84, 29),
+      _stroke(_C.raisin.withAlpha(180), 19),
+    );
+    canvas.drawLine(
+      const Offset(66, 53),
+      const Offset(84, 29),
+      _stroke(jacket, 17),
+    );
+    canvas.drawLine(
+      const Offset(68, 36),
+      const Offset(82, 46),
+      _stroke(_C.lin, 3),
+    ); // jacket stripe
+
+    // arm to the handlebar + glove
+    final arm = Path()
+      ..moveTo(82, 32)
+      ..lineTo(95, 45)
+      ..lineTo(110, 41);
+    canvas.drawPath(arm, _stroke(jacketShade, 6.5));
+    canvas.drawCircle(const Offset(111, 41), 3.6, _fill(_C.prune));
+
+    // scarf: streams back when fast, droops when stopped
+    final scarf = Path()..moveTo(80, 28);
+    final len = 0.35 + speed * 0.65;
+    for (int k = 1; k <= 6; k++) {
+      final x = 80 - k * 5.5 * len;
+      final y =
+          28 +
+          k * 1.4 * (1 - speed) +
+          math.sin(phase * math.pi * 14 + k * 0.9) * (0.8 + k * 0.55) * speed;
+      scarf.lineTo(x, y);
+    }
+    canvas.drawPath(scarf, _stroke(_C.lin, 4.5));
+
+    // helmet with visor
+    const head = Offset(90, 16);
+    canvas.drawCircle(head, 10.5, _fill(_C.brique));
+    canvas.drawArc(
+      Rect.fromCircle(center: head, radius: 7),
+      math.pi * 1.15,
+      math.pi * 0.6,
+      false,
+      _stroke(_C.lin, 2),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(93, 11.5, 11, 7),
+        const Radius.circular(3.5),
+      ),
+      _fill(dark),
+    );
+    canvas.drawLine(
+      const Offset(96, 13.5),
+      const Offset(101, 13.5),
+      _stroke(Colors.white.withAlpha(180), 1.3),
+    );
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _RiderPainter old) =>
+      old.wheelAngle != wheelAngle ||
+      old.speed != speed ||
+      old.brake != brake ||
+      old.phase != phase;
 }

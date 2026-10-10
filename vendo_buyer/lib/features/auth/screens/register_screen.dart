@@ -36,6 +36,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // Step 3
   bool _agreedToTerms = false;
 
+  // Validation — keys match field names; red border shown when key is present
+  final Set<String> _errors = {};
+
   final List<String> _sexOptions = ['Male', 'Female', 'Prefer not to say'];
 
   @override
@@ -58,6 +61,37 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   void _nextStep() {
+    final newErrors = <String>{};
+
+    if (_currentStep == 0) {
+      if (_lastNameCtrl.text.trim().isEmpty) newErrors.add('lastName');
+      if (_firstNameCtrl.text.trim().isEmpty) newErrors.add('firstName');
+      if (_selectedSex == null) newErrors.add('sex');
+      if (_emailCtrl.text.trim().isEmpty) newErrors.add('email');
+      if (_birthdayCtrl.text.trim().isEmpty) newErrors.add('birthday');
+      if (_passwordCtrl.text.isEmpty) newErrors.add('password');
+      if (_confirmPasswordCtrl.text.isEmpty) newErrors.add('confirmPassword');
+      if (_validIdFileName == null) newErrors.add('validId');
+    } else if (_currentStep == 1) {
+      if (_phoneCtrl.text.trim().isEmpty) newErrors.add('phone');
+      if (_provinceCtrl.text.trim().isEmpty) newErrors.add('province');
+      if (_municipalityCtrl.text.trim().isEmpty) newErrors.add('municipality');
+      if (_barangayCtrl.text.trim().isEmpty) newErrors.add('barangay');
+      if (_streetCtrl.text.trim().isEmpty) newErrors.add('street');
+      if (_zipCodeCtrl.text.trim().isEmpty) newErrors.add('zipCode');
+    }
+
+    if (newErrors.isNotEmpty) {
+      setState(
+        () => _errors
+          ..clear()
+          ..addAll(newErrors),
+      );
+      return;
+    }
+
+    setState(() => _errors.clear());
+
     if (_currentStep < 2) {
       setState(() => _currentStep++);
     } else {
@@ -143,11 +177,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
         const SizedBox(height: 16),
         _buildLabel('Last Name', required: true),
         const SizedBox(height: 6),
-        _RegInputField(controller: _lastNameCtrl, hint: 'Enter last name'),
+        _RegInputField(
+          controller: _lastNameCtrl,
+          hasError: _errors.contains('lastName'),
+          hint: 'Enter last name',
+        ),
         const SizedBox(height: 12),
         _buildLabel('First Name', required: true),
         const SizedBox(height: 6),
-        _RegInputField(controller: _firstNameCtrl, hint: 'Enter first name'),
+        _RegInputField(
+          controller: _firstNameCtrl,
+          hasError: _errors.contains('firstName'),
+          hint: 'Enter first name',
+        ),
         const SizedBox(height: 12),
         _buildLabel('Middle Initial'),
         const SizedBox(height: 6),
@@ -162,6 +204,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           value: _selectedSex,
           options: _sexOptions,
           onChanged: (val) => setState(() => _selectedSex = val),
+          hasError: _errors.contains('sex'),
         ),
         const SizedBox(height: 12),
         Row(
@@ -199,6 +242,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   const SizedBox(height: 6),
                   _RegInputField(
                     controller: _birthdayCtrl,
+                    hasError: _errors.contains('birthday'),
                     hint: 'mm/dd/yyyy',
                     readOnly: true,
                     suffixIcon: const Icon(
@@ -257,6 +301,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _UploadField(
           fileName: _validIdFileName,
           hint: 'Upload Valid ID here',
+          hasError: _errors.contains('validId'),
           onTap: () => _showImageSourceSheet(context),
         ),
         const SizedBox(height: 24),
@@ -339,7 +384,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
         const SizedBox(height: 12),
         _buildLabel('Province', required: true),
         const SizedBox(height: 6),
-        _RegInputField(controller: _provinceCtrl, hint: 'Enter province'),
+        _RegInputField(
+          controller: _provinceCtrl,
+          hasError: _errors.contains('province'),
+          hint: 'Enter province',
+        ),
         const SizedBox(height: 12),
         _buildLabel('Municipality / City', required: true),
         const SizedBox(height: 6),
@@ -350,7 +399,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
         const SizedBox(height: 12),
         _buildLabel('Barangay', required: true),
         const SizedBox(height: 6),
-        _RegInputField(controller: _barangayCtrl, hint: 'Enter barangay'),
+        _RegInputField(
+          controller: _barangayCtrl,
+          hasError: _errors.contains('barangay'),
+          hint: 'Enter barangay',
+        ),
         const SizedBox(height: 12),
         _buildLabel('Street / House No.', required: true),
         const SizedBox(height: 6),
@@ -1072,6 +1125,7 @@ class _RegInputField extends StatelessWidget {
   final Widget? suffixIcon;
   final bool readOnly;
   final VoidCallback? onTap;
+  final bool hasError;
 
   const _RegInputField({
     required this.controller,
@@ -1081,6 +1135,7 @@ class _RegInputField extends StatelessWidget {
     this.suffixIcon,
     this.readOnly = false,
     this.onTap,
+    this.hasError = false,
   });
 
   @override
@@ -1089,7 +1144,10 @@ class _RegInputField extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE0E0E0), width: 1.2),
+        border: Border.all(
+          color: hasError ? const Color(0xFFE53935) : const Color(0xFFE0E0E0),
+          width: hasError ? 1.8 : 1.2,
+        ),
       ),
       child: TextField(
         controller: controller,
@@ -1131,11 +1189,13 @@ class _SexDropdown extends StatelessWidget {
   final String? value;
   final List<String> options;
   final ValueChanged<String?> onChanged;
+  final bool hasError;
 
   const _SexDropdown({
     required this.value,
     required this.options,
     required this.onChanged,
+    this.hasError = false,
   });
 
   @override
@@ -1145,7 +1205,10 @@ class _SexDropdown extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: const Color(0xFFE0E0E0), width: 1.2),
+        border: Border.all(
+          color: hasError ? const Color(0xFFE53935) : const Color(0xFFE0E0E0),
+          width: hasError ? 1.8 : 1.2,
+        ),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
@@ -1188,11 +1251,13 @@ class _UploadField extends StatelessWidget {
   final String? fileName;
   final String hint;
   final VoidCallback onTap;
+  final bool hasError;
 
   const _UploadField({
     required this.fileName,
     required this.hint,
     required this.onTap,
+    this.hasError = false,
   });
 
   @override
@@ -1204,7 +1269,10 @@ class _UploadField extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFE0E0E0), width: 1.2),
+          border: Border.all(
+            color: hasError ? const Color(0xFFE53935) : const Color(0xFFE0E0E0),
+            width: hasError ? 1.8 : 1.2,
+          ),
         ),
         child: Row(
           children: [
