@@ -1,7 +1,7 @@
 # Rider registration and parcel scans
 
-**Status:** Implemented client for the currently available Laravel rider API; owner verification pending  
-**Updated:** 28 September 2026
+**Status:** Rider auth/registration and API-backed assigned-work screen are connected; owner verification is pending
+**Updated:** 12 October 2026
 
 ## Registration
 
@@ -13,7 +13,7 @@ The app cannot guarantee that a chosen hub is physically closest. Hub coverage a
 
 ## Authentication and assigned work
 
-Only approved active riders attached to approved active centers can log in with a password or Google. The API verifies Google ID tokens and issues the same seven-day Rider bearer token; pending accounts still need Logistics approval. Forgot Password emails a one-time code, exchanges a valid code for a short-lived reset proof, changes the password, and revokes existing Rider API tokens. The token, rider name, center name, and registered vehicle type are stored in platform secure storage. The live work screen requests assigned parcels from the server and displays the seller stop for pickup or buyer stop for delivery. Motorcycle, Van, and L300 accounts use local pickup/delivery assignments; only Truck accounts receive long-haul work. The previous sample dashboard is not used for live work.
+Only approved active riders attached to approved active centers can log in with a password or Google. The API verifies Google ID tokens and issues the same seven-day Rider bearer token; pending accounts still need Logistics approval. Forgot Password emails a one-time code, exchanges a valid code for a short-lived reset proof, changes the password, and revokes existing Rider API tokens. The token, rider name, center name, and registered vehicle type are stored in platform secure storage. Motorcycle, Van, and L300 accounts use local pickup/delivery assignments; only Truck accounts receive long-haul work. Successful password and Google login now open `RiderWorkScreen`, which requests the authenticated rider's assigned parcels, displays the seller pickup or buyer delivery stop, and offers the currently supported QR/barcode scans. The five-tab `DashboardScreen` remains a prototype and is no longer the successful-login destination; its Home, Map, Earnings, and Profile content is not backed by live API data.
 
 For a selected assignment, the camera reads the label's QR or Code 128 barcode; both encode the same tracking number, and only an exact match with the assigned parcel is accepted. Android/iOS explicitly configure `mobile_scanner` for those two formats. Linux explicitly enables both in `zbarcam`. A matching read sends the supported `pickup`, `origin_arrival`, `out_for_delivery`, or `delivered` action according to the assignment's current server status. Legacy SOC-coded scan actions are not presented as actual SH arrivals. The `delivered` scan appears after `out_for_delivery` and should be used only after handing over the parcel; the Laravel API restricts it to the approved rider assigned for destination delivery. A UUID scan key is stored before the network call and reused if a connection fails; successful scans clear it. The Laravel API authorizes the rider and order, records the scan, and updates notifications and the seller/buyer timeline. A scan is not treated as successful merely because the camera read a code.
 
