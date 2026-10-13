@@ -7,7 +7,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/auth/screens/forgot_password_screen.dart';
 import 'package:vendo_rider/features/auth/screens/register_screen.dart';
-import 'package:vendo_rider/features/dashboard/screens/navigation_bar.dart';
+import 'package:vendo_rider/features/work/screens/rider_work_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the rest of the app
@@ -132,7 +132,7 @@ class _LoginScreenState extends State<LoginScreen>
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const DashboardScreen()),
+        MaterialPageRoute(builder: (_) => const RiderWorkScreen()),
       );
     } on RiderApiException catch (error) {
       if (mounted) {
@@ -206,7 +206,7 @@ class _LoginScreenState extends State<LoginScreen>
       }
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const DashboardScreen()),
+        MaterialPageRoute(builder: (_) => const RiderWorkScreen()),
       );
     } on RiderApiException catch (error) {
       if (mounted) {
