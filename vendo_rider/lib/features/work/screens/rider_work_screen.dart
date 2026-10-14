@@ -123,6 +123,50 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
     }
   }
 
+  Future<void> _scanFacility(
+    Map<String, dynamic> order,
+    Map<String, dynamic> target,
+  ) async {
+    if (_busy) return;
+    final tracking = order['tracking_number'] as String;
+    final facilityId = (target['facility_id'] as num).toInt();
+    final scanned = await Navigator.push<String>(context,
+      MaterialPageRoute(builder: (_) => _ParcelScanner(trackingNumber: tracking)));
+    if (!mounted || scanned == null) return;
+
+    final scanType = 'facility-$facilityId';
+    setState(() => _busy = true);
+    final api = RiderApi.instance;
+    try {
+      var key = await api.pendingScanKey(tracking, scanType);
+      if (key == null) {
+        key = _newUuid();
+        await api.saveScanKey(tracking, scanType, key);
+      }
+      final result = await api.scanFacility(tracking, facilityId, key);
+      await api.clearScanKey(tracking, scanType);
+      if (!mounted) return;
+      final facilityName = result['facility']?.toString() ?? 'facility';
+      final action = result['action']?.toString() ?? 'scan';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(result['duplicate'] == true
+            ? 'This scan was already recorded. Parcel status is up to date.'
+            : 'Scan saved at $facilityName ($action). Seller and buyer tracking is updated.'),
+      ));
+      await _refresh();
+    } on RiderApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      if (error.statusCode == 409) await _refresh();
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Connection failed. Scan this parcel again to retry the same event.'),
+      ));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   String _newUuid() {
     final random = Random.secure();
     final bytes = List<int>.generate(16, (_) => random.nextInt(256));
@@ -206,6 +250,12 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
                         final checkpoints = plannedRoute?['checkpoints'] is List
                             ? plannedRoute!['checkpoints'] as List<dynamic>
                             : const <dynamic>[];
+                        final scanTarget = plannedRoute?['scan_target'] is Map
+                            ? Map<String, dynamic>.from(plannedRoute!['scan_target'] as Map)
+                            : null;
+                        final nextCheckpoint = plannedRoute?['next_checkpoint'] is Map
+                            ? Map<String, dynamic>.from(plannedRoute!['next_checkpoint'] as Map)
+                            : null;
                         final routeNames = <String>[
                           plannedRoute?['origin_main_hub']?.toString() ?? '',
                           ...checkpoints.map((checkpoint) {
@@ -241,32 +291,42 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
                                 const Text('Planned truck route', style: TextStyle(fontWeight: FontWeight.w600)),
                                 const SizedBox(height: 4),
                                 Text(routeNames.join(' → ')),
-                                if (plannedRoute['next_checkpoint'] is Map)
-                                  Text('Next planned checkpoint: ${Map<String, dynamic>.from(plannedRoute['next_checkpoint'] as Map)['name']} (${Map<String, dynamic>.from(plannedRoute['next_checkpoint'] as Map)['code']})'),
-                                const Padding(
-                                  padding: EdgeInsets.only(top: 8),
-                                  child: Text('This is the planned route. SH arrival and sorting are confirmed by the separate SH scanner app.',
-                                    style: TextStyle(color: Color(0xFF6D6475))),
-                                ),
+                                if (nextCheckpoint != null)
+                                  Text('Next planned checkpoint: ' + [
+                                    nextCheckpoint['code']?.toString(),
+                                    nextCheckpoint['name']?.toString(),
+                                  ].whereType<String>().where((value) => value.isNotEmpty).join(' · ')),
+                                if (scanTarget != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 8),
+                                    child: Text(
+                                      'Scan target: ' + scanTarget['name'].toString() +
+                                          (scanTarget['municipality'] == null
+                                              ? ''
+                                              : ' · ' + scanTarget['municipality'].toString()),
+                                      style: const TextStyle(color: Color(0xFF6D6475)),
+                                    ),
+                                  ),
                               ],
-                              if (order['assignment'] == 'linehaul' && type == null)
-                                const Text('Use the separate SH scanner app for actual SH arrival and sorting scans.',
-                                  style: TextStyle(color: Color(0xFF6D6475)))
-                              else if (_vehicleType == 'Truck' && plannedRoute == null)
-                                const Padding(
-                                  padding: EdgeInsets.only(top: 8),
-                                  child: Text('SH arrival and sorting are recorded in the separate SH scanner app.',
-                                    style: TextStyle(color: Color(0xFF6D6475))),
-                                ),
                               const SizedBox(height: 12),
-                              if (type != null)
+                              if (order['assignment'] == 'linehaul' && scanTarget != null)
+                                SizedBox(width: double.infinity, child: FilledButton.icon(
+                                  style: FilledButton.styleFrom(backgroundColor: purple),
+                                  onPressed: _busy ? null : () => _scanFacility(order, scanTarget),
+                                  icon: const Icon(Icons.qr_code_scanner),
+                                  label: Text('Scan at ' + scanTarget['name'].toString()),
+                                ))
+                              else if (order['assignment'] == 'linehaul')
+                                const Text('No facility scan is due yet. Refresh after Logistics sets the route or the previous stop is completed.',
+                                  style: TextStyle(color: Color(0xFF6D6475)))
+                              else if (type != null)
                                 SizedBox(width: double.infinity, child: FilledButton.icon(
                                   style: FilledButton.styleFrom(backgroundColor: purple),
                                   onPressed: _busy ? null : () => _scan(order, type),
                                   icon: const Icon(Icons.qr_code_scanner),
                                   label: Text(_scanLabel(type)),
                                 ))
-                              else if (order['assignment'] != 'linehaul') const Text('No rider scan is available at this stage.',
+                              else const Text('No rider scan is available at this stage.',
                                 style: TextStyle(color: Color(0xFF6D6475))),
                             ]),
                           ),

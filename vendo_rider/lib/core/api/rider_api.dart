@@ -247,6 +247,25 @@ class RiderApi {
     return _body(response);
   }
 
+  Future<Map<String, dynamic>> scanFacility(
+    String trackingNumber,
+    int facilityId,
+    String scanKey,
+  ) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/facility-scans'),
+          headers: await _authHeaders(),
+          body: jsonEncode({
+            'tracking_number': trackingNumber,
+            'facility_id': facilityId,
+            'scan_key': scanKey,
+          }),
+        )
+        .timeout(const Duration(seconds: 25));
+    return _body(response);
+  }
+
   Future<String?> pendingScanKey(String trackingNumber, String scanType) =>
       _storage.read(key: 'scan:$trackingNumber:$scanType');
 
