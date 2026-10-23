@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
+import 'package:vendo_rider/features/auth/screens/login_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the Home, Deliveries and Earnings screens
@@ -36,15 +37,21 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   String _riderName = '';
-
-  // Placeholder until the API returns the real rider ID
-  static const _riderId = 'RID-45821';
+  String _centerName = '';
+  String _vehicleType = '';
+  bool _loggingOut = false;
 
   @override
   void initState() {
     super.initState();
     RiderApi.instance.riderName().then((name) {
       if (mounted) setState(() => _riderName = name ?? 'Rider');
+    });
+    RiderApi.instance.centerName().then((name) {
+      if (mounted) setState(() => _centerName = name ?? '');
+    });
+    RiderApi.instance.riderVehicleType().then((type) {
+      if (mounted) setState(() => _vehicleType = type ?? '');
     });
   }
 
@@ -90,7 +97,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
 
     if (shouldLogOut == true && mounted) {
-      Navigator.of(context).popUntil((r) => r.isFirst);
+      setState(() => _loggingOut = true);
+      try {
+        await RiderApi.instance.logout();
+        if (!mounted) return;
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const LoginScreen(animateEntrance: false)),
+          (_) => false,
+        );
+      } on RiderApiException catch (error) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      } catch (_) {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not sign out. Check your connection and retry.')));
+      } finally {
+        if (mounted) setState(() => _loggingOut = false);
+      }
     }
   }
 
@@ -267,8 +288,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                 ),
                 const SizedBox(width: 6),
-                const Text(
-                  'Active Rider',
+                Text(
+                  _vehicleType.isEmpty ? 'Approved Rider' : '$_vehicleType Rider',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 12,
@@ -278,32 +299,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(width: 8),
                 Container(width: 1, height: 10, color: const Color(0x40FFFFFF)),
                 const SizedBox(width: 8),
-                const Text(
-                  _riderId,
-                  style: TextStyle(color: Color(0xB3FFFFFF), fontSize: 12),
+                Flexible(
+                  child: Text(
+                    _centerName.isEmpty ? 'Logistics hub' : _centerName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Color(0xB3FFFFFF), fontSize: 12),
+                  ),
                 ),
               ],
             ),
           ),
           const SizedBox(height: 20),
-          // Glass-style stats strip
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            decoration: BoxDecoration(
-              color: const Color(0x14FFFFFF),
-              borderRadius: BorderRadius.circular(_radius),
-              border: Border.all(color: const Color(0x26FFFFFF)),
-            ),
-            child: const Row(
-              children: [
-                _ProfileStat(label: 'Total Trips', value: '248'),
-                _StatDivider(),
-                _ProfileStat(label: 'Rating', value: '4.9 ★'),
-                _StatDivider(),
-                _ProfileStat(label: 'Since', value: 'Jan 2024'),
-              ],
-            ),
-          ),
         ],
       ),
     );
@@ -316,7 +323,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       borderRadius: BorderRadius.circular(_radius),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: _confirmLogout,
+        onTap: _loggingOut ? null : _confirmLogout,
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 16),
@@ -324,13 +331,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
             borderRadius: BorderRadius.circular(_radius),
             border: Border.all(color: const Color(0xFFF0D3C9)),
           ),
-          child: const Row(
+          child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.logout_rounded, color: _C.brique, size: 20),
-              SizedBox(width: 10),
+              const Icon(Icons.logout_rounded, color: _C.brique, size: 20),
+              const SizedBox(width: 10),
               Text(
-                'Log Out',
+                _loggingOut ? 'Signing out…' : 'Log Out',
                 style: TextStyle(
                   color: _C.brique,
                   fontSize: 15,

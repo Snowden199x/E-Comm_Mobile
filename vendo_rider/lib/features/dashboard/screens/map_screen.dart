@@ -3,32 +3,96 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:vendo_rider/core/api/rider_api.dart';
 
 class MapScreen extends StatefulWidget {
-  final LatLng destination;
-  final String destinationLabel;
+  final LatLng? destination;
+  final String? destinationLabel;
 
   const MapScreen({
     super.key,
-    required this.destination,
-    required this.destinationLabel,
+    this.destination,
+    this.destinationLabel,
   });
 
   @override
-  State<MapScreen> createState() => _MapScreenState();
+  State<MapScreen> createState() => MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> {
+class MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
   LatLng? _currentLocation;
+  LatLng? _destination;
+  String? _destinationLabel;
+  String? _assignmentError;
   bool _loadingLocation = true;
+  bool _loadingAssignment = true;
+  bool _didFitBounds = false;
   StreamSubscription<Position>? _locationStream;
 
   @override
   void initState() {
     super.initState();
+    _destination = widget.destination;
+    _destinationLabel = widget.destinationLabel;
     _initLocation();
+    _loadDeliveryDestination();
   }
+
+  Future<void> _loadDeliveryDestination() async {
+    if (widget.destination != null) {
+      if (mounted) setState(() => _loadingAssignment = false);
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _loadingAssignment = true;
+        _destination = null;
+        _destinationLabel = null;
+        _assignmentError = null;
+      });
+    }
+    _didFitBounds = false;
+
+    try {
+      final payload = await RiderApi.instance.assignmentDashboard();
+      final assignments = (payload['assignments'] as List<dynamic>? ?? [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .where((item) => item['assignment'] == 'delivery')
+          .toList();
+      assignments.sort((a, b) {
+        final aActive = a['status'] == 'out_for_delivery' ? 0 : 1;
+        final bActive = b['status'] == 'out_for_delivery' ? 0 : 1;
+        return aActive.compareTo(bActive);
+      });
+
+      final stop = assignments.isEmpty
+          ? null
+          : assignments.first['stop'] as Map<String, dynamic>?;
+      final latitude = double.tryParse('${stop?['latitude']}');
+      final longitude = double.tryParse('${stop?['longitude']}');
+      if (!mounted) return;
+      setState(() {
+        _destinationLabel = stop?['address']?.toString();
+        if (latitude != null && longitude != null) {
+          _destination = LatLng(latitude, longitude);
+        }
+        _loadingAssignment = false;
+      });
+      _maybeFitBounds();
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loadingAssignment = false;
+          _assignmentError = 'Could not load the assigned delivery. Tap Map again to retry.';
+        });
+        _maybeFitBounds();
+      }
+    }
+  }
+
+  void refreshDestination() => _loadDeliveryDestination();
 
   Future<void> _initLocation() async {
     // Check and request permission
@@ -36,13 +100,9 @@ class _MapScreenState extends State<MapScreen> {
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
     }
-    if (perm == LocationPermission.deniedForever) {
-      // Permission permanently denied — use fallback
+    if (perm == LocationPermission.deniedForever || perm == LocationPermission.denied) {
       if (mounted) {
-        setState(() {
-          _currentLocation = const LatLng(14.2793, 121.4110);
-          _loadingLocation = false;
-        });
+        setState(() => _loadingLocation = false);
       }
       return;
     }
@@ -51,10 +111,7 @@ class _MapScreenState extends State<MapScreen> {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       if (mounted) {
-        setState(() {
-          _currentLocation = const LatLng(14.2793, 121.4110);
-          _loadingLocation = false;
-        });
+        setState(() => _loadingLocation = false);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Please enable location services on your device.'),
@@ -72,7 +129,7 @@ class _MapScreenState extends State<MapScreen> {
           _currentLocation = LatLng(last.latitude, last.longitude);
           _loadingLocation = false;
         });
-        _fitBounds();
+        _maybeFitBounds();
       }
 
       // Then stream live updates
@@ -89,23 +146,18 @@ class _MapScreenState extends State<MapScreen> {
                   _currentLocation = LatLng(pos.latitude, pos.longitude);
                   _loadingLocation = false;
                 });
+                _maybeFitBounds();
               }
             },
             onError: (_) {
               if (mounted && _currentLocation == null) {
-                setState(() {
-                  _currentLocation = const LatLng(14.2793, 121.4110);
-                  _loadingLocation = false;
-                });
+                setState(() => _loadingLocation = false);
               }
             },
           );
     } catch (_) {
       if (mounted) {
-        setState(() {
-          _currentLocation = const LatLng(14.2793, 121.4110);
-          _loadingLocation = false;
-        });
+        setState(() => _loadingLocation = false);
       }
     }
   }
@@ -117,11 +169,16 @@ class _MapScreenState extends State<MapScreen> {
     super.dispose();
   }
 
-  void _fitBounds() {
-    if (_currentLocation == null) return;
+  void _maybeFitBounds() {
+    if (_currentLocation == null || _didFitBounds || _loadingAssignment) return;
+    _didFitBounds = true;
+    if (_destination == null) {
+      _mapController.move(_currentLocation!, 15);
+      return;
+    }
     final bounds = LatLngBounds.fromPoints([
       _currentLocation!,
-      widget.destination,
+      _destination!,
     ]);
     _mapController.fitCamera(
       CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(80)),
@@ -167,13 +224,23 @@ class _MapScreenState extends State<MapScreen> {
                 ],
               ),
             )
-          : Stack(
+          : _currentLocation == null
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'Enable location access to show your position. Vendo does not have delivery coordinates for this route yet.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : Stack(
               children: [
                 // ── Map ───────────────────────────────────────
                 FlutterMap(
                   mapController: _mapController,
                   options: MapOptions(
-                    initialCenter: _currentLocation ?? widget.destination,
+                    initialCenter: _currentLocation!,
                     initialZoom: 14,
                   ),
                   children: [
@@ -185,11 +252,11 @@ class _MapScreenState extends State<MapScreen> {
                     ),
 
                     // Route line
-                    if (_currentLocation != null)
+                    if (_currentLocation != null && _destination != null)
                       PolylineLayer(
                         polylines: [
                           Polyline(
-                            points: [_currentLocation!, widget.destination],
+                            points: [_currentLocation!, _destination!],
                             color: const Color(0xFF2D1B3D),
                             strokeWidth: 4,
                           ),
@@ -228,8 +295,9 @@ class _MapScreenState extends State<MapScreen> {
                             ),
                           ),
                         // Destination — red
+                        if (_destination != null)
                         Marker(
-                          point: widget.destination,
+                          point: _destination!,
                           width: 40,
                           height: 48,
                           child: Column(
@@ -344,7 +412,7 @@ class _MapScreenState extends State<MapScreen> {
                             const SizedBox(width: 12),
                             const Expanded(
                               child: Text(
-                                'Vendo Warehouse, Quezon City',
+                                'Your current location',
                                 style: TextStyle(
                                   color: Color(0xFF1A1A2E),
                                   fontSize: 13,
@@ -382,7 +450,9 @@ class _MapScreenState extends State<MapScreen> {
                             const SizedBox(width: 10),
                             Expanded(
                               child: Text(
-                                widget.destinationLabel,
+                                _loadingAssignment
+                                    ? 'Loading your assigned delivery…'
+                                    : (_destinationLabel ?? _assignmentError ?? 'No delivery address is assigned to this Rider account.'),
                                 style: const TextStyle(
                                   color: Color(0xFF1A1A2E),
                                   fontSize: 13,
