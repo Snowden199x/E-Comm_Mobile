@@ -19,7 +19,7 @@ The Flutter app is an untrusted client. It displays server-authorized Rider work
 
 ## App data and permissions
 
-The app requests camera access for barcode/QR scanning and declares location and image-library permissions for existing map/profile capabilities. The live parcel scan does not attach GPS coordinates or claim proof of delivery. Assignment responses contain stop contact/address data for the assigned local Rider; Truck linehaul responses are intentionally narrower and omit buyer contact/address data.
+The app requests camera access for barcode/QR scanning and declares location and image-library permissions for map/profile capabilities. The map reads live device GPS locally and requests assigned delivery coordinates from the authenticated assignment API. The live parcel scan does not attach GPS coordinates or claim proof of delivery. Assignment responses contain stop contact/address and optional delivery-pin data only for the assigned local Rider; Truck linehaul responses are intentionally narrower and omit buyer contact/address/coordinates.
 
 The Google Maps key in `android/app/src/main/AndroidManifest.xml` is currently the placeholder `YOUR_API_KEY`. If Maps is enabled, configure a key restricted to the Android package and signing certificate, and to only the required Maps APIs. Do not put OAuth client secrets or server credentials in the Flutter app.
 

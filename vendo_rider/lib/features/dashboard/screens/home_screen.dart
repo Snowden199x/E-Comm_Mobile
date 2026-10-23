@@ -3,8 +3,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
-import 'package:vendo_rider/features/dashboard/screens/delivery_detail_screen.dart';
-import 'package:vendo_rider/features/scanner/screens/parcel_scanner_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vendo brand palette (from the logo)
@@ -34,26 +32,27 @@ class _C {
 const double _radius = 16;
 
 class HomeScreen extends StatefulWidget {
-  /// Called when the rider taps the earnings card.
-  /// DashboardScreen uses this to jump to the Earnings tab.
-  final VoidCallback? onViewEarnings;
+  /// Opens the assigned parcel work tab.
+  final VoidCallback? onOpenParcels;
+  final VoidCallback? onOpenEarnings;
 
-  const HomeScreen({super.key, this.onViewEarnings});
+  const HomeScreen({super.key, this.onOpenParcels, this.onOpenEarnings});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<HomeScreen> createState() => HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen>
+class HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
-  bool _isOnline = true;
   String _riderName = '';
+  String _accruedEarnings = '—';
+  List<Map<String, dynamic>> _assignments = [];
+  Map<String, dynamic> _assignmentSummary = {};
+  bool _loadingAssignments = true;
+  String? _assignmentError;
 
   // Drives the header animation (loops forever, 0.0 → 1.0)
   late final AnimationController _bgController;
-
-  // Placeholder until the API returns the real rider ID
-  static const _riderId = 'RID-45821';
 
   @override
   void initState() {
@@ -66,6 +65,8 @@ class _HomeScreenState extends State<HomeScreen>
     RiderApi.instance.riderName().then((name) {
       if (mounted) setState(() => _riderName = name ?? 'Rider');
     });
+    _refreshAssignments();
+    _refreshEarnings();
   }
 
   @override
@@ -81,38 +82,48 @@ class _HomeScreenState extends State<HomeScreen>
     return 'Good evening';
   }
 
-  void _toggleOnline() {
-    HapticFeedback.selectionClick();
-    setState(() => _isOnline = !_isOnline);
+  void _openDeliveryDetails() {
+    widget.onOpenParcels?.call();
   }
 
-  void _openDeliveryDetails() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const DeliveryDetailScreen()),
-    );
+  Future<void> _refreshAssignments() async {
+    if (mounted) setState(() { _loadingAssignments = true; _assignmentError = null; });
+    try {
+      final data = await RiderApi.instance.assignmentDashboard();
+      final items = (data['assignments'] as List<dynamic>)
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
+      final summary = data['summary'] is Map
+          ? Map<String, dynamic>.from(data['summary'] as Map)
+          : <String, dynamic>{};
+      if (mounted) setState(() { _assignments = items; _assignmentSummary = summary; });
+    } on RiderApiException catch (error) {
+      if (mounted) setState(() => _assignmentError = error.message);
+    } catch (_) {
+      if (mounted) setState(() => _assignmentError = 'Could not load assigned work. Pull to refresh.');
+    } finally {
+      if (mounted) setState(() => _loadingAssignments = false);
+    }
+  }
+
+  void refreshAssignments() => _refreshAssignments();
+
+  Future<void> _refreshEarnings() async {
+    try {
+      final data = await RiderApi.instance.earnings();
+      final summary = data['summary'] is Map
+          ? Map<String, dynamic>.from(data['summary'] as Map)
+          : <String, dynamic>{};
+      final amount = double.tryParse(summary['accrued_total']?.toString() ?? '');
+      if (mounted && amount != null) setState(() => _accruedEarnings = '₱${amount.toStringAsFixed(2)}');
+    } catch (_) {
+      if (mounted) setState(() => _accruedEarnings = 'Unavailable');
+    }
   }
 
   void _onAssignParcel() {
-    HapticFeedback.mediumImpact();
-    Navigator.push<String>(
-      context,
-      MaterialPageRoute(builder: (_) => const ParcelScannerScreen()),
-    ).then((scannedCode) {
-      if (!mounted || scannedCode == null) return;
-      // Scanned successfully — jump to Deliveries tab (index 1)
-      widget.onViewEarnings?.call();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Scanned: $scannedCode'),
-          backgroundColor: const Color(0xFF2D1B3D),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-        ),
-      );
-    });
+    HapticFeedback.selectionClick();
+    widget.onOpenParcels?.call();
   }
 
   @override
@@ -201,7 +212,6 @@ class _HomeScreenState extends State<HomeScreen>
   // ── Dark header panel: animated backdrop + greeting + status + earnings ──
   Widget _buildHeaderPanel() {
     final topInset = MediaQuery.of(context).padding.top;
-    final dotColor = _isOnline ? _C.lin : _C.offline;
 
     return ClipRRect(
       // Everything animated stays inside this rounded shape
@@ -239,7 +249,7 @@ class _HomeScreenState extends State<HomeScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildHeaderRow(dotColor),
+                  _buildHeaderRow(),
                   const SizedBox(height: 22),
                   _buildEarningsCard(),
                 ],
@@ -251,7 +261,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Widget _buildHeaderRow(Color dotColor) {
+  Widget _buildHeaderRow() {
     return Row(
       children: [
         Expanded(
@@ -278,11 +288,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
               const SizedBox(height: 12),
-              // Online status pill: tap to switch
-              GestureDetector(
-                onTap: _toggleOnline,
-                behavior: HitTestBehavior.opaque,
-                child: Container(
+              Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
                     vertical: 6,
@@ -295,18 +301,17 @@ class _HomeScreenState extends State<HomeScreen>
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
+                      Container(
                         width: 8,
                         height: 8,
-                        decoration: BoxDecoration(
-                          color: dotColor,
+                        decoration: const BoxDecoration(
+                          color: _C.lin,
                           shape: BoxShape.circle,
                         ),
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        _isOnline ? 'Online' : 'Offline',
+                        'Signed in',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 12,
@@ -321,7 +326,7 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                       const SizedBox(width: 8),
                       const Text(
-                        _riderId,
+                        'Rider account',
                         style: TextStyle(
                           color: Color(0xB3FFFFFF),
                           fontSize: 12,
@@ -329,7 +334,6 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                     ],
                   ),
-                ),
               ),
             ],
           ),
@@ -360,14 +364,14 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  // ── Today's earnings (glass-style card inside the header) ────────────────
+  // ── Accrued earnings (glass-style card inside the header) ────────────────
   Widget _buildEarningsCard() {
     return Material(
       color: const Color(0x14FFFFFF),
       borderRadius: BorderRadius.circular(_radius),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: widget.onViewEarnings,
+        onTap: widget.onOpenEarnings,
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.all(16),
@@ -382,7 +386,7 @@ class _HomeScreenState extends State<HomeScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      "Today's Earnings",
+                      'Accrued Earnings',
                       style: TextStyle(
                         color: Color(0xB3FFFFFF),
                         fontSize: 13,
@@ -390,8 +394,8 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                     ),
                     const SizedBox(height: 4),
-                    const Text(
-                      '₱ 1,250.00',
+                    Text(
+                      _accruedEarnings,
                       style: TextStyle(
                         color: _C.lin,
                         fontSize: 28,
@@ -444,7 +448,7 @@ class _HomeScreenState extends State<HomeScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Assign Parcel to Me',
+                      'View assigned parcels',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 16,
@@ -453,7 +457,7 @@ class _HomeScreenState extends State<HomeScreen>
                     ),
                     SizedBox(height: 2),
                     Text(
-                      'Scan a QR or barcode',
+                      'Open work assigned by Logistics',
                       style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 13),
                     ),
                   ],
@@ -469,25 +473,28 @@ class _HomeScreenState extends State<HomeScreen>
 
   // ── Parcel stats: one card, four cells, thin dividers ────────────────────
   Widget _buildStats() {
+    final pickup = _assignmentSummary['pickup'] ?? 0;
+    final delivery = _assignmentSummary['delivery'] ?? 0;
+    final linehaul = _assignmentSummary['linehaul'] ?? 0;
     return _card(
       padding: EdgeInsets.zero,
-      child: const Column(
+      child: Column(
         children: [
           Row(
             children: [
               Expanded(
                 child: _StatCell(
                   icon: Icons.inventory_2_outlined,
-                  value: '12',
-                  label: 'Assigned',
+                  value: _loadingAssignments ? '—' : '${_assignmentSummary['loaded'] ?? _assignments.length}',
+                  label: 'Assigned now',
                 ),
               ),
               _VDivider(),
               Expanded(
                 child: _StatCell(
                   icon: Icons.assignment_turned_in_outlined,
-                  value: '8',
-                  label: 'Picked Up',
+                  value: _loadingAssignments ? '—' : '$pickup',
+                  label: 'Pickup',
                 ),
               ),
             ],
@@ -498,16 +505,16 @@ class _HomeScreenState extends State<HomeScreen>
               Expanded(
                 child: _StatCell(
                   icon: Icons.local_shipping_outlined,
-                  value: '4',
-                  label: 'In Transit',
+                  value: _loadingAssignments ? '—' : '$delivery',
+                  label: 'Delivery',
                 ),
               ),
               _VDivider(),
               Expanded(
                 child: _StatCell(
-                  icon: Icons.check_circle_outline_rounded,
-                  value: '3',
-                  label: 'Delivered',
+                  icon: Icons.local_shipping_outlined,
+                  value: _loadingAssignments ? '—' : '$linehaul',
+                  label: 'Linehaul',
                 ),
               ),
             ],
@@ -519,11 +526,25 @@ class _HomeScreenState extends State<HomeScreen>
 
   // ── Active delivery ──────────────────────────────────────────────────────
   Widget _buildActiveDelivery() {
+    final order = _assignments.isEmpty ? null : _assignments.first;
+    final stop = order?['stop'] is Map
+        ? Map<String, dynamic>.from(order!['stop'] as Map)
+        : const <String, dynamic>{};
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildSectionTitle('Active Delivery'),
         const SizedBox(height: 12),
+        if (_loadingAssignments)
+          _card(child: const LinearProgressIndicator())
+        else if (_assignmentError != null)
+          _card(
+            onTap: _refreshAssignments,
+            child: Text('$_assignmentError  Tap to retry.', style: const TextStyle(color: _C.muted)),
+          )
+        else if (order == null)
+          _card(child: const Text('No active assignments yet.', style: TextStyle(color: _C.muted)))
+        else
         _card(
           onTap: _openDeliveryDetails,
           child: Column(
@@ -531,10 +552,10 @@ class _HomeScreenState extends State<HomeScreen>
             children: [
               Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      '#VD-00125',
-                      style: TextStyle(
+                      order['tracking_number']?.toString() ?? 'Assigned parcel',
+                      style: const TextStyle(
                         color: _C.ink,
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
@@ -550,9 +571,9 @@ class _HomeScreenState extends State<HomeScreen>
                       color: _C.briqueSoft,
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: const Text(
-                      'On the way',
-                      style: TextStyle(
+                    child: Text(
+                      order['status']?.toString().replaceAll('_', ' ') ?? 'Assigned',
+                      style: const TextStyle(
                         color: _C.brique,
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
@@ -562,36 +583,21 @@ class _HomeScreenState extends State<HomeScreen>
                 ],
               ),
               const SizedBox(height: 16),
-              const _RouteStop(
-                dotColor: _C.raisin,
-                label: 'Pickup',
-                address: 'Vendo Warehouse, Quezon City',
-              ),
-              Container(
-                width: 1.5,
-                height: 16,
-                margin: const EdgeInsets.only(left: 4.25, top: 3, bottom: 3),
-                color: _C.border,
-              ),
-              const _RouteStop(
-                dotColor: _C.brique,
-                label: 'Dropoff',
-                address: '88 Del Monte Ave., Brgy. Manresa, QC',
-              ),
+              Row(children: [const Icon(Icons.place_outlined, color: _C.raisin), const SizedBox(width: 8), Expanded(child: Text('${stop['name'] ?? 'Next stop'} · ${stop['address'] ?? 'Address unavailable'}', style: const TextStyle(color: _C.ink, fontSize: 14)))]),
               const SizedBox(height: 16),
               const Divider(height: 1, thickness: 1, color: _C.border),
               const SizedBox(height: 12),
-              const Row(
+              Row(
                 children: [
-                  Icon(Icons.near_me_outlined, size: 16, color: _C.muted),
-                  SizedBox(width: 6),
+                  const Icon(Icons.near_me_outlined, size: 16, color: _C.muted),
+                  const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      '2.2 km · 8 min away',
-                      style: TextStyle(color: _C.muted, fontSize: 13),
+                      'Status: ${order['status']?.toString().replaceAll('_', ' ') ?? 'Assigned'}',
+                      style: const TextStyle(color: _C.muted, fontSize: 13),
                     ),
                   ),
-                  Text(
+                  const Text(
                     'View details',
                     style: TextStyle(
                       color: _C.prune,
@@ -599,7 +605,7 @@ class _HomeScreenState extends State<HomeScreen>
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  Icon(Icons.chevron_right_rounded, color: _C.prune, size: 20),
+                  const Icon(Icons.chevron_right_rounded, color: _C.prune, size: 20),
                 ],
               ),
             ],

@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/auth/screens/login_screen.dart';
 
@@ -93,6 +94,12 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
       MaterialPageRoute(builder: (_) => _ParcelScanner(trackingNumber: tracking)));
     if (!mounted || scanned == null) return;
 
+    Map<String, dynamic>? deliveryProof;
+    if (type == 'delivered' && order['delivery_proof_required'] == true) {
+      deliveryProof = await _collectDeliveryProof();
+      if (!mounted || deliveryProof == null) return;
+    }
+
     setState(() => _busy = true);
     final api = RiderApi.instance;
     try {
@@ -101,7 +108,14 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
         key = _newUuid();
         await api.saveScanKey(tracking, type, key);
       }
-      final result = await api.scan(tracking, type, key);
+      final result = deliveryProof == null
+          ? await api.scan(tracking, type, key)
+          : await api.submitDeliveryProof(
+              trackingNumber: tracking,
+              scanKey: key,
+              recipientName: deliveryProof['recipient'] as String,
+              photoPath: deliveryProof['photo'] as String,
+            );
       await api.clearScanKey(tracking, type);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -120,6 +134,173 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
       ));
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _reportTaskIssue(Map<String, dynamic> task) async {
+    final detailsController = TextEditingController();
+    var reason = 'other';
+    final issue = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Report a task issue'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                value: reason,
+                decoration: const InputDecoration(labelText: 'Issue type'),
+                items: const [
+                  DropdownMenuItem(value: 'damaged', child: Text('Parcel damaged')),
+                  DropdownMenuItem(value: 'recipient_unavailable', child: Text('Recipient unavailable')),
+                  DropdownMenuItem(value: 'unsafe_location', child: Text('Unsafe location')),
+                  DropdownMenuItem(value: 'vehicle_issue', child: Text('Vehicle issue')),
+                  DropdownMenuItem(value: 'other', child: Text('Other')),
+                ],
+                onChanged: (value) {
+                  if (value != null) setDialogState(() => reason = value);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: detailsController,
+                minLines: 3,
+                maxLines: 5,
+                maxLength: 1000,
+                onChanged: (_) => setDialogState(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'What happened?',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: detailsController.text.trim().length < 5
+                  ? null
+                  : () => Navigator.pop(dialogContext, {
+                      'reason': reason,
+                      'details': detailsController.text.trim(),
+                    }),
+              child: const Text('Send to Logistics'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (issue == null || !mounted) {
+      detailsController.dispose();
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final result = await RiderApi.instance.reportTaskException(
+        taskId: task['id'] as int,
+        reason: issue['reason']!,
+        details: issue['details']!,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(result['message']?.toString() ?? 'Issue sent to Logistics.')),
+        );
+      }
+      await _refresh();
+    } on RiderApiException catch (error) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      if (error.statusCode == 409) await _refresh();
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not send the issue. Check your connection and retry.')),
+      );
+    } finally {
+      detailsController.dispose();
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<Map<String, String>?> _collectDeliveryProof() async {
+    final nameController = TextEditingController();
+    XFile? photo;
+    try {
+      return await showDialog<Map<String, String>>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('Confirm delivery'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Enter the recipient name and take a delivery photo.'),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: nameController,
+                  textCapitalization: TextCapitalization.words,
+                  onChanged: (_) => setDialogState(() {}),
+                  decoration: const InputDecoration(
+                    labelText: 'Recipient name',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final captured = await ImagePicker().pickImage(
+                      source: ImageSource.camera,
+                      imageQuality: 80,
+                      maxWidth: 1600,
+                      maxHeight: 1600,
+                    );
+                    if (captured == null || !context.mounted) return;
+                    final bytes = await captured.length();
+                    if (bytes > 5 * 1024 * 1024) {
+                      ScaffoldMessenger.of(this.context).showSnackBar(
+                        const SnackBar(content: Text('Photo must be 5 MB or smaller.')),
+                      );
+                      return;
+                    }
+                    setDialogState(() => photo = captured);
+                  },
+                  icon: const Icon(Icons.camera_alt_outlined),
+                  label: Text(photo == null ? 'Take photo' : 'Retake photo'),
+                ),
+                if (photo != null)
+                  Text(photo!.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: photo == null || nameController.text.trim().length < 2
+                    ? null
+                    : () => Navigator.pop(dialogContext, {
+                        'recipient': nameController.text.trim(),
+                        'photo': photo!.path,
+                      }),
+                child: const Text('Submit proof'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } on RiderApiException {
+      rethrow;
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not open the camera. Check camera permission and retry.')),
+        );
+      }
+      return null;
+    } finally {
+      nameController.dispose();
     }
   }
 
@@ -243,6 +424,10 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
                               : 'No pickup or delivery assignments yet. Pull down to refresh.'))),
                       ...visibleAssignments.map((order) {
                         final type = _scanType(order);
+                        final task = order['task'] is Map
+                            ? Map<String, dynamic>.from(order['task'] as Map)
+                            : null;
+                        final taskFailed = task?['status'] == 'failed';
                         final stop = Map<String, dynamic>.from(order['stop'] as Map);
                         final plannedRoute = order['planned_route'] is Map
                             ? Map<String, dynamic>.from(order['planned_route'] as Map)
@@ -319,15 +504,33 @@ class _RiderWorkScreenState extends State<RiderWorkScreen> {
                               else if (order['assignment'] == 'linehaul')
                                 const Text('No facility scan is due yet. Refresh after Logistics sets the route or the previous stop is completed.',
                                   style: TextStyle(color: Color(0xFF6D6475)))
-                              else if (type != null)
+                              else if (type != null && !taskFailed)
                                 SizedBox(width: double.infinity, child: FilledButton.icon(
                                   style: FilledButton.styleFrom(backgroundColor: purple),
                                   onPressed: _busy ? null : () => _scan(order, type),
                                   icon: const Icon(Icons.qr_code_scanner),
-                                  label: Text(_scanLabel(type)),
+                                  label: Text(
+                                    type == 'delivered' && order['delivery_proof_required'] == true
+                                        ? 'Scan and add delivery proof'
+                                        : _scanLabel(type),
+                                  ),
                                 ))
                               else const Text('No rider scan is available at this stage.',
                                 style: TextStyle(color: Color(0xFF6D6475))),
+                              if (taskFailed) ...[
+                                const SizedBox(height: 8),
+                                Text('Paused: ${task?['failure_reason'] ?? 'Logistics needs to review this task.'}',
+                                    style: const TextStyle(color: Color(0xFF9A3E35))),
+                              ],
+                              if (task != null && !taskFailed
+                                  && ['assigned', 'in_progress'].contains(task['status'])) ...[
+                                const SizedBox(height: 6),
+                                TextButton.icon(
+                                  onPressed: _busy ? null : () => _reportTaskIssue(task),
+                                  icon: const Icon(Icons.report_problem_outlined),
+                                  label: const Text('Report an issue'),
+                                ),
+                              ],
                             ]),
                           ),
                         );

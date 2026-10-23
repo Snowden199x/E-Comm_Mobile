@@ -31,6 +31,9 @@ class RiderApi {
     return 'https://vendo-ph.app/api/v1/rider';
   }
 
+  static String get transportDriverBaseUrl =>
+      baseUrl.replaceFirst(RegExp(r'/rider/?$'), '/transport-drivers');
+
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
 
   Future<bool> hasToken() async =>
@@ -39,6 +42,12 @@ class RiderApi {
   Future<String?> centerName() => _storage.read(key: 'center_name');
   Future<String?> riderVehicleType() =>
       _storage.read(key: 'rider_vehicle_type');
+
+  Future<String?> transportDriverName() =>
+      _storage.read(key: 'transport_driver_name');
+
+  Future<String?> transportCompanyName() =>
+      _storage.read(key: 'transport_company_name');
 
   Future<Map<String, dynamic>> locations() async {
     final response = await http
@@ -198,6 +207,74 @@ class RiderApi {
     await _saveLogin(data);
   }
 
+  Future<void> transportDriverLogin(String email, String password) async {
+    final response = await http
+        .post(
+          Uri.parse('$transportDriverBaseUrl/login'),
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'email': email.trim(),
+            'password': password,
+            'device_name': 'Vendo Transport Driver mobile',
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
+    final data = _body(response);
+    await _storage.write(
+      key: 'transport_driver_token',
+      value: data['token'] as String,
+    );
+    await _storage.write(
+      key: 'transport_driver_name',
+      value: (data['driver'] as Map)['name']?.toString(),
+    );
+    await _storage.write(
+      key: 'transport_company_name',
+      value: (data['company'] as Map)['name']?.toString(),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> transportDriverTrips() async {
+    final response = await http
+        .get(
+          Uri.parse('$transportDriverBaseUrl/trips'),
+          headers: await _transportDriverHeaders(),
+        )
+        .timeout(const Duration(seconds: 20));
+    return (_body(response)['trips'] as List<dynamic>)
+        .map((trip) => Map<String, dynamic>.from(trip as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> updateTransportTrip(
+    int tripId,
+    String action,
+  ) async {
+    final response = await http
+        .post(
+          Uri.parse('$transportDriverBaseUrl/trips/$tripId/$action'),
+          headers: await _transportDriverHeaders(),
+        )
+        .timeout(const Duration(seconds: 25));
+    return _body(response);
+  }
+
+  Future<void> logoutTransportDriver() async {
+    final response = await http
+        .post(
+          Uri.parse('$transportDriverBaseUrl/logout'),
+          headers: await _transportDriverHeaders(),
+        )
+        .timeout(const Duration(seconds: 20));
+    _body(response);
+    await _storage.delete(key: 'transport_driver_token');
+    await _storage.delete(key: 'transport_driver_name');
+    await _storage.delete(key: 'transport_company_name');
+  }
+
   Future<void> _saveLogin(Map<String, dynamic> data) async {
     await _storage.write(key: 'rider_token', value: data['token'] as String);
     await _storage.write(
@@ -219,13 +296,28 @@ class RiderApi {
   }
 
   Future<List<Map<String, dynamic>>> assignments() async {
-    final response = await http
-        .get(Uri.parse('$baseUrl/assignments'), headers: await _authHeaders())
-        .timeout(const Duration(seconds: 20));
-    final data = _body(response);
+    final data = await assignmentDashboard();
     return (data['assignments'] as List<dynamic>)
         .map((item) => Map<String, dynamic>.from(item as Map))
         .toList();
+  }
+
+  Future<Map<String, dynamic>> assignmentDashboard() async {
+    final response = await http
+        .get(Uri.parse('$baseUrl/assignments'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 20));
+    return _body(response);
+  }
+
+  Future<Map<String, dynamic>> earnings({bool transportDriver = false}) async {
+    final base = transportDriver ? transportDriverBaseUrl : baseUrl;
+    final headers = transportDriver
+        ? await _transportDriverHeaders()
+        : await _authHeaders();
+    final response = await http
+        .get(Uri.parse('$base/earnings'), headers: headers)
+        .timeout(const Duration(seconds: 20));
+    return _body(response);
   }
 
   Future<Map<String, dynamic>> scan(
@@ -266,6 +358,44 @@ class RiderApi {
     return _body(response);
   }
 
+  Future<Map<String, dynamic>> reportTaskException({
+    required int taskId,
+    required String reason,
+    required String details,
+  }) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/tasks/$taskId/exceptions'),
+          headers: await _authHeaders(),
+          body: jsonEncode({'reason': reason, 'details': details.trim()}),
+        )
+        .timeout(const Duration(seconds: 25));
+    return _body(response);
+  }
+
+  Future<Map<String, dynamic>> submitDeliveryProof({
+    required String trackingNumber,
+    required String scanKey,
+    required String recipientName,
+    required String photoPath,
+  }) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/delivery-proofs'),
+    );
+    final headers = await _authHeaders();
+    headers.remove('Content-Type');
+    request.headers.addAll(headers);
+    request.fields.addAll({
+      'tracking_number': trackingNumber,
+      'scan_key': scanKey,
+      'recipient_name': recipientName.trim(),
+    });
+    request.files.add(await http.MultipartFile.fromPath('photo', photoPath));
+    final streamed = await request.send().timeout(const Duration(seconds: 60));
+    return _body(await http.Response.fromStream(streamed));
+  }
+
   Future<String?> pendingScanKey(String trackingNumber, String scanType) =>
       _storage.read(key: 'scan:$trackingNumber:$scanType');
 
@@ -290,6 +420,18 @@ class RiderApi {
 
   Future<Map<String, String>> _authHeaders() async {
     final token = await _storage.read(key: 'rider_token');
+    if (token == null) {
+      throw const RiderApiException('Please sign in again.', 401);
+    }
+    return {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    };
+  }
+
+  Future<Map<String, String>> _transportDriverHeaders() async {
+    final token = await _storage.read(key: 'transport_driver_token');
     if (token == null) {
       throw const RiderApiException('Please sign in again.', 401);
     }
