@@ -2,12 +2,11 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:latlong2/latlong.dart';
-import 'package:vendo_rider/features/dashboard/screens/deliveries_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/earnings_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/home_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/map_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/profile_screen.dart';
+import 'package:vendo_rider/features/work/screens/rider_work_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the Home, Deliveries, Earnings and Profile screens
@@ -39,15 +38,17 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   int _selectedTab = _Tab.home;
-
-  // Map tab uses a fixed placeholder destination — Bubukal, Santa Cruz, Laguna
-  static const _mapDestination = LatLng(14.2789, 121.4244);
-  static const _mapLabel = 'Brgy. Bubukal, Santa Cruz, Laguna';
+  final _homeKey = GlobalKey<HomeScreenState>();
+  final _mapKey = GlobalKey<MapScreenState>();
 
   late final List<Widget> _pages = [
-    HomeScreen(onViewEarnings: () => _onTabSelected(_Tab.parcels)),
-    const DeliveriesScreen(),
-    MapScreen(destination: _mapDestination, destinationLabel: _mapLabel),
+    HomeScreen(
+      key: _homeKey,
+      onOpenParcels: () => _onTabSelected(_Tab.parcels),
+      onOpenEarnings: () => _onTabSelected(_Tab.earnings),
+    ),
+    const RiderWorkScreen(),
+    MapScreen(key: _mapKey, destination: null, destinationLabel: null),
     const EarningsScreen(),
     const ProfileScreen(),
   ];
@@ -81,9 +82,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   ];
 
   void _onTabSelected(int index) {
-    if (index == _selectedTab) return;
+    if (index == _selectedTab) {
+      if (index == _Tab.home) _homeKey.currentState?.refreshAssignments();
+      if (index == _Tab.map) _mapKey.currentState?.refreshDestination();
+      return;
+    }
     HapticFeedback.selectionClick();
     setState(() => _selectedTab = index);
+    if (index == _Tab.home) _homeKey.currentState?.refreshAssignments();
+    if (index == _Tab.map) _mapKey.currentState?.refreshDestination();
   }
 
   @override
