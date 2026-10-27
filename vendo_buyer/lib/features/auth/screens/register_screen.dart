@@ -1,5 +1,75 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:vendo_buyer/core/api/buyer_api.dart';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Same Vendo palette as the rider app and the buyer login screen
+//  • Prune   → header, main buttons, main text
+//  • Brique  → small accent (required star, active step)
+//  • Lin     → soft gold for highlights
+//  • Raisin  → icons and links
+// ─────────────────────────────────────────────────────────────────────────────
+class _C {
+  static const prune = Color(0xFF412143);
+  static const pruneLight = Color(0xFF55295A);
+  static const brique = Color(0xFFBF5E40);
+  static const lin = Color(0xFFDBC583);
+  static const raisin = Color(0xFF815488);
+
+  static const background = Color(0xFFFAF7F5);
+  static const ink = Color(0xFF2A1B2C);
+  static const muted = Color(0xFF8C8290);
+  static const border = Color(0xFFECE6EA);
+  static const raisinSoft = Color(0xFFF4EDF5);
+  static const success = Color(0xFF248A5A);
+  static const error = Color(0xFFE53935);
+  static const errorSoft = Color(0xFFFFF4F3);
+}
+
+const double _radius = 14;
+
+// Stable pseudo-random number in [0, 1), so the stars stay in the same places.
+double _hash(int n) {
+  final x = math.sin(n * 127.1 + 311.7) * 43758.5453;
+  return x - x.floorToDouble();
+}
+
+// ── Shared input look (same as the login fields) ────────────────────────────
+OutlineInputBorder _border(Color color, double width) => OutlineInputBorder(
+  borderRadius: BorderRadius.circular(_radius),
+  borderSide: BorderSide(color: color, width: width),
+);
+
+InputDecoration _decoration({
+  String? hint,
+  IconData? icon,
+  Widget? suffix,
+  bool error = false,
+}) {
+  final side = error ? _C.error : _C.border;
+  final width = error ? 1.6 : 1.2;
+  return InputDecoration(
+    hintText: hint,
+    hintStyle: const TextStyle(color: _C.muted, fontSize: 15),
+    filled: true,
+    fillColor: error ? _C.errorSoft : _C.background,
+    prefixIcon: icon == null
+        ? null
+        : Icon(icon, color: error ? _C.error : _C.raisin, size: 20),
+    suffixIcon: suffix == null
+        ? null
+        : Padding(padding: const EdgeInsets.only(right: 14), child: suffix),
+    suffixIconConstraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+    border: _border(side, width),
+    enabledBorder: _border(side, width),
+    disabledBorder: _border(side, width),
+    focusedBorder: _border(error ? _C.error : _C.prune, 1.6),
+  );
+}
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -10,6 +80,7 @@ class RegisterScreen extends StatefulWidget {
 
 class _RegisterScreenState extends State<RegisterScreen> {
   int _currentStep = 0;
+  final _scroll = ScrollController();
 
   // Step 1 controllers
   final _lastNameCtrl = TextEditingController();
@@ -23,7 +94,37 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _confirmPasswordCtrl = TextEditingController();
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
-  String? _validIdFileName;
+
+  // ID fields
+  String _idCategory = 'primary'; // 'primary' or 'secondary'
+  String? _primaryIdType;
+  String? _validIdFileName; // primary ID file
+  String? _secondaryId1Type;
+  String? _secondaryId1FileName;
+  String? _secondaryId2Type;
+  String? _secondaryId2FileName;
+
+  static const List<String> _primaryIdTypes = [
+    'Philippine Passport',
+    'PhilSys National ID',
+    "Driver's License",
+    'UMID',
+    'SSS ID',
+    'GSIS ID',
+    'PRC ID',
+    'Postal ID',
+  ];
+
+  static const List<String> _secondaryIdTypes = [
+    'PhilHealth ID',
+    'TIN ID',
+    "Voter's ID/Certification",
+    'NBI Clearance',
+    'Barangay Certification',
+    'Company ID',
+    'School ID',
+    'Senior Citizen/PWD ID',
+  ];
 
   // Step 2 controllers
   final _phoneCtrl = TextEditingController();
@@ -36,10 +137,29 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // Step 3
   bool _agreedToTerms = false;
 
+  // API state
+  String? _verificationToken; // set after OTP verify
+  String? _validIdPath; // actual file path for primary ID
+  String? _secondaryId1Path;
+  String? _secondaryId2Path;
+  bool _submitting = false;
+
   // Validation — keys match field names; red border shown when key is present
   final Set<String> _errors = {};
 
   final List<String> _sexOptions = ['Male', 'Female', 'Prefer not to say'];
+
+  static const _stepLabels = [
+    'Personal Info',
+    'Contact & Address',
+    'Review & Submit',
+  ];
+
+  static const _stepIcons = [
+    Icons.person_outline_rounded,
+    Icons.location_on_outlined,
+    Icons.fact_check_outlined,
+  ];
 
   @override
   void dispose() {
@@ -57,6 +177,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _barangayCtrl.dispose();
     _streetCtrl.dispose();
     _zipCodeCtrl.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -71,7 +192,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (_birthdayCtrl.text.trim().isEmpty) newErrors.add('birthday');
       if (_passwordCtrl.text.isEmpty) newErrors.add('password');
       if (_confirmPasswordCtrl.text.isEmpty) newErrors.add('confirmPassword');
-      if (_validIdFileName == null) newErrors.add('validId');
+      if (_idCategory == 'primary') {
+        if (_primaryIdType == null) newErrors.add('primaryIdType');
+        if (_validIdFileName == null) newErrors.add('validId');
+      } else {
+        if (_secondaryId1Type == null) newErrors.add('secondaryId1Type');
+        if (_secondaryId1FileName == null) newErrors.add('secondaryId1');
+        if (_secondaryId2Type == null) newErrors.add('secondaryId2Type');
+        if (_secondaryId2FileName == null) newErrors.add('secondaryId2');
+      }
     } else if (_currentStep == 1) {
       if (_phoneCtrl.text.trim().isEmpty) newErrors.add('phone');
       if (_provinceCtrl.text.trim().isEmpty) newErrors.add('province');
@@ -87,16 +216,129 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ..clear()
           ..addAll(newErrors),
       );
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please complete the fields marked in red.'),
+        ),
+      );
       return;
     }
 
     setState(() => _errors.clear());
 
     if (_currentStep < 2) {
+      // Step 0→1: require email verified before advancing
+      if (_currentStep == 0 && _verificationToken == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please verify your email before continuing.'),
+          ),
+        );
+        return;
+      }
       setState(() => _currentStep++);
+      _scrollToTop();
     } else {
-      _showSuccessModal(context);
+      _submitRegistration();
     }
+  }
+
+  Future<void> _submitRegistration() async {
+    if (_submitting) return;
+    if (!_agreedToTerms) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please agree to the Terms and Conditions.'),
+        ),
+      );
+      return;
+    }
+    if (_verificationToken == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Email verification expired. Please go back and verify again.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _submitting = true);
+    try {
+      final idPath = _idCategory == 'primary'
+          ? _validIdPath
+          : _secondaryId1Path;
+      if (idPath == null) throw const BuyerApiException('ID file is missing.');
+
+      // Map sex value to what the server expects
+      final sexMap = {
+        'Male': 'male',
+        'Female': 'female',
+        'Prefer not to say': 'prefer_not_to_say',
+      };
+
+      await BuyerApi.instance.register(
+        fields: {
+          'last_name': _lastNameCtrl.text.trim(),
+          'first_name': _firstNameCtrl.text.trim(),
+          'middle_initial': _middleInitialCtrl.text.trim(),
+          'sex': sexMap[_selectedSex] ?? 'prefer_not_to_say',
+          'email': _emailCtrl.text.trim(),
+          'birthday': _birthdayCtrl.text.trim(),
+          'id_category': _idCategory,
+          if (_idCategory == 'primary') 'id_type': _primaryIdType ?? '',
+          if (_idCategory == 'secondary') 'id_type_1': _secondaryId1Type ?? '',
+          if (_idCategory == 'secondary') 'id_type_2': _secondaryId2Type ?? '',
+          'password': _passwordCtrl.text,
+          'password_confirmation': _confirmPasswordCtrl.text,
+          'province': _provinceCtrl.text.trim(),
+          'municipality': _municipalityCtrl.text.trim(),
+          'barangay': _barangayCtrl.text.trim(),
+          'street': _streetCtrl.text.trim(),
+          'zip_code': _zipCodeCtrl.text.trim(),
+          'contact_number': _phoneCtrl.text.trim(),
+          'agree_terms': '1',
+          'verification_token': _verificationToken!,
+        },
+        validIdPath: idPath,
+        validId2Path: _idCategory == 'secondary' ? _secondaryId2Path : null,
+      );
+      if (!mounted) return;
+      _showSuccessModal(context);
+    } on BuyerApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Cannot reach Vendo. Check your connection and retry.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  void _goBack() {
+    setState(() {
+      _currentStep--;
+      _errors.clear();
+    });
+    _scrollToTop();
+  }
+
+  void _scrollToTop() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) _scroll.jumpTo(0);
+    });
   }
 
   void _showSuccessModal(BuildContext context) {
@@ -113,100 +355,273 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
+  // ────────────────────────────────────────────────────────────────
+  // Page layout: purple header with the logo + rounded white card
+  // ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8F5FB),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _TopBar(onLoginTap: () => Navigator.pop(context)),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 100),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 20),
-                    const Text(
-                      'Buyer Registration',
-                      style: TextStyle(
-                        color: Color(0xFF1A1A2E),
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.2,
-                      ),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      // Light status bar icons because the header is dark
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
+        backgroundColor: _C.prune,
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_C.pruneLight, _C.prune],
+            ),
+          ),
+          child: Column(
+            children: [
+              _buildHeader(context),
+              Expanded(
+                child: Container(
+                  width: double.infinity,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(28),
                     ),
-                    const SizedBox(height: 2),
-                    const Text(
-                      'Create your buyer account',
-                      style: TextStyle(color: Color(0xFF888888), fontSize: 13),
+                  ),
+                  child: SingleChildScrollView(
+                    controller: _scroll,
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _MobileStepBar(
+                          currentStep: _currentStep,
+                          totalSteps: _stepLabels.length,
+                          labels: _stepLabels,
+                          icons: _stepIcons,
+                        ),
+                        const SizedBox(height: 28),
+                        if (_currentStep == 0) _buildStep1(),
+                        if (_currentStep == 1) _buildStep2(),
+                        if (_currentStep == 2) _buildStep3(),
+                      ],
                     ),
-                    const SizedBox(height: 20),
-                    _StepIndicator(currentStep: _currentStep),
-                    const SizedBox(height: 24),
-                    if (_currentStep == 0) _buildStep1(),
-                    if (_currentStep == 1) _buildStep2(),
-                    if (_currentStep == 2) _buildStep3(),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-      bottomNavigationBar: _BottomNextBar(
-        currentStep: _currentStep,
-        onNext: _nextStep,
-        onBack: _currentStep > 0 ? () => setState(() => _currentStep--) : null,
+        bottomNavigationBar: _BottomNextBar(
+          currentStep: _currentStep,
+          onNext: _nextStep,
+          onBack: _currentStep > 0 ? _goBack : null,
+          submitting: _submitting,
+        ),
       ),
     );
   }
 
-  // ──────────────────────────────────────────────────────────────
+  Widget _buildHeader(BuildContext context) {
+    final topInset = MediaQuery.of(context).padding.top;
+    final keyboardOpen = MediaQuery.of(context).viewInsets.bottom > 0;
+
+    return ClipRect(
+      child: Stack(
+        children: [
+          // Soft circles and stars (still, not moving)
+          const Positioned.fill(
+            child: IgnorePointer(child: CustomPaint(painter: _DecorPainter())),
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(20, topInset + 10, 20, 26),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      behavior: HitTestBehavior.opaque,
+                      child: Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withAlpha(30),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.arrow_back_ios_new_rounded,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    const Text(
+                      'Have an account?  ',
+                      style: TextStyle(color: Color(0xB3FFFFFF), fontSize: 12),
+                    ),
+                    GestureDetector(
+                      onTap: () => Navigator.pop(context),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: _C.lin, width: 1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          'Login',
+                          style: TextStyle(
+                            color: _C.lin,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                // The logo hides while the keyboard is open to save space
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 200),
+                  alignment: Alignment.topCenter,
+                  child: keyboardOpen
+                      ? const SizedBox(width: double.infinity)
+                      : const Padding(
+                          padding: EdgeInsets.only(top: 6),
+                          child: SizedBox(
+                            width: 112,
+                            height: 84,
+                            child: Center(
+                              child: _VendoBagLogo(width: 62, height: 70),
+                            ),
+                          ),
+                        ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Buyer Registration',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Create your buyer account',
+                  style: TextStyle(color: Color(0xB3FFFFFF), fontSize: 14),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
+  // Small helpers
+  // ────────────────────────────────────────────────────────────────
+  static const SizedBox _gap = SizedBox(height: 18);
+
+  Widget _col(String label, Widget child, {bool required = false}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildLabel(label, required: required),
+        const SizedBox(height: 8),
+        child,
+      ],
+    );
+  }
+
+  Widget _row2(Widget a, Widget b) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: a),
+        const SizedBox(width: 12),
+        Expanded(child: b),
+      ],
+    );
+  }
+
+  Widget _hintText(String text) => Padding(
+    padding: const EdgeInsets.only(left: 2, top: 6),
+    child: Text(text, style: const TextStyle(color: _C.muted, fontSize: 11.5)),
+  );
+
+  Widget _eye(bool obscure, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Icon(
+        obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+        size: 22,
+        color: _C.muted,
+      ),
+    );
+  }
+
+  // ────────────────────────────────────────────────────────────────
   // STEP 1 — Personal Information
-  // ──────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────────
   Widget _buildStep1() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(
+        const _SectionHeader(
           title: 'Personal Information',
           subtitle: 'Please provide your personal details',
         ),
-        const SizedBox(height: 16),
-        _buildLabel('Last Name', required: true),
-        const SizedBox(height: 6),
-        _RegInputField(
-          controller: _lastNameCtrl,
-          hasError: _errors.contains('lastName'),
-          hint: 'Enter last name',
+        const SizedBox(height: 18),
+        _col(
+          'Last Name',
+          _Field(
+            controller: _lastNameCtrl,
+            hasError: _errors.contains('lastName'),
+            hint: 'Enter last name',
+            icon: Icons.person_outline_rounded,
+          ),
+          required: true,
         ),
-        const SizedBox(height: 12),
-        _buildLabel('First Name', required: true),
-        const SizedBox(height: 6),
-        _RegInputField(
-          controller: _firstNameCtrl,
-          hasError: _errors.contains('firstName'),
-          hint: 'Enter first name',
+        _gap,
+        _col(
+          'First Name',
+          _Field(
+            controller: _firstNameCtrl,
+            hasError: _errors.contains('firstName'),
+            hint: 'Enter first name',
+            icon: Icons.person_outline_rounded,
+          ),
+          required: true,
         ),
-        const SizedBox(height: 12),
-        _buildLabel('Middle Initial'),
-        const SizedBox(height: 6),
-        _RegInputField(
-          controller: _middleInitialCtrl,
-          hint: 'Enter middle initial',
+        _gap,
+        _col(
+          'Middle Initial',
+          _Field(
+            controller: _middleInitialCtrl,
+            hint: 'Enter middle initial',
+            icon: Icons.person_outline_rounded,
+          ),
         ),
-        const SizedBox(height: 12),
-        _buildLabel('Sex', required: true),
-        const SizedBox(height: 6),
-        _SexDropdown(
-          value: _selectedSex,
-          options: _sexOptions,
-          onChanged: (val) => setState(() => _selectedSex = val),
-          hasError: _errors.contains('sex'),
+        _gap,
+        _col(
+          'Sex',
+          _Dropdown(
+            value: _selectedSex,
+            hint: 'Select Sex',
+            options: _sexOptions,
+            hasError: _errors.contains('sex'),
+            onChanged: (val) => setState(() => _selectedSex = val),
+          ),
+          required: true,
         ),
-        const SizedBox(height: 12),
+        _gap,
         Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -214,218 +629,303 @@ class _RegisterScreenState extends State<RegisterScreen> {
             const Spacer(),
             GestureDetector(
               onTap: () => _showVerifyEmailModal(context),
+              behavior: HitTestBehavior.opaque,
               child: const Text(
                 'Verify',
                 style: TextStyle(
-                  color: Color(0xFF7B2FBE),
+                  color: _C.raisin,
                   fontSize: 13,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 6),
-        _RegInputField(
+        const SizedBox(height: 8),
+        _Field(
           controller: _emailCtrl,
+          hasError: _errors.contains('email'),
           hint: 'Enter email address',
-          keyboardType: TextInputType.emailAddress,
+          icon: Icons.mail_outline_rounded,
+          keyboard: TextInputType.emailAddress,
         ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildLabel('Birthday', required: true),
-                  const SizedBox(height: 6),
-                  _RegInputField(
-                    controller: _birthdayCtrl,
-                    hasError: _errors.contains('birthday'),
-                    hint: 'mm/dd/yyyy',
-                    readOnly: true,
-                    suffixIcon: const Icon(
-                      Icons.calendar_today_outlined,
-                      size: 18,
-                      color: Color(0xFF888888),
+        _gap,
+        _row2(
+          _col(
+            'Birthday',
+            _Field(
+              controller: _birthdayCtrl,
+              hasError: _errors.contains('birthday'),
+              hint: 'mm/dd/yyyy',
+              readOnly: true,
+              suffix: const Icon(
+                Icons.calendar_today_outlined,
+                size: 18,
+                color: _C.muted,
+              ),
+              onTap: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: DateTime(2000),
+                  firstDate: DateTime(1900),
+                  lastDate: DateTime.now(),
+                  builder: (ctx, child) => Theme(
+                    data: Theme.of(ctx).copyWith(
+                      colorScheme: const ColorScheme.light(primary: _C.prune),
                     ),
-                    onTap: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: DateTime(2000),
-                        firstDate: DateTime(1900),
-                        lastDate: DateTime.now(),
-                        builder: (ctx, child) => Theme(
-                          data: Theme.of(ctx).copyWith(
-                            colorScheme: const ColorScheme.light(
-                              primary: Color(0xFF3B1F52),
-                            ),
-                          ),
-                          child: child!,
-                        ),
-                      );
-                      if (picked != null) {
-                        _birthdayCtrl.text =
-                            '${picked.month.toString().padLeft(2, '0')}/${picked.day.toString().padLeft(2, '0')}/${picked.year}';
-                        _ageCtrl.text = (DateTime.now().year - picked.year)
-                            .toString();
-                        setState(() {});
-                      }
-                    },
+                    child: child!,
                   ),
-                ],
-              ),
+                );
+                if (picked != null) {
+                  _birthdayCtrl.text =
+                      '${picked.month.toString().padLeft(2, '0')}/${picked.day.toString().padLeft(2, '0')}/${picked.year}';
+                  _ageCtrl.text = (DateTime.now().year - picked.year)
+                      .toString();
+                  setState(() {});
+                }
+              },
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildLabel('Age', required: true),
-                  const SizedBox(height: 6),
-                  _RegInputField(
-                    controller: _ageCtrl,
-                    hint: '--',
-                    keyboardType: TextInputType.number,
-                    readOnly: true,
-                  ),
-                ],
-              ),
+            required: true,
+          ),
+          _col(
+            'Age',
+            _Field(
+              controller: _ageCtrl,
+              hint: '--',
+              keyboard: TextInputType.number,
+              readOnly: true,
             ),
-          ],
+            required: true,
+          ),
         ),
-        const SizedBox(height: 12),
-        _buildLabel('Valid ID', required: true),
-        const SizedBox(height: 6),
-        _UploadField(
-          fileName: _validIdFileName,
-          hint: 'Upload Valid ID here',
-          hasError: _errors.contains('validId'),
-          onTap: () => _showImageSourceSheet(context),
+        _gap,
+
+        // ── ID Category ─────────────────────────────────────────
+        _buildLabel('ID Category', required: true),
+        const SizedBox(height: 8),
+        _IdCategoryToggle(
+          value: _idCategory,
+          onChanged: (val) => setState(() {
+            _idCategory = val;
+            // clear the other category's data
+            _primaryIdType = null;
+            _validIdFileName = null;
+            _secondaryId1Type = null;
+            _secondaryId1FileName = null;
+            _secondaryId2Type = null;
+            _secondaryId2FileName = null;
+          }),
         ),
-        const SizedBox(height: 24),
-        _SectionHeader(
+        _hintText(
+          'Primary: 1 government-issued ID · Secondary: 2 IDs required',
+        ),
+        const SizedBox(height: 14),
+
+        // ── Primary ID ───────────────────────────────────────────
+        if (_idCategory == 'primary') ...[
+          _col(
+            'ID Type',
+            _Dropdown(
+              value: _primaryIdType,
+              options: _primaryIdTypes,
+              hint: 'Select ID Type',
+              hasError: _errors.contains('primaryIdType'),
+              onChanged: (val) => setState(() => _primaryIdType = val),
+            ),
+            required: true,
+          ),
+          _gap,
+          _col(
+            'Upload ID',
+            _UploadField(
+              fileName: _validIdFileName,
+              hint: 'Upload ID here',
+              hasError: _errors.contains('validId'),
+              onTap: () => _showImageSourceSheet(context, slot: 'primary'),
+            ),
+            required: true,
+          ),
+          _hintText('Accepted formats: JPEG, PNG, or PDF'),
+        ],
+
+        // ── Secondary IDs ────────────────────────────────────────
+        if (_idCategory == 'secondary') ...[
+          _col(
+            'First Secondary ID Type',
+            _Dropdown(
+              value: _secondaryId1Type,
+              options: _secondaryIdTypes,
+              hint: 'Select First ID Type',
+              hasError: _errors.contains('secondaryId1Type'),
+              onChanged: (val) => setState(() => _secondaryId1Type = val),
+            ),
+            required: true,
+          ),
+          _gap,
+          _col(
+            'Upload First ID',
+            _UploadField(
+              fileName: _secondaryId1FileName,
+              hint: 'Upload First ID here',
+              hasError: _errors.contains('secondaryId1'),
+              onTap: () => _showImageSourceSheet(context, slot: 'secondary1'),
+            ),
+            required: true,
+          ),
+          _hintText('Accepted formats: JPEG, PNG, or PDF'),
+          _gap,
+          _col(
+            'Second Secondary ID Type',
+            _Dropdown(
+              value: _secondaryId2Type,
+              options: _secondaryIdTypes,
+              hint: 'Select Second ID Type',
+              hasError: _errors.contains('secondaryId2Type'),
+              onChanged: (val) => setState(() => _secondaryId2Type = val),
+            ),
+            required: true,
+          ),
+          _gap,
+          _col(
+            'Upload Second ID',
+            _UploadField(
+              fileName: _secondaryId2FileName,
+              hint: 'Upload Second ID here',
+              hasError: _errors.contains('secondaryId2'),
+              onTap: () => _showImageSourceSheet(context, slot: 'secondary2'),
+            ),
+            required: true,
+          ),
+        ],
+
+        const SizedBox(height: 28),
+        const _SectionHeader(
           title: 'Account Security',
           subtitle: 'Set a password to secure your account.',
         ),
-        const SizedBox(height: 16),
-        _buildLabel('Password', required: true),
-        const SizedBox(height: 6),
-        _RegInputField(
-          controller: _passwordCtrl,
-          hint: 'Create a password',
-          obscureText: _obscurePassword,
-          suffixIcon: GestureDetector(
-            onTap: () => setState(() => _obscurePassword = !_obscurePassword),
-            child: Icon(
-              _obscurePassword
-                  ? Icons.remove_red_eye_outlined
-                  : Icons.visibility_off_outlined,
-              size: 20,
-              color: const Color(0xFF888888),
+        const SizedBox(height: 18),
+        _col(
+          'Password',
+          _Field(
+            controller: _passwordCtrl,
+            hasError: _errors.contains('password'),
+            hint: 'Create a password',
+            icon: Icons.lock_outline_rounded,
+            obscure: _obscurePassword,
+            suffix: _eye(
+              _obscurePassword,
+              () => setState(() => _obscurePassword = !_obscurePassword),
             ),
           ),
+          required: true,
         ),
-        const SizedBox(height: 4),
-        const Padding(
-          padding: EdgeInsets.only(left: 2),
-          child: Text(
-            'Minimum 8 characters with letters and numbers',
-            style: TextStyle(color: Color(0xFF999999), fontSize: 11),
-          ),
-        ),
-        const SizedBox(height: 12),
-        _buildLabel('Confirm Password', required: true),
-        const SizedBox(height: 6),
-        _RegInputField(
-          controller: _confirmPasswordCtrl,
-          hint: 'Confirm your password',
-          obscureText: _obscureConfirm,
-          suffixIcon: GestureDetector(
-            onTap: () => setState(() => _obscureConfirm = !_obscureConfirm),
-            child: Icon(
-              _obscureConfirm
-                  ? Icons.remove_red_eye_outlined
-                  : Icons.visibility_off_outlined,
-              size: 20,
-              color: const Color(0xFF888888),
+        _hintText('Minimum 8 characters with letters and numbers'),
+        _gap,
+        _col(
+          'Confirm Password',
+          _Field(
+            controller: _confirmPasswordCtrl,
+            hasError: _errors.contains('confirmPassword'),
+            hint: 'Confirm your password',
+            icon: Icons.lock_outline_rounded,
+            obscure: _obscureConfirm,
+            suffix: _eye(
+              _obscureConfirm,
+              () => setState(() => _obscureConfirm = !_obscureConfirm),
             ),
           ),
+          required: true,
         ),
       ],
     );
   }
 
-  // ──────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────────
   // STEP 2 — Contact & Address
-  // ──────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────────
   Widget _buildStep2() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(
+        const _SectionHeader(
           title: 'Contact & Address',
           subtitle: 'Tell us about your contact and where you live.',
         ),
-        const SizedBox(height: 16),
-        _buildLabel('Phone Number', required: true),
-        const SizedBox(height: 6),
-        _RegInputField(
-          controller: _phoneCtrl,
-          hint: 'e.g. 09XX XXX XXXX',
-          keyboardType: TextInputType.phone,
-          suffixIcon: const Icon(
-            Icons.phone_outlined,
-            size: 18,
-            color: Color(0xFF888888),
+        const SizedBox(height: 18),
+        _col(
+          'Phone Number',
+          _Field(
+            controller: _phoneCtrl,
+            hasError: _errors.contains('phone'),
+            hint: 'e.g. 09XX XXX XXXX',
+            icon: Icons.phone_outlined,
+            keyboard: TextInputType.phone,
           ),
+          required: true,
         ),
-        const SizedBox(height: 12),
-        _buildLabel('Province', required: true),
-        const SizedBox(height: 6),
-        _RegInputField(
-          controller: _provinceCtrl,
-          hasError: _errors.contains('province'),
-          hint: 'Enter province',
+        _gap,
+        _col(
+          'Province',
+          _Field(
+            controller: _provinceCtrl,
+            hasError: _errors.contains('province'),
+            hint: 'Enter province',
+            icon: Icons.map_outlined,
+          ),
+          required: true,
         ),
-        const SizedBox(height: 12),
-        _buildLabel('Municipality / City', required: true),
-        const SizedBox(height: 6),
-        _RegInputField(
-          controller: _municipalityCtrl,
-          hint: 'Enter municipality or city',
+        _gap,
+        _col(
+          'Municipality / City',
+          _Field(
+            controller: _municipalityCtrl,
+            hasError: _errors.contains('municipality'),
+            hint: 'Enter municipality or city',
+            icon: Icons.location_city_outlined,
+          ),
+          required: true,
         ),
-        const SizedBox(height: 12),
-        _buildLabel('Barangay', required: true),
-        const SizedBox(height: 6),
-        _RegInputField(
-          controller: _barangayCtrl,
-          hasError: _errors.contains('barangay'),
-          hint: 'Enter barangay',
+        _gap,
+        _col(
+          'Barangay',
+          _Field(
+            controller: _barangayCtrl,
+            hasError: _errors.contains('barangay'),
+            hint: 'Enter barangay',
+            icon: Icons.holiday_village_outlined,
+          ),
+          required: true,
         ),
-        const SizedBox(height: 12),
-        _buildLabel('Street / House No.', required: true),
-        const SizedBox(height: 6),
-        _RegInputField(
-          controller: _streetCtrl,
-          hint: 'Enter street or house number',
+        _gap,
+        _col(
+          'Street / House No.',
+          _Field(
+            controller: _streetCtrl,
+            hasError: _errors.contains('street'),
+            hint: 'Enter street or house number',
+            icon: Icons.home_outlined,
+          ),
+          required: true,
         ),
-        const SizedBox(height: 12),
-        _buildLabel('Zip Code', required: true),
-        const SizedBox(height: 6),
-        _RegInputField(
-          controller: _zipCodeCtrl,
-          hint: 'Enter zip code',
-          keyboardType: TextInputType.number,
+        _gap,
+        _col(
+          'Zip Code',
+          _Field(
+            controller: _zipCodeCtrl,
+            hasError: _errors.contains('zipCode'),
+            hint: 'Enter zip code',
+            icon: Icons.markunread_mailbox_outlined,
+            keyboard: TextInputType.number,
+          ),
+          required: true,
         ),
       ],
     );
   }
 
-  // ──────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────────
   // STEP 3 — Review & Submit
-  // ──────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────────
   Widget _buildStep3() {
     final mi = _middleInitialCtrl.text.trim();
     final fullName =
@@ -437,176 +937,114 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Section title
-        const Text(
-          'Review your Information',
-          style: TextStyle(
-            color: Color(0xFF1A1A2E),
-            fontSize: 16,
-            fontWeight: FontWeight.w800,
-          ),
+        const _SectionHeader(
+          title: 'Review your Information',
+          subtitle:
+              'Please review all the details below before submitting your registration',
         ),
-        const SizedBox(height: 4),
-        const Text(
-          'Please review all the details below before submitting your registration',
-          style: TextStyle(color: Color(0xFF888888), fontSize: 12.5),
-        ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 18),
 
-        // ── User Information Card ──────────────────────────────
-        Container(
-          width: double.infinity,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFDDDDDD), width: 1),
-          ),
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Card header
-              Row(
-                children: [
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFEEE6F5),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.person_outline_rounded,
-                      color: Color(0xFF7B2FBE),
-                      size: 26,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Text(
-                    'User Information',
-                    style: TextStyle(
-                      color: Color(0xFF1A1A2E),
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const Spacer(),
-                  GestureDetector(
-                    onTap: () => setState(() => _currentStep = 0),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: const Color(0xFFAAAAAA),
-                          width: 1,
-                        ),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: const Text(
-                        'Edit',
-                        style: TextStyle(
-                          color: Color(0xFF1A1A2E),
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+        _ReviewCard(
+          title: 'User Information',
+          onEdit: () {
+            setState(() => _currentStep = 0);
+            _scrollToTop();
+          },
+          rows: [
+            _ReviewRow4(
+              item1: _RC(
+                label: 'Full Name',
+                value: fullName.isEmpty ? '—' : fullName,
               ),
-              const SizedBox(height: 14),
-              const Divider(color: Color(0xFFF0F0F0), height: 1),
-              const SizedBox(height: 14),
-
-              // Row 1: Full Name | Phone Number | Province | Street/House No.
-              _ReviewRow4(
-                item1: _ReviewCell(
-                  label: 'Full Name',
-                  value: fullName.isEmpty ? '—' : fullName,
-                ),
-                item2: _ReviewCell(
-                  label: 'Phone Number',
-                  value: val(_phoneCtrl.text),
-                ),
-                item3: _ReviewCell(
-                  label: 'Province',
-                  value: val(_provinceCtrl.text),
-                ),
-                item4: _ReviewCell(
-                  label: 'Street/House No.',
-                  value: val(_streetCtrl.text),
-                ),
+              item2: _RC(label: 'Phone Number', value: val(_phoneCtrl.text)),
+              item3: _RC(label: 'Province', value: val(_provinceCtrl.text)),
+              item4: _RC(
+                label: 'Street/House No.',
+                value: val(_streetCtrl.text),
               ),
-              const SizedBox(height: 14),
-
-              // Row 2: Sex | Birthday | Municipality | Zip Code
-              _ReviewRow4(
-                item1: _ReviewCell(label: 'Sex', value: _selectedSex ?? '—'),
-                item2: _ReviewCell(
-                  label: 'Birthday',
-                  value: val(_birthdayCtrl.text),
-                ),
-                item3: _ReviewCell(
-                  label: 'Municipality',
-                  value: val(_municipalityCtrl.text),
-                ),
-                item4: _ReviewCell(
-                  label: 'Zip Code',
-                  value: val(_zipCodeCtrl.text),
-                ),
+            ),
+            _ReviewRow4(
+              item1: _RC(label: 'Sex', value: _selectedSex ?? '—'),
+              item2: _RC(label: 'Birthday', value: val(_birthdayCtrl.text)),
+              item3: _RC(
+                label: 'Municipality',
+                value: val(_municipalityCtrl.text),
               ),
-              const SizedBox(height: 14),
-
-              // Row 3: Email | Age | Barangay | Valid ID
+              item4: _RC(label: 'Zip Code', value: val(_zipCodeCtrl.text)),
+            ),
+            _ReviewRow4(
+              item1: _RC(label: 'Email', value: val(_emailCtrl.text)),
+              item2: _RC(label: 'Age', value: val(_ageCtrl.text)),
+              item3: _RC(label: 'Barangay', value: val(_barangayCtrl.text)),
+              item4: _RC(
+                label: 'ID Category',
+                value: _idCategory == 'primary'
+                    ? 'Primary ID'
+                    : 'Secondary ID (2 IDs)',
+              ),
+            ),
+            if (_idCategory == 'primary')
               _ReviewRow4(
-                item1: _ReviewCell(label: 'Email', value: val(_emailCtrl.text)),
-                item2: _ReviewCell(label: 'Age', value: val(_ageCtrl.text)),
-                item3: _ReviewCell(
-                  label: 'Barangay',
-                  value: val(_barangayCtrl.text),
-                ),
-                item4: _ReviewCell(
-                  label: 'Valid ID',
+                item1: _RC(label: 'ID Type', value: _primaryIdType ?? '—'),
+                item2: _RC(
+                  label: 'ID File',
                   value: _validIdFileName ?? '—',
                   isFile: _validIdFileName != null,
                 ),
+                item3: const _RC(label: '', value: ''),
+                item4: const _RC(label: '', value: ''),
+              )
+            else
+              _ReviewRow4(
+                item1: _RC(
+                  label: '1st ID Type',
+                  value: _secondaryId1Type ?? '—',
+                ),
+                item2: _RC(
+                  label: '1st ID File',
+                  value: _secondaryId1FileName ?? '—',
+                  isFile: _secondaryId1FileName != null,
+                ),
+                item3: _RC(
+                  label: '2nd ID Type',
+                  value: _secondaryId2Type ?? '—',
+                ),
+                item4: _RC(
+                  label: '2nd ID File',
+                  value: _secondaryId2FileName ?? '—',
+                  isFile: _secondaryId2FileName != null,
+                ),
               ),
-            ],
-          ),
+          ],
         ),
-
         const SizedBox(height: 20),
 
         // ── Please Review Carefully ────────────────────────────
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: const Color(0xFFF0E8F8),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFDDD0EE), width: 1),
+            color: _C.raisinSoft,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _C.raisin.withAlpha(60), width: 1),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Container(
                     width: 34,
                     height: 34,
                     decoration: const BoxDecoration(
-                      color: Color(0xFF2D1B3D),
+                      color: _C.prune,
                       shape: BoxShape.circle,
                     ),
                     child: const Center(
                       child: Text(
                         '!',
                         style: TextStyle(
-                          color: Colors.white,
+                          color: _C.lin,
                           fontSize: 17,
                           fontWeight: FontWeight.w800,
                         ),
@@ -617,8 +1055,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   const Text(
                     'Please Review Carefully',
                     style: TextStyle(
-                      color: Color(0xFF1A1A2E),
-                      fontSize: 14,
+                      color: _C.ink,
+                      fontSize: 14.5,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -628,62 +1066,50 @@ class _RegisterScreenState extends State<RegisterScreen> {
               const Text(
                 'By submitting this registration, you confirm that all information provided is true and correct. '
                 'Our team will review your application and you will be notified via email once your account is approved.',
-                style: TextStyle(
-                  color: Color(0xFF555555),
-                  fontSize: 12,
-                  height: 1.5,
-                ),
+                style: TextStyle(color: _C.muted, fontSize: 12.5, height: 1.5),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               GestureDetector(
                 onTap: () => setState(() => _agreedToTerms = !_agreedToTerms),
+                behavior: HitTestBehavior.opaque,
                 child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Container(
-                      width: 16,
-                      height: 16,
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      width: 20,
+                      height: 20,
                       decoration: BoxDecoration(
-                        color: _agreedToTerms
-                            ? const Color(0xFF2D1B3D)
-                            : Colors.white,
-                        borderRadius: BorderRadius.circular(3),
+                        color: _agreedToTerms ? _C.prune : Colors.white,
+                        borderRadius: BorderRadius.circular(6),
                         border: Border.all(
-                          color: const Color(0xFF888888),
-                          width: 1.2,
+                          color: _agreedToTerms ? _C.prune : _C.muted,
+                          width: 1.4,
                         ),
                       ),
                       child: _agreedToTerms
-                          ? const Icon(
-                              Icons.check,
-                              color: Colors.white,
-                              size: 11,
-                            )
+                          ? const Icon(Icons.check, color: _C.lin, size: 14)
                           : null,
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 10),
                     Expanded(
                       child: RichText(
                         text: const TextSpan(
                           text: 'I agree to the ',
-                          style: TextStyle(
-                            color: Color(0xFF555555),
-                            fontSize: 12,
-                          ),
+                          style: TextStyle(color: _C.muted, fontSize: 12.5),
                           children: [
                             TextSpan(
                               text: 'Terms and Conditions',
                               style: TextStyle(
-                                color: Color(0xFF2D1B3D),
-                                fontWeight: FontWeight.w700,
+                                color: _C.raisin,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
                             TextSpan(text: ' and '),
                             TextSpan(
                               text: 'Privacy Policy',
                               style: TextStyle(
-                                color: Color(0xFF2D1B3D),
-                                fontWeight: FontWeight.w700,
+                                color: _C.raisin,
+                                fontWeight: FontWeight.w800,
                               ),
                             ),
                             TextSpan(text: '.'),
@@ -697,106 +1123,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             ],
           ),
         ),
-        const SizedBox(height: 8),
       ],
-    );
-  }
-
-  void _showImageSourceSheet(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: EdgeInsets.fromLTRB(
-          24,
-          20,
-          24,
-          20 + MediaQuery.of(context).padding.bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Handle
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFDDDDDD),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Upload Valid ID',
-              style: TextStyle(
-                color: Color(0xFF1A1A2E),
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Choose how you want to upload your ID',
-              style: TextStyle(color: Color(0xFF888888), fontSize: 13),
-            ),
-            const SizedBox(height: 20),
-
-            // Camera option
-            _ImageSourceTile(
-              icon: Icons.camera_alt_outlined,
-              title: 'Take a Photo',
-              subtitle: 'Use your camera to capture your ID',
-              onTap: () async {
-                Navigator.pop(context);
-                final picker = ImagePicker();
-                final file = await picker.pickImage(
-                  source: ImageSource.camera,
-                  imageQuality: 85,
-                );
-                if (file != null) {
-                  setState(() => _validIdFileName = file.name);
-                }
-              },
-            ),
-            const SizedBox(height: 12),
-
-            // Gallery option
-            _ImageSourceTile(
-              icon: Icons.photo_library_outlined,
-              title: 'Choose from Gallery',
-              subtitle: 'Select an existing photo from your device',
-              onTap: () async {
-                Navigator.pop(context);
-                final picker = ImagePicker();
-                final file = await picker.pickImage(
-                  source: ImageSource.gallery,
-                  imageQuality: 85,
-                );
-                if (file != null) {
-                  setState(() => _validIdFileName = file.name);
-                }
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showVerifyEmailModal(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => _VerifyEmailModal(),
     );
   }
 
@@ -805,182 +1132,241 @@ class _RegisterScreenState extends State<RegisterScreen> {
       text: TextSpan(
         text: text,
         style: const TextStyle(
-          color: Color(0xFF1A1A2E),
-          fontSize: 13.5,
+          color: _C.ink,
+          fontSize: 14.5,
           fontWeight: FontWeight.w700,
         ),
         children: required
             ? const [
                 TextSpan(
                   text: ' *',
-                  style: TextStyle(color: Color(0xFFE53935)),
+                  style: TextStyle(color: _C.brique),
                 ),
               ]
             : [],
       ),
     );
   }
+
+  // ────────────────────────────────────────────────────────────────
+  // Camera / gallery sheet
+  // ────────────────────────────────────────────────────────────────
+  void _showImageSourceSheet(BuildContext context, {String slot = 'primary'}) {
+    final title = slot == 'secondary1'
+        ? 'Upload First ID'
+        : slot == 'secondary2'
+        ? 'Upload Second ID'
+        : 'Upload Valid ID';
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        Future<void> pick(ImageSource source) async {
+          Navigator.pop(sheetContext);
+          final file = await ImagePicker().pickImage(
+            source: source,
+            imageQuality: 85,
+          );
+          if (file == null) return;
+          setState(() {
+            if (slot == 'secondary1') {
+              _secondaryId1FileName = file.name;
+              _secondaryId1Path = file.path;
+            } else if (slot == 'secondary2') {
+              _secondaryId2FileName = file.name;
+              _secondaryId2Path = file.path;
+            } else {
+              _validIdFileName = file.name;
+              _validIdPath = file.path;
+            }
+          });
+        }
+
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          ),
+          padding: EdgeInsets.fromLTRB(
+            24,
+            14,
+            24,
+            20 + MediaQuery.of(sheetContext).padding.bottom,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: _C.border,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: _C.ink,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Choose how you want to upload your ID',
+                style: TextStyle(color: _C.muted, fontSize: 13),
+              ),
+              const SizedBox(height: 20),
+              _SourceTile(
+                icon: Icons.camera_alt_outlined,
+                title: 'Take a Photo',
+                subtitle: 'Use your camera to capture your ID',
+                onTap: () => pick(ImageSource.camera),
+              ),
+              const SizedBox(height: 12),
+              _SourceTile(
+                icon: Icons.photo_library_outlined,
+                title: 'Choose from Gallery',
+                subtitle: 'Select an existing photo from your device',
+                onTap: () => pick(ImageSource.gallery),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showVerifyEmailModal(BuildContext context) {
+    final email = _emailCtrl.text.trim();
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter your email address first.')),
+      );
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _VerifyEmailModal(
+        email: email,
+        onVerified: (token) {
+          setState(() => _verificationToken = token);
+        },
+      ),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Top Bar
+// Vendo bag logo (replaces the rider picture in the header)
 // ─────────────────────────────────────────────────────────────────────────────
-class _TopBar extends StatelessWidget {
-  final VoidCallback onLoginTap;
-  const _TopBar({required this.onLoginTap});
+class _VendoBagLogo extends StatelessWidget {
+  final double width, height;
+
+  const _VendoBagLogo({this.width = 78, this.height = 88});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF3B1F52), Color(0xFF2A1440)],
-        ),
-      ),
-      child: Row(
-        children: [
-          _SmallBagLogo(),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: const [
-              Text(
-                'vendo',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
-                ),
-              ),
-              Text(
-                'BUY. SELL. DELIVERED',
-                style: TextStyle(
-                  color: Color(0xFFE8873A),
-                  fontSize: 7,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 1.5,
+    return SizedBox(
+      width: width,
+      height: height,
+      child: FittedBox(
+        child: SizedBox(
+          width: 78,
+          height: 88,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              CustomPaint(size: const Size(78, 88), painter: _BagPainter()),
+              const Positioned(
+                bottom: 16,
+                child: Text(
+                  'v',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    fontStyle: FontStyle.italic,
+                  ),
                 ),
               ),
             ],
           ),
-          const Spacer(),
-          const Text(
-            'Already have an account?  ',
-            style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 11),
-          ),
-          GestureDetector(
-            onTap: onLoginTap,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white, width: 1),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const Text(
-                'Login',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-class _SmallBagLogo extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 36,
-      height: 40,
-      child: CustomPaint(painter: _SmallBagPainter()),
-    );
+class _BagPainter extends CustomPainter {
+  Path _roundedBox(double l, double t, double r, double b, double rad) {
+    return Path()
+      ..moveTo(l + rad, t)
+      ..lineTo(r - rad, t)
+      ..quadraticBezierTo(r, t, r, t + rad)
+      ..lineTo(r, b - rad)
+      ..quadraticBezierTo(r, b, r - rad, b)
+      ..lineTo(l + rad, b)
+      ..quadraticBezierTo(l, b, l, b - rad)
+      ..lineTo(l, t + rad)
+      ..quadraticBezierTo(l, t, l + rad, t)
+      ..close();
   }
-}
 
-class _SmallBagPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
 
-    void drawBag(
-      double left,
-      double right,
-      double top,
-      double bottom,
-      Color color,
-      double r,
-    ) {
-      final paint = Paint()
-        ..color = color
-        ..style = PaintingStyle.fill;
-      final path = Path()
-        ..moveTo(left + r, top)
-        ..lineTo(right - r, top)
-        ..quadraticBezierTo(right, top, right, top + r)
-        ..lineTo(right, bottom - r)
-        ..quadraticBezierTo(right, bottom, right - r, bottom)
-        ..lineTo(left + r, bottom)
-        ..quadraticBezierTo(left, bottom, left, bottom - r)
-        ..lineTo(left, top + r)
-        ..quadraticBezierTo(left, top, left + r, top)
-        ..close();
-      canvas.drawPath(path, paint);
-    }
+    canvas.drawPath(
+      _roundedBox(w * 0.18, h * 0.28, w * 0.98, h * 0.98, 10),
+      Paint()..color = _C.brique,
+    );
+    canvas.drawPath(
+      _roundedBox(w * 0.10, h * 0.28, w * 0.90, h * 0.94, 10),
+      Paint()..color = _C.lin,
+    );
 
-    drawBag(w * 0.18, w * 0.98, h * 0.28, h * 0.98, const Color(0xFFE8873A), 5);
-    drawBag(w * 0.10, w * 0.90, h * 0.28, h * 0.94, const Color(0xFFB8860B), 5);
-    drawBag(w * 0.02, w * 0.82, h * 0.28, h * 0.90, const Color(0xFFF0EEF5), 5);
+    final left = w * 0.02;
+    final right = w * 0.82;
+    final top = h * 0.28;
+    final bottom = h * 0.90;
+    canvas.drawPath(
+      _roundedBox(left, top, right, bottom, 10),
+      Paint()..color = const Color(0xFFF0EEF5),
+    );
 
-    final cx = (w * 0.02 + w * 0.82) / 2;
+    final handleCenter = (left + right) / 2;
     canvas.drawArc(
       Rect.fromCenter(
-        center: Offset(cx, h * 0.28),
-        width: (w * 0.82 - w * 0.02) * 0.40,
+        center: Offset(handleCenter, top),
+        width: (right - left) * 0.40,
         height: h * 0.22,
       ),
-      3.14159,
-      3.14159,
+      math.pi,
+      math.pi,
       false,
       Paint()
         ..color = const Color(0xFFF0EEF5)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5
+        ..strokeWidth = 4.5
         ..strokeCap = StrokeCap.round,
     );
 
-    final eyeY = h * 0.28 + (h * 0.90 - h * 0.28) * 0.28;
-    final dp = Paint()
-      ..color = const Color(0xFFE8873A)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(Offset(cx - (w * 0.82 - w * 0.02) * 0.22, eyeY), 2, dp);
-    canvas.drawCircle(Offset(cx + (w * 0.82 - w * 0.02) * 0.22, eyeY), 2, dp);
-
-    final tp = TextPainter(
-      text: const TextSpan(
-        text: 'v',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: 13,
-          fontWeight: FontWeight.bold,
-          fontStyle: FontStyle.italic,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(canvas, Offset(cx - tp.width / 2 - 1, h * 0.50));
+    final eyeY = top + (bottom - top) * 0.28;
+    final eyeSpacing = (right - left) * 0.22;
+    final dot = Paint()..color = _C.brique;
+    canvas.drawCircle(Offset(handleCenter - eyeSpacing, eyeY), 3.5, dot);
+    canvas.drawCircle(Offset(handleCenter + eyeSpacing, eyeY), 3.5, dot);
   }
 
   @override
@@ -988,105 +1374,139 @@ class _SmallBagPainter extends CustomPainter {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Step Indicator
+// Step bar: dark gradient card for the active step + segmented progress
 // ─────────────────────────────────────────────────────────────────────────────
-class _StepIndicator extends StatelessWidget {
+class _MobileStepBar extends StatelessWidget {
   final int currentStep;
-  const _StepIndicator({required this.currentStep});
+  final int totalSteps;
+  final List<String> labels;
+  final List<IconData> icons;
 
-  static const List<String> _labels = [
-    'Personal Information',
-    'Contact & Address',
-    'Review & Submit',
-  ];
+  const _MobileStepBar({
+    required this.currentStep,
+    required this.totalSteps,
+    required this.labels,
+    required this.icons,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: List.generate(3, (i) {
-        final isActive = i == currentStep;
-        final isDone = i < currentStep;
-        return Expanded(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_C.pruneLight, _C.prune],
+            ),
+            borderRadius: BorderRadius.circular(16),
+          ),
           child: Row(
             children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Colors.white.withAlpha(30),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icons[currentStep], color: _C.lin, size: 20),
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: (isActive || isDone)
-                            ? const Color(0xFF2D1B3D)
-                            : Colors.transparent,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: (isActive || isDone)
-                              ? const Color(0xFF2D1B3D)
-                              : const Color(0xFFCCCCCC),
-                          width: 1.5,
-                        ),
-                      ),
-                      child: Center(
-                        child: isDone
-                            ? const Icon(
-                                Icons.check,
-                                color: Colors.white,
-                                size: 16,
-                              )
-                            : Text(
-                                '${i + 1}',
-                                style: TextStyle(
-                                  color: isActive
-                                      ? Colors.white
-                                      : const Color(0xFFAAAAAA),
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 14,
-                                ),
-                              ),
+                    Text(
+                      'Step ${currentStep + 1} of $totalSteps',
+                      style: const TextStyle(
+                        color: _C.lin,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1,
                       ),
                     ),
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 2),
                     Text(
-                      _labels[i],
-                      textAlign: TextAlign.center,
+                      labels[currentStep],
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (currentStep < totalSteps - 1)
+                Flexible(
+                  child: Text(
+                    'Next: ${labels[currentStep + 1]}',
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      color: Color(0xB3FFFFFF),
+                      fontSize: 10.5,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Segmented progress bar
+        Row(
+          children: List.generate(totalSteps, (i) {
+            final isDone = i < currentStep;
+            final isActive = i == currentStep;
+            return Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(right: i < totalSteps - 1 ? 4 : 0),
+                child: Column(
+                  children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: isDone
+                            ? _C.prune
+                            : isActive
+                            ? _C.brique
+                            : _C.border,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${i + 1}',
                       style: TextStyle(
                         fontSize: 10,
-                        color: isActive
-                            ? const Color(0xFF2D1B3D)
-                            : const Color(0xFFAAAAAA),
-                        fontWeight: isActive
-                            ? FontWeight.w600
+                        color: (isDone || isActive) ? _C.prune : _C.muted,
+                        fontWeight: (isDone || isActive)
+                            ? FontWeight.w800
                             : FontWeight.w400,
                       ),
                     ),
                   ],
                 ),
               ),
-              if (i < 2)
-                Expanded(
-                  child: Container(
-                    height: 1.5,
-                    margin: const EdgeInsets.only(bottom: 22),
-                    color: i < currentStep
-                        ? const Color(0xFF2D1B3D)
-                        : const Color(0xFFDDDDDD),
-                  ),
-                ),
-            ],
-          ),
-        );
-      }),
+            );
+          }),
+        ),
+      ],
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Section Header
+// Section header
 // ─────────────────────────────────────────────────────────────────────────────
 class _SectionHeader extends StatelessWidget {
-  final String title;
-  final String subtitle;
+  final String title, subtitle;
   const _SectionHeader({required this.title, required this.subtitle});
 
   @override
@@ -1097,102 +1517,77 @@ class _SectionHeader extends StatelessWidget {
         Text(
           title,
           style: const TextStyle(
-            color: Color(0xFF1A1A2E),
-            fontSize: 16,
+            color: _C.ink,
+            fontSize: 18,
             fontWeight: FontWeight.w800,
           ),
         ),
         const SizedBox(height: 2),
-        Text(
-          subtitle,
-          style: const TextStyle(color: Color(0xFF888888), fontSize: 12.5),
-        ),
-        const SizedBox(height: 8),
-        const Divider(color: Color(0xFFE0E0E0), thickness: 1),
+        Text(subtitle, style: const TextStyle(color: _C.muted, fontSize: 13)),
+        const SizedBox(height: 10),
+        const Divider(color: _C.border, thickness: 1, height: 1),
       ],
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Reusable Register Input Field
+// Input field (same look as the login fields)
 // ─────────────────────────────────────────────────────────────────────────────
-class _RegInputField extends StatelessWidget {
+class _Field extends StatelessWidget {
   final TextEditingController controller;
   final String hint;
-  final bool obscureText;
-  final TextInputType? keyboardType;
-  final Widget? suffixIcon;
-  final bool readOnly;
+  final IconData? icon;
+  final bool obscure, readOnly, hasError;
+  final TextInputType? keyboard;
+  final Widget? suffix;
   final VoidCallback? onTap;
-  final bool hasError;
 
-  const _RegInputField({
+  const _Field({
     required this.controller,
     required this.hint,
-    this.obscureText = false,
-    this.keyboardType,
-    this.suffixIcon,
+    this.icon,
+    this.obscure = false,
     this.readOnly = false,
-    this.onTap,
     this.hasError = false,
+    this.keyboard,
+    this.suffix,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: hasError ? const Color(0xFFE53935) : const Color(0xFFE0E0E0),
-          width: hasError ? 1.8 : 1.2,
-        ),
-      ),
-      child: TextField(
-        controller: controller,
-        obscureText: obscureText,
-        keyboardType: keyboardType,
-        readOnly: readOnly,
-        onTap: onTap,
-        style: const TextStyle(color: Color(0xFF333333), fontSize: 13.5),
-        decoration: InputDecoration(
-          hintText: hint,
-          hintStyle: const TextStyle(color: Color(0xFFBBBBBB), fontSize: 13.5),
-          suffixIcon: suffixIcon != null
-              ? Padding(
-                  padding: const EdgeInsets.only(right: 10),
-                  child: suffixIcon,
-                )
-              : null,
-          suffixIconConstraints: const BoxConstraints(
-            minWidth: 36,
-            minHeight: 36,
-          ),
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 14,
-            vertical: 13,
-          ),
-          border: InputBorder.none,
-          enabledBorder: InputBorder.none,
-          focusedBorder: InputBorder.none,
-        ),
+    return TextField(
+      controller: controller,
+      obscureText: obscure,
+      readOnly: readOnly,
+      keyboardType: keyboard,
+      onTap: onTap,
+      cursorColor: _C.prune,
+      style: const TextStyle(color: _C.ink, fontSize: 15),
+      decoration: _decoration(
+        hint: hint,
+        icon: icon,
+        suffix: suffix,
+        error: hasError,
       ),
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sex Dropdown
+// Dropdown (used for sex and ID types)
 // ─────────────────────────────────────────────────────────────────────────────
-class _SexDropdown extends StatelessWidget {
+class _Dropdown extends StatelessWidget {
   final String? value;
+  final String hint;
   final List<String> options;
   final ValueChanged<String?> onChanged;
   final bool hasError;
 
-  const _SexDropdown({
+  const _Dropdown({
     required this.value,
+    required this.hint,
     required this.options,
     required this.onChanged,
     this.hasError = false,
@@ -1201,27 +1596,29 @@ class _SexDropdown extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
+        color: hasError ? _C.errorSoft : _C.background,
+        borderRadius: BorderRadius.circular(_radius),
         border: Border.all(
-          color: hasError ? const Color(0xFFE53935) : const Color(0xFFE0E0E0),
-          width: hasError ? 1.8 : 1.2,
+          color: hasError ? _C.error : _C.border,
+          width: hasError ? 1.6 : 1.2,
         ),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(
           value: value,
-          hint: const Text(
-            'Select Sex',
-            style: TextStyle(color: Color(0xFFBBBBBB), fontSize: 13.5),
+          hint: Text(
+            hint,
+            style: const TextStyle(color: _C.muted, fontSize: 15),
           ),
           isExpanded: true,
-          icon: const Icon(
-            Icons.keyboard_arrow_down,
-            color: Color(0xFF888888),
-            size: 20,
+          borderRadius: BorderRadius.circular(_radius),
+          dropdownColor: Colors.white,
+          icon: Icon(
+            Icons.keyboard_arrow_down_rounded,
+            color: hasError ? _C.error : _C.muted,
           ),
           items: options
               .map(
@@ -1229,10 +1626,7 @@ class _SexDropdown extends StatelessWidget {
                   value: s,
                   child: Text(
                     s,
-                    style: const TextStyle(
-                      color: Color(0xFF333333),
-                      fontSize: 13.5,
-                    ),
+                    style: const TextStyle(color: _C.ink, fontSize: 15),
                   ),
                 ),
               )
@@ -1245,7 +1639,98 @@ class _SexDropdown extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Upload Field
+// ID category toggle (Primary / Secondary)
+// ─────────────────────────────────────────────────────────────────────────────
+class _IdCategoryToggle extends StatelessWidget {
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  const _IdCategoryToggle({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(child: _toggle('primary', 'Primary ID', '1 ID required')),
+        const SizedBox(width: 10),
+        Expanded(child: _toggle('secondary', 'Secondary ID', '2 IDs required')),
+      ],
+    );
+  }
+
+  Widget _toggle(String key, String label, String sub) {
+    final selected = value == key;
+    return GestureDetector(
+      onTap: () => onChanged(key),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? _C.prune : _C.background,
+          borderRadius: BorderRadius.circular(_radius),
+          border: Border.all(
+            color: selected ? _C.prune : _C.border,
+            width: 1.4,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 18,
+              height: 18,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected ? _C.lin : _C.muted,
+                  width: 1.5,
+                ),
+              ),
+              child: selected
+                  ? Center(
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: _C.lin,
+                        ),
+                      ),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: selected ? Colors.white : _C.ink,
+                    ),
+                  ),
+                  Text(
+                    sub,
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      color: selected ? const Color(0xB3FFFFFF) : _C.muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Upload field
 // ─────────────────────────────────────────────────────────────────────────────
 class _UploadField extends StatelessWidget {
   final String? fileName;
@@ -1262,35 +1747,56 @@ class _UploadField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final picked = fileName != null;
+
     return GestureDetector(
       onTap: onTap,
+      behavior: HitTestBehavior.opaque,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        height: 56,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
+          color: hasError
+              ? _C.errorSoft
+              : picked
+              ? _C.raisinSoft
+              : _C.background,
+          borderRadius: BorderRadius.circular(_radius),
           border: Border.all(
-            color: hasError ? const Color(0xFFE53935) : const Color(0xFFE0E0E0),
-            width: hasError ? 1.8 : 1.2,
+            color: hasError
+                ? _C.error
+                : picked
+                ? _C.raisin.withAlpha(90)
+                : _C.border,
+            width: hasError ? 1.6 : 1.2,
           ),
         ),
         child: Row(
           children: [
+            Icon(
+              picked ? Icons.insert_drive_file_outlined : Icons.attach_file,
+              color: hasError ? _C.error : _C.raisin,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
             Expanded(
               child: Text(
                 fileName ?? hint,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: fileName != null
-                      ? const Color(0xFF333333)
-                      : const Color(0xFFBBBBBB),
-                  fontSize: 13.5,
+                  color: picked ? _C.ink : (hasError ? _C.error : _C.muted),
+                  fontSize: 15,
                 ),
               ),
             ),
-            const Icon(
-              Icons.upload_outlined,
-              color: Color(0xFF888888),
-              size: 20,
+            Icon(
+              picked ? Icons.check_circle_rounded : Icons.upload_outlined,
+              color: picked
+                  ? _C.success
+                  : hasError
+                  ? _C.error
+                  : _C.muted,
+              size: 22,
             ),
           ],
         ),
@@ -1300,13 +1806,163 @@ class _UploadField extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Review Row — 4 equal columns matching the reference image layout
+// Source tile (camera / gallery)
 // ─────────────────────────────────────────────────────────────────────────────
+class _SourceTile extends StatelessWidget {
+  final IconData icon;
+  final String title, subtitle;
+  final VoidCallback onTap;
+
+  const _SourceTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _C.background,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _C.border, width: 1.2),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 46,
+              height: 46,
+              decoration: const BoxDecoration(
+                color: _C.raisinSoft,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: _C.prune, size: 22),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: _C.ink,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(color: _C.muted, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: _C.muted, size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Review card + rows
+// ─────────────────────────────────────────────────────────────────────────────
+class _ReviewCard extends StatelessWidget {
+  final String title;
+  final VoidCallback onEdit;
+  final List<Widget> rows;
+
+  const _ReviewCard({
+    required this.title,
+    required this.onEdit,
+    required this.rows,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _C.border, width: 1.2),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: const BoxDecoration(
+                  color: _C.raisinSoft,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.person_outline_rounded,
+                  color: _C.raisin,
+                  size: 26,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    color: _C.ink,
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              GestureDetector(
+                onTap: onEdit,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 7,
+                  ),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: _C.prune, width: 1.2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text(
+                    'Edit',
+                    style: TextStyle(
+                      color: _C.prune,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          const Divider(color: _C.border, height: 1),
+          const SizedBox(height: 14),
+          ...rows.map(
+            (r) =>
+                Padding(padding: const EdgeInsets.only(bottom: 14), child: r),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ReviewRow4 extends StatelessWidget {
-  final _ReviewCell item1;
-  final _ReviewCell item2;
-  final _ReviewCell item3;
-  final _ReviewCell item4;
+  final _RC item1, item2, item3, item4;
 
   const _ReviewRow4({
     required this.item1,
@@ -1320,37 +1976,33 @@ class _ReviewRow4 extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(child: _buildCell(item1)),
+        Expanded(child: _cell(item1)),
         const SizedBox(width: 8),
-        Expanded(child: _buildCell(item2)),
+        Expanded(child: _cell(item2)),
         const SizedBox(width: 8),
-        Expanded(child: _buildCell(item3)),
+        Expanded(child: _cell(item3)),
         const SizedBox(width: 8),
-        Expanded(child: _buildCell(item4)),
+        Expanded(child: _cell(item4)),
       ],
     );
   }
 
-  Widget _buildCell(_ReviewCell item) {
+  Widget _cell(_RC item) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           item.label,
-          style: const TextStyle(
-            color: Color(0xFF999999),
-            fontSize: 10.5,
-            fontWeight: FontWeight.w400,
-          ),
+          style: const TextStyle(color: _C.muted, fontSize: 10.5),
         ),
         const SizedBox(height: 3),
         item.isFile
             ? Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(5),
-                  border: Border.all(color: const Color(0xFFDDDDDD), width: 1),
+                  color: _C.raisinSoft,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _C.raisin.withAlpha(60), width: 1),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -1358,16 +2010,16 @@ class _ReviewRow4 extends StatelessWidget {
                     const Icon(
                       Icons.insert_drive_file_outlined,
                       size: 12,
-                      color: Color(0xFF555555),
+                      color: _C.raisin,
                     ),
                     const SizedBox(width: 3),
                     Flexible(
                       child: Text(
                         item.value,
                         style: const TextStyle(
-                          color: Color(0xFF333333),
+                          color: _C.ink,
                           fontSize: 11,
-                          fontWeight: FontWeight.w500,
+                          fontWeight: FontWeight.w600,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1378,9 +2030,9 @@ class _ReviewRow4 extends StatelessWidget {
             : Text(
                 item.value,
                 style: const TextStyle(
-                  color: Color(0xFF1A1A2E),
+                  color: _C.ink,
                   fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
       ],
@@ -1388,32 +2040,29 @@ class _ReviewRow4 extends StatelessWidget {
   }
 }
 
-class _ReviewCell {
-  final String label;
-  final String value;
+class _RC {
+  final String label, value;
   final bool isFile;
-  const _ReviewCell({
-    required this.label,
-    required this.value,
-    this.isFile = false,
-  });
+  const _RC({required this.label, required this.value, this.isFile = false});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bottom Bar — Back (outlined) + Next/Submit (filled dark)
+// Bottom bar: Back + Next / Submit (same buttons as the login screen)
 // ─────────────────────────────────────────────────────────────────────────────
 class _BottomNextBar extends StatelessWidget {
   final int currentStep;
   final VoidCallback onNext;
   final VoidCallback? onBack;
+  final bool submitting;
 
   const _BottomNextBar({
     required this.currentStep,
     required this.onNext,
     this.onBack,
+    this.submitting = false,
   });
 
-  static const List<String> _nextLabels = [
+  static const _nextLabels = [
     'Next: Contact & Address',
     'Next: Review & Submit',
     'Submit',
@@ -1421,97 +2070,102 @@ class _BottomNextBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isLastStep = currentStep == 2;
+    final isLast = currentStep == _nextLabels.length - 1;
 
     return Container(
       padding: EdgeInsets.fromLTRB(
-        20,
+        24,
         12,
-        20,
+        24,
         12 + MediaQuery.of(context).padding.bottom,
       ),
       decoration: const BoxDecoration(
-        color: Color(0xFFF8F5FB),
-        border: Border(top: BorderSide(color: Color(0xFFE8E8E8), width: 1)),
+        color: Colors.white,
+        border: Border(top: BorderSide(color: _C.border, width: 1)),
       ),
       child: Row(
-        mainAxisAlignment: isLastStep
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start,
         children: [
           if (onBack != null) ...[
-            OutlinedButton(
-              onPressed: onBack,
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Color(0xFF2D1B3D), width: 1.2),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+            SizedBox(
+              height: 54,
+              child: OutlinedButton(
+                onPressed: submitting ? null : onBack,
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: _C.prune, width: 1.4),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(_radius),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 26),
                 ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 28,
-                  vertical: 14,
-                ),
-              ),
-              child: const Text(
-                'Back',
-                style: TextStyle(
-                  color: Color(0xFF2D1B3D),
-                  fontWeight: FontWeight.w600,
-                  fontSize: 14,
+                child: const Text(
+                  'Back',
+                  style: TextStyle(
+                    color: _C.prune,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                  ),
                 ),
               ),
             ),
             const SizedBox(width: 12),
           ],
-          if (isLastStep)
-            ElevatedButton(
-              onPressed: onNext,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2D1B3D),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 36,
-                  vertical: 14,
-                ),
-                elevation: 0,
-              ),
-              child: const Text(
-                'Submit',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-              ),
-            )
-          else
-            Expanded(
+          Expanded(
+            child: SizedBox(
+              height: 54,
               child: ElevatedButton(
-                onPressed: onNext,
+                onPressed: submitting ? null : onNext,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2D1B3D),
+                  backgroundColor: _C.prune,
+                  disabledBackgroundColor: _C.prune,
                   foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  disabledForegroundColor: Colors.white,
                   elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(_radius),
+                  ),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      _nextLabels[currentStep],
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
+                child: submitting
+                    ? const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.2,
+                              color: _C.lin,
+                            ),
+                          ),
+                          SizedBox(width: 10),
+                          Text(
+                            'Submitting…',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _nextLabels[currentStep],
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          if (!isLast) ...[
+                            const SizedBox(width: 6),
+                            const Icon(Icons.chevron_right_rounded, size: 22),
+                          ],
+                        ],
                       ),
-                    ),
-                    const SizedBox(width: 6),
-                    const Icon(Icons.chevron_right, size: 20),
-                  ],
-                ),
               ),
             ),
+          ),
         ],
       ),
     );
@@ -1519,9 +2173,14 @@ class _BottomNextBar extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Verify Email Modal
+// Verify email modal
 // ─────────────────────────────────────────────────────────────────────────────
 class _VerifyEmailModal extends StatefulWidget {
+  final String email;
+  final ValueChanged<String> onVerified;
+
+  const _VerifyEmailModal({required this.email, required this.onVerified});
+
   @override
   State<_VerifyEmailModal> createState() => _VerifyEmailModalState();
 }
@@ -1533,15 +2192,82 @@ class _VerifyEmailModalState extends State<_VerifyEmailModal> {
   );
   final List<FocusNode> _focusNodes = List.generate(6, (_) => FocusNode());
 
+  bool _sending = false;
+  bool _verifying = false;
+  bool _codeSent = false;
+  String? _errorMsg;
+
+  @override
+  void initState() {
+    super.initState();
+    _sendCode();
+  }
+
   @override
   void dispose() {
-    for (final c in _otpControllers) {
-      c.dispose();
-    }
-    for (final f in _focusNodes) {
-      f.dispose();
-    }
+    for (final c in _otpControllers) c.dispose();
+    for (final f in _focusNodes) f.dispose();
     super.dispose();
+  }
+
+  Future<void> _sendCode() async {
+    setState(() {
+      _sending = true;
+      _errorMsg = null;
+    });
+    try {
+      await BuyerApi.instance.sendOtp(widget.email);
+      if (!mounted) return;
+      setState(() {
+        _codeSent = true;
+        _sending = false;
+      });
+    } on BuyerApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMsg = e.message;
+        _sending = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMsg = 'Could not send the code. Check your connection.';
+        _sending = false;
+      });
+    }
+  }
+
+  Future<void> _verify() async {
+    final code = _otpControllers.map((c) => c.text).join();
+    if (code.length < 6) {
+      setState(() => _errorMsg = 'Enter the full 6-digit code.');
+      return;
+    }
+    setState(() {
+      _verifying = true;
+      _errorMsg = null;
+    });
+    try {
+      final token = await BuyerApi.instance.verifyOtp(widget.email, code);
+      if (!mounted) return;
+      widget.onVerified(token);
+      Navigator.pop(context);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Email verified.')));
+    } on BuyerApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMsg = e.message;
+        _verifying = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMsg = 'Verification failed. Check your connection.';
+        _verifying = false;
+      });
+    }
   }
 
   void _onOtpChanged(String value, int index) {
@@ -1549,6 +2275,10 @@ class _VerifyEmailModalState extends State<_VerifyEmailModal> {
       _focusNodes[index + 1].requestFocus();
     } else if (value.isEmpty && index > 0) {
       _focusNodes[index - 1].requestFocus();
+    }
+    // Auto-submit when all 6 digits entered
+    if (_otpControllers.every((c) => c.text.length == 1)) {
+      _verify();
     }
   }
 
@@ -1559,24 +2289,24 @@ class _VerifyEmailModalState extends State<_VerifyEmailModal> {
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      padding: EdgeInsets.fromLTRB(24, 28, 24, 28 + bottomInset),
+      padding: EdgeInsets.fromLTRB(24, 14, 24, 28 + bottomInset),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Drag handle
+          // Handle
           Container(
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: const Color(0xFFDDDDDD),
+              color: _C.border,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
           const SizedBox(height: 28),
 
-          // Mail icon with check badge
+          // Icon
           Stack(
             alignment: Alignment.center,
             children: [
@@ -1584,12 +2314,12 @@ class _VerifyEmailModalState extends State<_VerifyEmailModal> {
                 width: 80,
                 height: 80,
                 decoration: const BoxDecoration(
-                  color: Color(0xFFF0E8F8),
+                  color: _C.raisinSoft,
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
                   Icons.mail_outline_rounded,
-                  color: Color(0xFF2D1B3D),
+                  color: _C.prune,
                   size: 38,
                 ),
               ),
@@ -1597,40 +2327,35 @@ class _VerifyEmailModalState extends State<_VerifyEmailModal> {
                 bottom: 6,
                 right: 6,
                 child: Container(
-                  width: 22,
-                  height: 22,
+                  width: 24,
+                  height: 24,
                   decoration: const BoxDecoration(
-                    color: Color(0xFF2D1B3D),
+                    color: _C.prune,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.check, color: Colors.white, size: 13),
+                  child: const Icon(Icons.check, color: _C.lin, size: 14),
                 ),
               ),
             ],
           ),
-
           const SizedBox(height: 22),
 
-          // Title
           const Text(
             'Verify Your Email',
             style: TextStyle(
-              color: Color(0xFF1A1A2E),
+              color: _C.ink,
               fontSize: 22,
               fontWeight: FontWeight.w800,
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
-            "We've sent a 6-digit code to your email.",
+          Text(
+            _sending
+                ? 'Sending code to ${widget.email}…'
+                : "We sent a 6-digit code to ${widget.email}",
             textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Color(0xFF888888),
-              fontSize: 15,
-              height: 1.4,
-            ),
+            style: const TextStyle(color: _C.muted, fontSize: 14, height: 1.4),
           ),
-
           const SizedBox(height: 28),
 
           // OTP boxes
@@ -1646,86 +2371,107 @@ class _VerifyEmailModalState extends State<_VerifyEmailModal> {
                   textAlign: TextAlign.center,
                   keyboardType: TextInputType.number,
                   maxLength: 1,
+                  enabled: _codeSent && !_verifying,
+                  cursorColor: _C.prune,
                   style: const TextStyle(
                     fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF1A1A2E),
+                    fontWeight: FontWeight.w800,
+                    color: _C.ink,
                   ),
                   decoration: InputDecoration(
                     counterText: '',
+                    filled: true,
+                    fillColor: _C.background,
                     contentPadding: EdgeInsets.zero,
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(
-                        color: Color(0xFFCCCCCC),
-                        width: 1.5,
-                      ),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(
-                        color: Color(0xFF2D1B3D),
-                        width: 2,
-                      ),
-                    ),
+                    enabledBorder: _border(_C.border, 1.2),
+                    focusedBorder: _border(_C.prune, 1.8),
+                    disabledBorder: _border(_C.border, 1.2),
                   ),
-                  onChanged: (val) => _onOtpChanged(val, i),
+                  onChanged: (v) => _onOtpChanged(v, i),
                 ),
               );
             }),
           ),
 
-          const SizedBox(height: 24),
+          if (_errorMsg != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _errorMsg!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: _C.error, fontSize: 13),
+            ),
+          ],
 
-          // Resend Code
+          const SizedBox(height: 20),
+
+          // Resend
           GestureDetector(
-            onTap: () {
-              // resend code logic
-            },
+            onTap: _sending ? null : _sendCode,
+            behavior: HitTestBehavior.opaque,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: const [
-                Icon(Icons.refresh_rounded, color: Color(0xFFCC2222), size: 18),
-                SizedBox(width: 6),
-                Text(
+              children: [
+                if (_sending)
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.8,
+                      color: _C.raisin,
+                    ),
+                  )
+                else
+                  const Icon(Icons.refresh_rounded, color: _C.raisin, size: 18),
+                const SizedBox(width: 6),
+                const Text(
                   'Resend Code',
                   style: TextStyle(
-                    color: Color(0xFFCC2222),
+                    color: _C.raisin,
                     fontSize: 14,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ],
             ),
           ),
+          const SizedBox(height: 20),
 
-          const SizedBox(height: 24),
-
-          // Verify Email button
           SizedBox(
             width: double.infinity,
-            height: 52,
+            height: 54,
             child: ElevatedButton(
-              onPressed: () {
-                // verify OTP logic
-                Navigator.pop(context);
-              },
+              onPressed: (_codeSent && !_verifying && !_sending)
+                  ? _verify
+                  : null,
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2D1B3D),
+                backgroundColor: _C.prune,
+                disabledBackgroundColor: _C.prune,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(30),
-                ),
+                disabledForegroundColor: Colors.white,
                 elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(_radius),
+                ),
               ),
-              child: const Text(
-                'Verify Email',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-              ),
+              child: _verifying
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: _C.lin,
+                      ),
+                    )
+                  : const Text(
+                      'Verify Email',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
             ),
           ),
-
-          const SizedBox(height: 8),
         ],
       ),
     );
@@ -1733,10 +2479,11 @@ class _VerifyEmailModalState extends State<_VerifyEmailModal> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Registration Success Modal
+// Success modal
 // ─────────────────────────────────────────────────────────────────────────────
 class _SuccessModal extends StatelessWidget {
   final VoidCallback onBackToLogin;
+
   const _SuccessModal({required this.onBackToLogin});
 
   @override
@@ -1748,177 +2495,117 @@ class _SuccessModal extends StatelessWidget {
       ),
       padding: EdgeInsets.fromLTRB(
         28,
-        28,
+        14,
         28,
         28 + MediaQuery.of(context).padding.bottom,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Drag handle
           Container(
             width: 40,
             height: 4,
             decoration: BoxDecoration(
-              color: const Color(0xFFDDDDDD),
+              color: _C.border,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
           const SizedBox(height: 32),
 
-          // Vendo bag illustration with green checkmark + decorative dots
+          // The bag logo on a purple card, with a green check badge
           SizedBox(
-            width: 180,
-            height: 180,
+            width: 210,
+            height: 150,
             child: Stack(
-              alignment: Alignment.center,
+              clipBehavior: Clip.none,
               children: [
-                // Decorative scattered shapes
-                Positioned(
-                  top: 18,
-                  right: 28,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: const Color(0xFF9B59B6),
-                        width: 2,
+                Positioned.fill(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(28),
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [_C.pruneLight, _C.prune],
+                        ),
                       ),
+                      child: const CustomPaint(painter: _DecorPainter()),
                     ),
                   ),
                 ),
+                const Center(child: _VendoBagLogo(width: 78, height: 88)),
                 Positioned(
-                  top: 28,
-                  right: 10,
+                  top: -10,
+                  right: -10,
                   child: Container(
-                    width: 9,
-                    height: 9,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF2D1B3D),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-                Positioned(
-                  top: 48,
-                  right: 4,
-                  child: Container(
-                    width: 12,
-                    height: 12,
+                    width: 46,
+                    height: 46,
                     decoration: BoxDecoration(
+                      color: const Color(0xFF2ECC71),
                       shape: BoxShape.circle,
-                      border: Border.all(
-                        color: const Color(0xFFE8873A),
-                        width: 2,
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  bottom: 42,
-                  right: 18,
-                  child: Container(
-                    width: 11,
-                    height: 11,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFE8B84B),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                ),
-
-                // Big Vendo bag
-                SizedBox(
-                  width: 140,
-                  height: 155,
-                  child: CustomPaint(painter: _SuccessBagPainter()),
-                ),
-
-                // Green checkmark badge
-                Positioned(
-                  top: 38,
-                  right: 22,
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFF2ECC71),
-                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 3),
                     ),
                     child: const Icon(
                       Icons.check_rounded,
                       color: Colors.white,
-                      size: 24,
+                      size: 26,
                     ),
                   ),
                 ),
               ],
             ),
           ),
-
-          const SizedBox(height: 24),
-
-          // Title
+          const SizedBox(height: 28),
           const Text(
             'Thank you for Registering',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Color(0xFF1A1A2E),
+              color: _C.ink,
               fontSize: 22,
               fontWeight: FontWeight.w800,
             ),
           ),
           const SizedBox(height: 10),
-
-          // Subtitle bold
           const Text(
             'Your registration is pending review',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Color(0xFF1A1A2E),
-              fontSize: 14,
+              color: _C.raisin,
+              fontSize: 14.5,
               fontWeight: FontWeight.w700,
             ),
           ),
           const SizedBox(height: 6),
-
-          // Description
           const Text(
             'You will receive an email once your account has\nbeen approved by the administrator',
             textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Color(0xFF888888),
-              fontSize: 14,
-              height: 1.5,
-            ),
+            style: TextStyle(color: _C.muted, fontSize: 14, height: 1.5),
           ),
-
           const SizedBox(height: 28),
-
-          // Back to Login button
           SizedBox(
             width: double.infinity,
-            height: 52,
+            height: 54,
             child: ElevatedButton(
               onPressed: onBackToLogin,
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2D1B3D),
+                backgroundColor: _C.prune,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
                 elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(_radius),
+                ),
               ),
               child: const Text(
                 'Back to Login',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
+                ),
               ),
             ),
           ),
-
-          const SizedBox(height: 8),
         ],
       ),
     );
@@ -1926,179 +2613,39 @@ class _SuccessModal extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Success Bag Painter — large colored vendo bag for the success modal
+// Still decoration for purple areas: soft circles and stars (no movement)
 // ─────────────────────────────────────────────────────────────────────────────
-class _SuccessBagPainter extends CustomPainter {
+class _DecorPainter extends CustomPainter {
+  const _DecorPainter();
+
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
 
-    void drawBag(
-      double l,
-      double r,
-      double t,
-      double b,
-      Color color,
-      double radius,
-    ) {
-      final paint = Paint()
-        ..color = color
-        ..style = PaintingStyle.fill;
-      final path = Path()
-        ..moveTo(l + radius, t)
-        ..lineTo(r - radius, t)
-        ..quadraticBezierTo(r, t, r, t + radius)
-        ..lineTo(r, b - radius)
-        ..quadraticBezierTo(r, b, r - radius, b)
-        ..lineTo(l + radius, b)
-        ..quadraticBezierTo(l, b, l, b - radius)
-        ..lineTo(l, t + radius)
-        ..quadraticBezierTo(l, t, l + radius, t)
-        ..close();
-      canvas.drawPath(path, paint);
+    canvas.drawCircle(
+      Offset(w * 0.88, h * 0.14),
+      90,
+      Paint()..color = Colors.white.withAlpha(16),
+    );
+    canvas.drawCircle(
+      Offset(w * 0.06, h * 0.78),
+      80,
+      Paint()..color = _C.raisin.withAlpha(46),
+    );
+
+    final star = Paint();
+    for (int i = 0; i < 26; i++) {
+      final x = _hash(i * 3 + 1) * w;
+      final y = _hash(i * 3 + 2) * h * 0.92;
+      final r = 0.7 + _hash(i * 3 + 3) * 1.2;
+      star.color = Colors.white.withAlpha(
+        (25 + 105 * _hash(i * 3 + 4)).round(),
+      );
+      canvas.drawCircle(Offset(x, y), r, star);
     }
-
-    // Tan/yellow back layer
-    drawBag(w * 0.22, w * 1.0, h * 0.30, h * 1.0, const Color(0xFFE8C97A), 14);
-    // Brown/orange middle layer
-    drawBag(
-      w * 0.12,
-      w * 0.90,
-      h * 0.30,
-      h * 0.96,
-      const Color(0xFFC0663A),
-      14,
-    );
-    // Dark purple main bag
-    drawBag(
-      w * 0.02,
-      w * 0.78,
-      h * 0.30,
-      h * 0.92,
-      const Color(0xFF2D1B3D),
-      14,
-    );
-
-    // Handle
-    final cx = (w * 0.02 + w * 0.78) / 2;
-    canvas.drawArc(
-      Rect.fromCenter(
-        center: Offset(cx, h * 0.30),
-        width: (w * 0.78 - w * 0.02) * 0.44,
-        height: h * 0.26,
-      ),
-      3.14159,
-      3.14159,
-      false,
-      Paint()
-        ..color = const Color(0xFF2D1B3D)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 7
-        ..strokeCap = StrokeCap.round,
-    );
-
-    // Eyes
-    final eyeY = h * 0.30 + (h * 0.92 - h * 0.30) * 0.22;
-    final eyePaint = Paint()
-      ..color = const Color(0xFFE8873A)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(
-      Offset(cx - (w * 0.78 - w * 0.02) * 0.18, eyeY),
-      5,
-      eyePaint,
-    );
-    canvas.drawCircle(
-      Offset(cx + (w * 0.78 - w * 0.02) * 0.18, eyeY),
-      5,
-      eyePaint,
-    );
-
-    // "V" letter
-    final tp = TextPainter(
-      text: const TextSpan(
-        text: 'V',
-        style: TextStyle(
-          color: Colors.white,
-          fontSize: 38,
-          fontWeight: FontWeight.w900,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(canvas, Offset(cx - tp.width / 2, h * 0.44));
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Image Source Tile
-// ─────────────────────────────────────────────────────────────────────────────
-class _ImageSourceTile extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  const _ImageSourceTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF8F5FB),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE0E0E0), width: 1.2),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 46,
-              height: 46,
-              decoration: const BoxDecoration(
-                color: Color(0xFFEEE6F5),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: const Color(0xFF2D1B3D), size: 22),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      color: Color(0xFF1A1A2E),
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      color: Color(0xFF888888),
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Icon(Icons.chevron_right, color: Color(0xFFAAAAAA), size: 20),
-          ],
-        ),
-      ),
-    );
-  }
+  bool shouldRepaint(covariant _DecorPainter old) => false;
 }

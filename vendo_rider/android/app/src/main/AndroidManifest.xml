@@ -7,7 +7,7 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-feature android:name="android.hardware.camera" android:required="false"/>
     <application
-        android:label="vendo_rider"
+        android:label="Vendo Xpress"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
