@@ -2,11 +2,11 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:vendo_rider/features/dashboard/screens/deliveries_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/earnings_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/home_screen.dart';
-import 'package:vendo_rider/features/dashboard/screens/map_screen.dart';
+import 'package:vendo_rider/features/dashboard/screens/notifications_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/profile_screen.dart';
-import 'package:vendo_rider/features/work/screens/rider_work_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the Home, Deliveries, Earnings and Profile screens
@@ -23,7 +23,7 @@ class _DashColors {
 class _Tab {
   static const home = 0;
   static const parcels = 1;
-  static const map = 2;
+  static const notifications = 2;
   static const earnings = 3;
   static const profile = 4;
   // ignore_for_file: unused_field
@@ -39,7 +39,7 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   int _selectedTab = _Tab.home;
   final _homeKey = GlobalKey<HomeScreenState>();
-  final _mapKey = GlobalKey<MapScreenState>();
+  final _notificationsKey = GlobalKey<NotificationsScreenState>();
 
   late final List<Widget> _pages = [
     HomeScreen(
@@ -47,8 +47,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       onOpenParcels: () => _onTabSelected(_Tab.parcels),
       onOpenEarnings: () => _onTabSelected(_Tab.earnings),
     ),
-    const RiderWorkScreen(),
-    MapScreen(key: _mapKey, destination: null, destinationLabel: null),
+    const DeliveriesScreen(),
+    NotificationsScreen(key: _notificationsKey),
     const EarningsScreen(),
     const ProfileScreen(),
   ];
@@ -65,9 +65,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       label: 'Parcels',
     ),
     _NavItem(
-      icon: Icons.location_on_outlined,
-      activeIcon: Icons.location_on_rounded,
-      label: 'Map',
+      icon: Icons.notifications_none_rounded,
+      activeIcon: Icons.notifications_rounded,
+      label: 'Notifications',
     ),
     _NavItem(
       icon: Icons.account_balance_wallet_outlined,
@@ -84,13 +84,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _onTabSelected(int index) {
     if (index == _selectedTab) {
       if (index == _Tab.home) _homeKey.currentState?.refreshAssignments();
-      if (index == _Tab.map) _mapKey.currentState?.refreshDestination();
+      if (index == _Tab.notifications) _notificationsKey.currentState?.refreshNotifications();
       return;
     }
     HapticFeedback.selectionClick();
     setState(() => _selectedTab = index);
     if (index == _Tab.home) _homeKey.currentState?.refreshAssignments();
-    if (index == _Tab.map) _mapKey.currentState?.refreshDestination();
+    if (index == _Tab.notifications) _notificationsKey.currentState?.refreshNotifications();
   }
 
   @override

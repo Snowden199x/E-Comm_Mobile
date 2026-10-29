@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
+import 'package:vendo_rider/features/dashboard/screens/delivery_detail_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vendo brand palette (from the logo)
@@ -572,7 +573,7 @@ class HomeScreenState extends State<HomeScreen>
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
-                      order['status']?.toString().replaceAll('_', ' ') ?? 'Assigned',
+                      riderStageBadge(riderStageOf(order)),
                       style: const TextStyle(
                         color: _C.brique,
                         fontSize: 11,
@@ -593,7 +594,9 @@ class HomeScreenState extends State<HomeScreen>
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'Status: ${order['status']?.toString().replaceAll('_', ' ') ?? 'Assigned'}',
+                      riderStageTitle(order),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: _C.muted, fontSize: 13),
                     ),
                   ),

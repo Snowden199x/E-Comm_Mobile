@@ -724,7 +724,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ]);
     } else if (step == 2) {
       checks.addAll([
-        ('phone', _blank(_phoneCtrl)),
+        (
+          'phone',
+          !RegExp(r'^09\d{9}$').hasMatch(_phoneCtrl.text.trim()),
+        ),
         ('province', _provinceCode == null),
         ('city', _cityCode == null),
         ('barangay', _barangayCode == null),
@@ -1412,6 +1415,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
             hint: 'e.g. 09XX XXX XXXX',
             icon: Icons.phone_outlined,
             keyboard: TextInputType.phone,
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(11),
+            ],
           ),
           required: true,
         ),
@@ -2211,6 +2218,7 @@ class _Field extends StatelessWidget {
   final IconData? icon;
   final bool obscure, readOnly;
   final TextInputType? keyboard;
+  final List<TextInputFormatter>? inputFormatters;
   final Widget? suffix;
   final VoidCallback? onTap;
   final ValueChanged<String>? onChanged;
@@ -2227,6 +2235,7 @@ class _Field extends StatelessWidget {
     this.obscure = false,
     this.readOnly = false,
     this.keyboard,
+    this.inputFormatters,
     this.suffix,
     this.onTap,
     this.onChanged,
@@ -2250,6 +2259,7 @@ class _Field extends StatelessWidget {
               obscureText: obscure,
               readOnly: readOnly,
               keyboardType: keyboard,
+              inputFormatters: inputFormatters,
               onTap: onTap,
               onChanged: onChanged,
               cursorColor: _C.prune,

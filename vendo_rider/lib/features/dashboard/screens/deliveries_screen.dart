@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:vendo_rider/core/api/rider_api.dart';
+import 'package:vendo_rider/features/auth/screens/login_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/delivery_detail_screen.dart';
-import 'package:vendo_rider/features/dashboard/widgets/shared_widgets.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Same Vendo palette as home_screen.dart
+// Same Vendo palette as the rest of the dashboard
 //  • Prune   → dark header, main text
 //  • Brique  → accent (active / on the way)
 //  • Lin     → soft gold for key numbers on dark
@@ -24,6 +25,7 @@ class _C {
 
   static const raisinSoft = Color(0xFFF4EDF5);
   static const briqueSoft = Color(0xFFF8EAE5);
+  static const goldSoft = Color(0xFFF8F1DC);
 }
 
 const double _radius = 16;
@@ -36,108 +38,169 @@ class DeliveriesScreen extends StatefulWidget {
 }
 
 class _DeliveriesScreenState extends State<DeliveriesScreen> {
+  List<Map<String, dynamic>> _assignments = [];
+  bool _loading = true;
+  String? _error;
+  String? _name;
+  String? _center;
+  String? _vehicleType;
   String _activeFilter = 'All';
 
-  static const _allDeliveries = [
-    DeliveryData(
-      id: '#VD-00125',
-      customer: 'Pedro Bautista',
-      address: '88 Del Monte Ave., QC',
-      status: 'On the way',
-      amount: '₱ 85',
-      time: 'Today, 11:30 AM',
-    ),
-    DeliveryData(
-      id: '#VD-00124',
-      customer: 'Maria Santos',
-      address: '45 Rizal St., QC',
-      status: 'Delivered',
-      amount: '₱ 80',
-      time: 'Today, 10:42 AM',
-    ),
-    DeliveryData(
-      id: '#VD-00123',
-      customer: 'Jose Reyes',
-      address: '12 Mabini Ave., Manila',
-      status: 'Delivered',
-      amount: '₱ 95',
-      time: 'Today, 9:15 AM',
-    ),
-    DeliveryData(
-      id: '#VD-00122',
-      customer: 'Ana Cruz',
-      address: '7 Lapu-Lapu St., Pasay',
-      status: 'Delivered',
-      amount: '₱ 70',
-      time: 'Today, 8:05 AM',
-    ),
-    DeliveryData(
-      id: '#VD-00121',
-      customer: 'Ben Reyes',
-      address: '3 Katipunan Ave., QC',
-      status: 'Pending',
-      amount: '₱ 90',
-      time: 'Today, 7:50 AM',
-    ),
-  ];
-
-  static const _filters = ['All', 'Pending', 'On the way', 'Delivered'];
-
-  List<DeliveryData> get _filtered => _activeFilter == 'All'
-      ? _allDeliveries
-      : _allDeliveries.where((d) => d.status == _activeFilter).toList();
-
-  int _count(String filter) => filter == 'All'
-      ? _allDeliveries.length
-      : _allDeliveries.where((d) => d.status == filter).length;
-
-  // Every order in the list counts toward today's work
-  int get _workTotal => _allDeliveries.length;
-
-  double get _progress =>
-      _workTotal == 0 ? 0 : _count('Delivered') / _workTotal;
-
-  void _selectFilter(String filter) {
-    if (filter == _activeFilter) return;
-    HapticFeedback.selectionClick();
-    setState(() => _activeFilter = filter);
+  @override
+  void initState() {
+    super.initState();
+    _refresh(showSpinner: true);
   }
 
-  void _openDetails() {
-    Navigator.push(
+  Future<void> _refresh({bool showSpinner = false}) async {
+    if (mounted) {
+      setState(() {
+        if (showSpinner) _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final work = await RiderApi.instance.assignments();
+      final name = await RiderApi.instance.riderName();
+      final center = await RiderApi.instance.centerName();
+      final vehicleType = await RiderApi.instance.riderVehicleType();
+      if (mounted) {
+        setState(() {
+          _assignments = work;
+          _name = name;
+          _center = center;
+          _vehicleType = vehicleType;
+        });
+      }
+    } on RiderApiException catch (error) {
+      if (mounted && (error.statusCode == 401 || error.statusCode == 403)) {
+        await RiderApi.instance.clearSession();
+        if (!mounted) return;
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+          (_) => false,
+        );
+        return;
+      }
+      if (mounted) setState(() => _error = error.message);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error = 'Cannot reach Vendo. Check your connection and retry.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  List<Map<String, dynamic>> get _visible => _assignments
+      .where((order) => riderSupportsAssignment(order, _vehicleType))
+      .toList();
+
+  int _countStage(List<Map<String, dynamic>> orders, Set<RiderStage> stages) =>
+      orders.where((order) => stages.contains(riderStageOf(order))).length;
+
+  List<String> _filtersFor(List<Map<String, dynamic>> orders) {
+    final stages = orders.map(riderStageOf).toSet();
+    return [
+      'All',
+      if (stages.contains(RiderStage.readyForPickup)) 'Pickup',
+      if (stages.contains(RiderStage.onTheWayToHub) ||
+          stages.contains(RiderStage.onTheWayToBuyer))
+        'On the way',
+      if (stages.contains(RiderStage.forDelivery)) 'Delivery',
+      if (stages.contains(RiderStage.linehaul)) 'Linehaul',
+    ];
+  }
+
+  bool _matchesFilter(Map<String, dynamic> order, String filter) {
+    final stage = riderStageOf(order);
+    return switch (filter) {
+      'Pickup' => stage == RiderStage.readyForPickup,
+      'On the way' =>
+        stage == RiderStage.onTheWayToHub ||
+            stage == RiderStage.onTheWayToBuyer,
+      'Delivery' => stage == RiderStage.forDelivery,
+      'Linehaul' => stage == RiderStage.linehaul,
+      _ => true,
+    };
+  }
+
+  int _countFilter(List<Map<String, dynamic>> orders, String filter) =>
+      orders.where((order) => _matchesFilter(order, filter)).length;
+
+  Future<void> _openDetails(Map<String, dynamic> order) async {
+    await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const DeliveryDetailScreen()),
+      MaterialPageRoute(builder: (_) => DeliveryDetailScreen(order: order)),
     );
+    if (mounted) await _refresh();
   }
 
   @override
   Widget build(BuildContext context) {
+    final orders = _visible;
+    final filters = _filtersFor(orders);
+    final activeFilter = filters.contains(_activeFilter)
+        ? _activeFilter
+        : 'All';
+    final filtered = orders
+        .where((order) => _matchesFilter(order, activeFilter))
+        .toList();
+    final onTheWay = _countStage(orders, {
+      RiderStage.onTheWayToHub,
+      RiderStage.onTheWayToBuyer,
+    });
+    final isTruck = _vehicleType == 'Truck';
+
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      // Light status bar icons because the header is dark
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
         backgroundColor: _C.background,
         body: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildHeader(),
+            _buildHeader(
+              total: orders.length,
+              pickup: _countStage(orders, {RiderStage.readyForPickup}),
+              onTheWay: onTheWay,
+              deliver: isTruck
+                  ? _countStage(orders, {RiderStage.linehaul})
+                  : _countStage(orders, {RiderStage.forDelivery}),
+              deliverLabel: isTruck ? 'Linehaul' : 'Delivery',
+            ),
             const SizedBox(height: 16),
-            _buildFilters(),
+            if (filters.length > 1)
+              _buildFilters(filters, orders, activeFilter),
             const SizedBox(height: 12),
-            Expanded(child: _buildList()),
+            Expanded(
+              child: _loading && _assignments.isEmpty
+                  ? const Center(child: CircularProgressIndicator())
+                  : _error != null && _assignments.isEmpty
+                  ? _buildErrorState()
+                  : _buildList(filtered, activeFilter),
+            ),
           ],
         ),
       ),
     );
   }
 
-  // ── Dark header: title + quick summary ───────────────────────────────────
-  Widget _buildHeader() {
+  // ── Dark header: title + summary ─────────────────────────────────
+  Widget _buildHeader({
+    required int total,
+    required int pickup,
+    required int onTheWay,
+    required int deliver,
+    required String deliverLabel,
+  }) {
     final topInset = MediaQuery.of(context).padding.top;
 
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.fromLTRB(20, topInset + 20, 20, 22),
+      padding: EdgeInsets.fromLTRB(20, topInset + 16, 12, 22),
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
@@ -152,25 +215,63 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'My Deliveries',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'My Deliveries',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Refresh assignments',
+                onPressed: _loading ? null : () => _refresh(showSpinner: true),
+                icon: const Icon(Icons.refresh, color: Colors.white),
+              ),
+            ],
           ),
-          const SizedBox(height: 2),
-          Text(
-            '${_allDeliveries.length} orders in your list',
-            style: const TextStyle(
-              color: Color(0xB3FFFFFF),
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _name == null
+                      ? 'Assigned work from Logistics'
+                      : 'Hello, $_name',
+                  style: const TextStyle(
+                    color: Color(0xB3FFFFFF),
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$total ${total == 1 ? 'parcel' : 'parcels'} in your list',
+                  style: const TextStyle(
+                    color: Color(0xB3FFFFFF),
+                    fontSize: 13,
+                  ),
+                ),
+                if (_center != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      'Logistics hub: $_center',
+                      style: const TextStyle(
+                        color: Color(0xB3FFFFFF),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
           const SizedBox(height: 18),
-          // Glass-style summary strip (same look as the earnings card on Home)
           Container(
             padding: const EdgeInsets.symmetric(vertical: 14),
             decoration: BoxDecoration(
@@ -178,67 +279,13 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
               borderRadius: BorderRadius.circular(_radius),
               border: Border.all(color: const Color(0x26FFFFFF)),
             ),
-            child: Column(
+            child: Row(
               children: [
-                // The three steps of a delivery, in order
-                Row(
-                  children: [
-                    _SummaryItem(
-                      value: '${_count('Pending')}',
-                      label: 'Pending',
-                    ),
-                    const _SummaryDivider(),
-                    _SummaryItem(
-                      value: '${_count('On the way')}',
-                      label: 'On the way',
-                    ),
-                    const _SummaryDivider(),
-                    _SummaryItem(
-                      value: '${_count('Delivered')}',
-                      label: 'Delivered',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                // Simple progress: how many are done out of all active orders
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          const Expanded(
-                            child: Text(
-                              'Delivery progress',
-                              style: TextStyle(
-                                color: Color(0xB3FFFFFF),
-                                fontSize: 12,
-                              ),
-                            ),
-                          ),
-                          Text(
-                            '${_count('Delivered')} of $_workTotal delivered',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: _progress,
-                          minHeight: 6,
-                          backgroundColor: const Color(0x26FFFFFF),
-                          valueColor: const AlwaysStoppedAnimation(_C.lin),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                _SummaryItem(value: '$pickup', label: 'Pickup'),
+                const _SummaryDivider(),
+                _SummaryItem(value: '$onTheWay', label: 'On the way'),
+                const _SummaryDivider(),
+                _SummaryItem(value: '$deliver', label: deliverLabel),
               ],
             ),
           ),
@@ -247,21 +294,29 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     );
   }
 
-  // ── Filter chips with counts ─────────────────────────────────────────────
-  Widget _buildFilters() {
+  // ── Filter chips with counts ─────────────────────────────────────
+  Widget _buildFilters(
+    List<String> filters,
+    List<Map<String, dynamic>> orders,
+    String activeFilter,
+  ) {
     return SizedBox(
       height: 40,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 20),
-        itemCount: _filters.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemCount: filters.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (_, i) {
-          final filter = _filters[i];
-          final isActive = filter == _activeFilter;
+          final filter = filters[i];
+          final isActive = filter == activeFilter;
 
           return GestureDetector(
-            onTap: () => _selectFilter(filter),
+            onTap: () {
+              if (filter == activeFilter) return;
+              HapticFeedback.selectionClick();
+              setState(() => _activeFilter = filter);
+            },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 200),
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -284,7 +339,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    '${_count(filter)}',
+                    '${_countFilter(orders, filter)}',
                     style: TextStyle(
                       color: isActive ? _C.lin : _C.muted,
                       fontSize: 12,
@@ -300,83 +355,149 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     );
   }
 
-  // ── List (or friendly empty state) ───────────────────────────────────────
-  Widget _buildList() {
-    final items = _filtered;
+  // ── List (or truthful loading / error / empty state) ─────────────
+  Widget _buildList(List<Map<String, dynamic>> items, String activeFilter) {
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+        itemCount: items.isEmpty ? 1 : items.length + (_error == null ? 0 : 1),
+        separatorBuilder: (_, _) => const SizedBox(height: 12),
+        itemBuilder: (_, index) {
+          if (items.isEmpty) {
+            return _error == null ? _buildEmptyState() : _buildErrorState();
+          }
+          if (_error != null && index == 0) return _buildErrorBanner();
+          final item = items[_error == null ? index : index - 1];
+          return _DeliveryCard(order: item, onTap: () => _openDetails(item));
+        },
+      ),
+    );
+  }
 
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 220),
-      child: items.isEmpty
-          ? const _EmptyState(key: ValueKey('empty'))
-          : ListView.separated(
-              key: ValueKey(_activeFilter),
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
-              itemCount: items.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (_, i) =>
-                  _DeliveryCard(delivery: items[i], onTap: _openDetails),
+  Widget _buildEmptyState() {
+    return Card(
+      elevation: 0,
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(_radius),
+        side: const BorderSide(color: _C.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            const CircleAvatar(
+              radius: 28,
+              backgroundColor: _C.raisinSoft,
+              child: Icon(
+                Icons.inventory_2_outlined,
+                color: _C.raisin,
+                size: 28,
+              ),
             ),
+            const SizedBox(height: 14),
+            const Text(
+              'No parcels here',
+              style: TextStyle(
+                color: _C.ink,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _vehicleType == 'Truck'
+                  ? 'No truck linehaul assignments yet. The Main Hub assigns a Truck Rider after sorting the parcel.'
+                  : 'No pickup or delivery assignments yet. Pull down to refresh.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: _C.muted,
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorState() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            _error ?? 'Could not load assignments.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: _C.ink),
+          ),
+          const SizedBox(height: 10),
+          TextButton(
+            onPressed: () => _refresh(showSpinner: true),
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorBanner() {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: _C.briqueSoft,
+        borderRadius: BorderRadius.circular(_radius),
+        border: Border.all(color: _C.brique.withAlpha(60)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off_outlined, color: _C.brique, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '$_error Showing the last loaded assignments.',
+              style: const TextStyle(color: _C.ink, fontSize: 12, height: 1.4),
+            ),
+          ),
+          TextButton(
+            onPressed: () => _refresh(showSpinner: true),
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Status look (color + icon) for each delivery status
-// ─────────────────────────────────────────────────────────────────────────────
-class _StatusStyle {
-  final Color fg, bg;
-  final IconData icon;
-
-  const _StatusStyle(this.fg, this.bg, this.icon);
-
-  static _StatusStyle of(String status) {
-    switch (status) {
-      case 'On the way':
-        return const _StatusStyle(
-          _C.brique,
-          _C.briqueSoft,
-          Icons.local_shipping_rounded,
-        );
-      case 'Delivered':
-        return const _StatusStyle(
-          _C.raisin,
-          _C.raisinSoft,
-          Icons.check_circle_rounded,
-        );
-      case 'Pending':
-        return const _StatusStyle(
-          Color(0xFF8A6D1A),
-          Color(0xFFF8F1DC),
-          Icons.schedule_rounded,
-        );
-      default: // Fallback for any unknown status
-        return const _StatusStyle(
-          _C.muted,
-          Color(0xFFF1EEF1),
-          Icons.help_outline_rounded,
-        );
-    }
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// One delivery card
+// One assigned parcel card
 // ─────────────────────────────────────────────────────────────────────────────
 class _DeliveryCard extends StatelessWidget {
-  final DeliveryData delivery;
+  final Map<String, dynamic> order;
   final VoidCallback onTap;
 
-  const _DeliveryCard({required this.delivery, required this.onTap});
+  const _DeliveryCard({required this.order, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final style = _StatusStyle.of(delivery.status);
+    final stage = riderStageOf(order);
+    final style = _StageStyle.of(stage);
+    final onTheWay =
+        stage == RiderStage.onTheWayToHub ||
+        stage == RiderStage.onTheWayToBuyer;
+    final tracking = order['tracking_number']?.toString() ?? 'Assigned parcel';
 
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(_radius),
-        border: Border.all(color: _C.border),
+        border: Border.all(
+          color: onTheWay ? _C.brique.withAlpha(80) : _C.border,
+        ),
       ),
       child: Material(
         color: Colors.transparent,
@@ -389,7 +510,6 @@ class _DeliveryCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Top: status icon, order id + customer, status chip
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -408,7 +528,9 @@ class _DeliveryCard extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            delivery.id,
+                            tracking,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               color: _C.muted,
                               fontSize: 12,
@@ -417,13 +539,14 @@ class _DeliveryCard extends StatelessWidget {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            delivery.customer,
-                            maxLines: 1,
+                            riderStageTitle(order),
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: _C.ink,
-                              fontSize: 16,
+                            style: TextStyle(
+                              color: onTheWay ? _C.brique : _C.ink,
+                              fontSize: 15,
                               fontWeight: FontWeight.w700,
+                              height: 1.3,
                             ),
                           ),
                         ],
@@ -440,7 +563,7 @@ class _DeliveryCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        delivery.status,
+                        riderStageBadge(stage),
                         style: TextStyle(
                           color: style.fg,
                           fontSize: 11,
@@ -450,66 +573,59 @@ class _DeliveryCard extends StatelessWidget {
                     ),
                   ],
                 ),
-
                 const SizedBox(height: 12),
-
-                // Address
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(
-                      Icons.location_on_outlined,
+                    Icon(
+                      onTheWay
+                          ? Icons.local_shipping_outlined
+                          : Icons.location_on_outlined,
                       size: 16,
                       color: _C.raisin,
                     ),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        delivery.address,
-                        maxLines: 1,
+                        riderStageSubtitle(order),
+                        maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: _C.ink,
                           fontSize: 13,
                           fontWeight: FontWeight.w500,
+                          height: 1.35,
                         ),
                       ),
                     ),
                   ],
                 ),
-
                 const SizedBox(height: 12),
                 const Divider(height: 1, thickness: 1, color: _C.border),
                 const SizedBox(height: 12),
-
-                // Bottom: time and fee
                 Row(
                   children: [
-                    const Icon(
-                      Icons.access_time_rounded,
-                      size: 15,
-                      color: _C.muted,
-                    ),
-                    const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        delivery.time,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _C.muted, fontSize: 12),
+                        riderAssignmentLabel(order),
+                        style: const TextStyle(
+                          color: _C.muted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                    Text(
-                      delivery.amount,
-                      style: const TextStyle(
+                    const Text(
+                      'View details',
+                      style: TextStyle(
                         color: _C.prune,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(width: 2),
                     const Icon(
                       Icons.chevron_right_rounded,
-                      color: _C.muted,
+                      color: _C.prune,
                       size: 20,
                     ),
                   ],
@@ -523,9 +639,45 @@ class _DeliveryCard extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Small widgets
-// ─────────────────────────────────────────────────────────────────────────────
+class _StageStyle {
+  final Color fg, bg;
+  final IconData icon;
+
+  const _StageStyle(this.fg, this.bg, this.icon);
+
+  static _StageStyle of(RiderStage stage) => switch (stage) {
+    RiderStage.readyForPickup => const _StageStyle(
+      Color(0xFF8A6D1A),
+      _C.goldSoft,
+      Icons.shopping_bag_outlined,
+    ),
+    RiderStage.onTheWayToHub => const _StageStyle(
+      _C.brique,
+      _C.briqueSoft,
+      Icons.local_shipping_rounded,
+    ),
+    RiderStage.forDelivery => const _StageStyle(
+      _C.raisin,
+      _C.raisinSoft,
+      Icons.inventory_2_outlined,
+    ),
+    RiderStage.onTheWayToBuyer => const _StageStyle(
+      _C.brique,
+      _C.briqueSoft,
+      Icons.near_me_rounded,
+    ),
+    RiderStage.linehaul => const _StageStyle(
+      _C.prune,
+      _C.raisinSoft,
+      Icons.local_shipping_outlined,
+    ),
+    RiderStage.other => const _StageStyle(
+      _C.muted,
+      Color(0xFFF1EEF1),
+      Icons.inventory_2_outlined,
+    ),
+  };
+}
 
 class _SummaryItem extends StatelessWidget {
   final String value, label;
@@ -550,6 +702,8 @@ class _SummaryItem extends StatelessWidget {
           const SizedBox(height: 2),
           Text(
             label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(color: Color(0xB3FFFFFF), fontSize: 12),
           ),
         ],
@@ -564,39 +718,5 @@ class _SummaryDivider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(width: 1, height: 32, color: const Color(0x26FFFFFF));
-  }
-}
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          CircleAvatar(
-            radius: 32,
-            backgroundColor: _C.raisinSoft,
-            child: Icon(Icons.inventory_2_outlined, color: _C.raisin, size: 30),
-          ),
-          SizedBox(height: 16),
-          Text(
-            'No deliveries here',
-            style: TextStyle(
-              color: _C.ink,
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          SizedBox(height: 4),
-          Text(
-            'Try another filter to see more orders.',
-            style: TextStyle(color: _C.muted, fontSize: 13),
-          ),
-        ],
-      ),
-    );
   }
 }

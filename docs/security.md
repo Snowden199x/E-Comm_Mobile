@@ -39,4 +39,4 @@ The Google Maps key in `android/app/src/main/AndroidManifest.xml` is currently t
 
 ## Source references
 
-`vendo_rider/lib/core/api/rider_api.dart`, `vendo_rider/lib/features/auth/screens/login_screen.dart`, `vendo_rider/lib/features/auth/screens/register_screen.dart`, `vendo_rider/lib/features/work/screens/rider_work_screen.dart`, Android manifests, and the [web Rider scan API contract](../../E-Comm_Web/docs/features/courier/scan-api/spec.md).
+`vendo_rider/lib/core/api/rider_api.dart`, `vendo_rider/lib/features/auth/screens/login_screen.dart`, `vendo_rider/lib/features/auth/screens/register_screen.dart`, `vendo_rider/lib/features/dashboard/screens/deliveries_screen.dart`, `vendo_rider/lib/features/dashboard/screens/delivery_detail_screen.dart`, Android manifests, and the [web Rider scan API contract](../../E-Comm_Web/docs/features/courier/scan-api/spec.md).

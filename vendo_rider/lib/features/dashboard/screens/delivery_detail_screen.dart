@@ -1,18 +1,17 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:latlong2/latlong.dart';
-import 'package:vendo_rider/features/dashboard/screens/map_screen.dart';
-
-const _kDestination = LatLng(14.2789, 121.4244);
-const _kDestinationLabel = 'Brgy. Bubukal, Santa Cruz, Laguna';
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:vendo_rider/core/api/rider_api.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Same Vendo palette as the other screens
+// Same Vendo palette as the rest of the dashboard
 //  • Prune   → dark header, main button, main text
 //  • Brique  → accent (status, drop-off, section bars)
 //  • Lin     → soft gold for key details on dark
@@ -32,287 +31,578 @@ class _C {
 
   static const raisinSoft = Color(0xFFF4EDF5);
   static const briqueSoft = Color(0xFFF8EAE5);
+  static const goldSoft = Color(0xFFF8F1DC);
   static const disabled = Color(0xFFD9D2DA);
   static const shadow = Color(0x1A412143);
 }
 
 const double _radius = 16;
 
-/// The two photos a rider must add before confirming
-enum _ProofSlot { parcel, delivered }
+// ─────────────────────────────────────────────────────────────────────────────
+// Assignment helpers (shared with deliveries_screen.dart)
+// ─────────────────────────────────────────────────────────────────────────────
 
+/// Rider-facing stage of an assigned parcel. Derived only from the server
+/// status the assignment API returned; the app never guesses a stage.
+enum RiderStage {
+  readyForPickup,
+  onTheWayToHub,
+  forDelivery,
+  onTheWayToBuyer,
+  linehaul,
+  other,
+}
+
+Map<String, dynamic> _map(dynamic value) =>
+    value is Map ? Map<String, dynamic>.from(value) : const <String, dynamic>{};
+
+String _text(dynamic value) => value?.toString().trim() ?? '';
+
+RiderStage riderStageOf(Map<String, dynamic> order) {
+  if (order['assignment'] == 'linehaul') return RiderStage.linehaul;
+  switch (order['status']?.toString()) {
+    case 'ready_for_pickup':
+      return RiderStage.readyForPickup;
+    case 'picked_up':
+      return RiderStage.onTheWayToHub;
+    case 'assigned_to_rider':
+      return RiderStage.forDelivery;
+    case 'out_for_delivery':
+      return RiderStage.onTheWayToBuyer;
+    default:
+      return RiderStage.other;
+  }
+}
+
+String riderAssignmentLabel(Map<String, dynamic> order) {
+  switch (order['assignment']) {
+    case 'pickup':
+      return 'Pickup';
+    case 'linehaul':
+      return 'Truck linehaul';
+    default:
+      return 'Delivery';
+  }
+}
+
+/// Short chip text for the stage.
+String riderStageBadge(RiderStage stage) => switch (stage) {
+  RiderStage.readyForPickup => 'For pickup',
+  RiderStage.onTheWayToHub => 'On the way',
+  RiderStage.forDelivery => 'For delivery',
+  RiderStage.onTheWayToBuyer => 'On the way',
+  RiderStage.linehaul => 'Linehaul',
+  RiderStage.other => 'Assigned',
+};
+
+/// The next server-provided stop on a Truck linehaul route, when set.
+Map<String, dynamic> riderRouteTarget(Map<String, dynamic> order) {
+  final route = _map(order['planned_route']);
+  final target = _map(route['scan_target']);
+  if (target.isNotEmpty && _text(target['name']).isNotEmpty) return target;
+  return _map(route['next_checkpoint']);
+}
+
+/// Headline for the parcel card and the detail banner.
+String riderStageTitle(Map<String, dynamic> order) {
+  final stopName = _text(_map(order['stop'])['name']);
+  final hub = _text(order['pickup_center']);
+  switch (riderStageOf(order)) {
+    case RiderStage.readyForPickup:
+      return stopName.isEmpty
+          ? 'Pick up from the seller'
+          : 'Pick up from $stopName';
+    case RiderStage.onTheWayToHub:
+      return hub.isEmpty
+          ? 'On the way to the origin hub'
+          : 'On the way to $hub';
+    case RiderStage.forDelivery:
+      return stopName.isEmpty ? 'Ready for delivery' : 'Deliver to $stopName';
+    case RiderStage.onTheWayToBuyer:
+      return stopName.isEmpty
+          ? 'On the way to the buyer'
+          : 'On the way to $stopName';
+    case RiderStage.linehaul:
+      final target = _text(riderRouteTarget(order)['name']);
+      return target.isEmpty ? 'Truck linehaul' : 'Next stop: $target';
+    case RiderStage.other:
+      return 'Assigned parcel';
+  }
+}
+
+/// Supporting line under the headline: address, hub instruction, or route note.
+String riderStageSubtitle(Map<String, dynamic> order) {
+  final stop = _map(order['stop']);
+  final address = _text(stop['address']);
+  final hub = _text(order['pickup_center']);
+  switch (riderStageOf(order)) {
+    case RiderStage.readyForPickup:
+    case RiderStage.forDelivery:
+    case RiderStage.onTheWayToBuyer:
+      return address.isEmpty ? 'Address unavailable' : address;
+    case RiderStage.onTheWayToHub:
+      return hub.isEmpty
+          ? 'Bring the parcel to the origin hub for sorting.'
+          : 'Bring the parcel to $hub for sorting.';
+    case RiderStage.linehaul:
+      final route = _map(order['planned_route']);
+      final scanTarget = _map(route['scan_target']);
+      final nextCheckpoint = _map(route['next_checkpoint']);
+      final label = [
+        _text(scanTarget['name']),
+        _text(scanTarget['municipality']),
+      ].where((value) => value.isNotEmpty).join(' · ');
+      if (label.isNotEmpty) return 'Scan at $label when you arrive.';
+      final planned = [
+        _text(nextCheckpoint['name']),
+        _text(nextCheckpoint['municipality']),
+      ].where((value) => value.isNotEmpty).join(' · ');
+      return planned.isEmpty
+          ? 'Waiting for the next route stop from Logistics.'
+          : 'Next planned checkpoint: $planned.';
+    case RiderStage.other:
+      return _text(order['status']).replaceAll('_', ' ');
+  }
+}
+
+/// Server-supported scan action for the current status, or null when no scan
+/// is due.
+String? riderScanTypeFor(Map<String, dynamic> order) {
+  final status = order['status']?.toString();
+  if (order['assignment'] == 'pickup') {
+    if (status == 'ready_for_pickup') return 'pickup';
+    if (status == 'picked_up') return 'origin_arrival';
+  }
+  if (order['assignment'] == 'delivery') {
+    if (status == 'assigned_to_rider') return 'out_for_delivery';
+    if (status == 'out_for_delivery') return 'delivered';
+  }
+  return null;
+}
+
+String riderScanLabelFor(String type) => switch (type) {
+  'pickup' => 'Scan seller pickup',
+  'origin_arrival' => 'Scan at origin hub',
+  'delivered' => 'Scan after handing over parcel',
+  _ => 'Scan out for delivery',
+};
+
+bool riderSupportsAssignment(Map<String, dynamic> order, String? vehicleType) {
+  final assignment = order['assignment'];
+  if (vehicleType == 'Truck') return assignment != 'delivery';
+  return assignment != 'linehaul';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Detail screen
+// ─────────────────────────────────────────────────────────────────────────────
 class DeliveryDetailScreen extends StatefulWidget {
-  const DeliveryDetailScreen({super.key});
+  const DeliveryDetailScreen({super.key, required this.order});
+
+  /// One assignment row exactly as `GET /api/v1/rider/assignments` returned it.
+  final Map<String, dynamic> order;
 
   @override
   State<DeliveryDetailScreen> createState() => _DeliveryDetailScreenState();
 }
 
 class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
-  String? _parcelPhotoPath; // photo 1: the parcel
-  String? _deliveredPhotoPath; // photo 2: the parcel at the buyer
-  bool _confirmed = false;
-  bool _showMapPreview = false;
-  LatLng? _currentLocation;
-  final MapController _previewMapCtrl = MapController();
+  late Map<String, dynamic> _order;
+  bool _busy = false;
+  bool _finished = false;
 
   @override
-  void dispose() {
-    _previewMapCtrl.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _order = widget.order;
   }
 
-  // ── Location ────────────────────────────────────────────────────
-  Future<void> _loadLocation() async {
-    LocationPermission perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
-    }
+  // ── Server state ─────────────────────────────────────────────────
+  /// Re-reads this parcel from the assignment API so the screen never shows a
+  /// stage the server has not confirmed. When the parcel leaves the Rider's
+  /// active work the screen shows a finished state instead of a stale action.
+  Future<void> _refreshOrder() async {
     try {
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      );
-      if (mounted) {
-        setState(() => _currentLocation = LatLng(pos.latitude, pos.longitude));
+      final work = await RiderApi.instance.assignments();
+      Map<String, dynamic>? match;
+      for (final item in work) {
+        if (item['order_id'] == _order['order_id']) {
+          match = item;
+          break;
+        }
       }
+      if (!mounted) return;
+      setState(() {
+        if (match != null) {
+          _order = match;
+        } else {
+          _finished = true;
+        }
+      });
     } catch (_) {
-      if (mounted) {
-        setState(
-          () => _currentLocation = const LatLng(14.2793, 121.4110),
-        ); // Santa Cruz, Laguna fallback
-      }
+      // Keep the last server-confirmed state; the scan result was already shown.
     }
   }
 
-  void _toggleMap() {
-    HapticFeedback.selectionClick();
-    if (!_showMapPreview) {
-      _loadLocation();
-    }
-    setState(() => _showMapPreview = !_showMapPreview);
-  }
-
-  void _openFullMap() {
-    Navigator.push(
+  // ── Scanning ─────────────────────────────────────────────────────
+  Future<void> _scan() async {
+    final type = riderScanTypeFor(_order);
+    if (type == null || _busy) return;
+    final tracking = _text(_order['tracking_number']);
+    final scanned = await Navigator.push<String>(
       context,
       MaterialPageRoute(
-        builder: (_) => const MapScreen(
-          destination: _kDestination,
-          destinationLabel: _kDestinationLabel,
-        ),
+        builder: (_) => _ParcelScanner(trackingNumber: tracking),
       ),
     );
-  }
+    if (!mounted || scanned == null) return;
 
-  // ── Proof photos (two: the parcel, and the parcel at the buyer) ──
-  String? _pathFor(_ProofSlot slot) =>
-      slot == _ProofSlot.parcel ? _parcelPhotoPath : _deliveredPhotoPath;
-
-  String get _missingHint {
-    if (_parcelPhotoPath == null && _deliveredPhotoPath == null) {
-      return 'Add both photos to confirm this delivery.';
+    Map<String, String>? deliveryProof;
+    if (type == 'delivered' && _order['delivery_proof_required'] == true) {
+      deliveryProof = await _collectDeliveryProof();
+      if (!mounted || deliveryProof == null) return;
     }
-    if (_parcelPhotoPath == null) {
-      return 'Add the parcel photo to confirm this delivery.';
-    }
-    return 'Add the delivered-to-buyer photo to confirm this delivery.';
-  }
 
-  Future<void> _pickProof(ImageSource source, _ProofSlot slot) async {
-    final file = await ImagePicker().pickImage(
-      source: source,
-      imageQuality: 85,
-    );
-    if (file == null || !mounted) return;
-    setState(() {
-      if (slot == _ProofSlot.parcel) {
-        _parcelPhotoPath = file.path;
-      } else {
-        _deliveredPhotoPath = file.path;
+    setState(() => _busy = true);
+    final api = RiderApi.instance;
+    try {
+      var key = await api.pendingScanKey(tracking, type);
+      if (key == null) {
+        key = _newUuid();
+        await api.saveScanKey(tracking, type, key);
       }
-    });
+      final result = deliveryProof == null
+          ? await api.scan(tracking, type, key)
+          : await api.submitDeliveryProof(
+              trackingNumber: tracking,
+              scanKey: key,
+              recipientName: deliveryProof['recipient']!,
+              photoPath: deliveryProof['photo']!,
+            );
+      await api.clearScanKey(tracking, type);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result['duplicate'] == true
+                ? 'Scan already recorded. Parcel status is up to date.'
+                : 'Scan saved. Seller and buyer tracking is updated.',
+          ),
+        ),
+      );
+      await _refreshOrder();
+    } on RiderApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+      if (error.statusCode == 409) await _refreshOrder();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Connection failed. Scan this parcel again to retry the same event.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
-  void _takeProofPhoto(_ProofSlot slot) {
-    final isParcel = slot == _ProofSlot.parcel;
+  Future<void> _scanFacility() async {
+    if (_busy) return;
+    final target = _map(_map(_order['planned_route'])['scan_target']);
+    final facilityId = target['facility_id'];
+    if (facilityId is! num) return;
+    final tracking = _text(_order['tracking_number']);
+    final scanned = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _ParcelScanner(trackingNumber: tracking),
+      ),
+    );
+    if (!mounted || scanned == null) return;
 
-    showModalBottomSheet(
+    final scanType = 'facility-${facilityId.toInt()}';
+    setState(() => _busy = true);
+    final api = RiderApi.instance;
+    try {
+      var key = await api.pendingScanKey(tracking, scanType);
+      if (key == null) {
+        key = _newUuid();
+        await api.saveScanKey(tracking, scanType, key);
+      }
+      final result = await api.scanFacility(tracking, facilityId.toInt(), key);
+      await api.clearScanKey(tracking, scanType);
+      if (!mounted) return;
+      final facilityName = result['facility']?.toString() ?? 'facility';
+      final action = result['action']?.toString() ?? 'scan';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result['duplicate'] == true
+                ? 'This scan was already recorded. Parcel status is up to date.'
+                : 'Scan saved at $facilityName ($action). Seller and buyer tracking is updated.',
+          ),
+        ),
+      );
+      await _refreshOrder();
+    } on RiderApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+      if (error.statusCode == 409) await _refreshOrder();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Connection failed. Scan this parcel again to retry the same event.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _reportTaskIssue(Map<String, dynamic> task) async {
+    final detailsController = TextEditingController();
+    var reason = 'other';
+    final issue = await showDialog<Map<String, String>>(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (sheetContext) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        padding: EdgeInsets.fromLTRB(
-          24,
-          12,
-          24,
-          20 + MediaQuery.of(sheetContext).padding.bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: _C.border,
-                  borderRadius: BorderRadius.circular(2),
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Report a task issue'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(
+                initialValue: reason,
+                decoration: const InputDecoration(labelText: 'Issue type'),
+                items: const [
+                  DropdownMenuItem(
+                    value: 'damaged',
+                    child: Text('Parcel damaged'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'recipient_unavailable',
+                    child: Text('Recipient unavailable'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'unsafe_location',
+                    child: Text('Unsafe location'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'vehicle_issue',
+                    child: Text('Vehicle issue'),
+                  ),
+                  DropdownMenuItem(value: 'other', child: Text('Other')),
+                ],
+                onChanged: (value) {
+                  if (value != null) setDialogState(() => reason = value);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: detailsController,
+                minLines: 3,
+                maxLines: 5,
+                maxLength: 1000,
+                onChanged: (_) => setDialogState(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'What happened?',
+                  border: OutlineInputBorder(),
                 ),
               ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
             ),
-            const SizedBox(height: 20),
-            Text(
-              isParcel ? 'Photo of the Parcel' : 'Parcel Delivered to Buyer',
-              style: const TextStyle(
-                color: _C.ink,
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              isParcel
-                  ? 'Take or upload a clear photo of the parcel'
-                  : 'Take or upload a photo of the parcel at the buyer',
-              style: const TextStyle(color: _C.muted, fontSize: 13),
-            ),
-            const SizedBox(height: 20),
-            _SourceTile(
-              icon: Icons.camera_alt_outlined,
-              title: 'Take a Photo',
-              subtitle: isParcel
-                  ? 'Capture the parcel you are delivering'
-                  : 'Capture the parcel after handing it over',
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _pickProof(ImageSource.camera, slot);
-              },
-            ),
-            const SizedBox(height: 12),
-            _SourceTile(
-              icon: Icons.photo_library_outlined,
-              title: 'Choose from Gallery',
-              subtitle: 'Select an existing photo',
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _pickProof(ImageSource.gallery, slot);
-              },
+            FilledButton(
+              onPressed: detailsController.text.trim().length < 5
+                  ? null
+                  : () => Navigator.pop(dialogContext, {
+                      'reason': reason,
+                      'details': detailsController.text.trim(),
+                    }),
+              child: const Text('Send to Logistics'),
             ),
           ],
         ),
       ),
     );
+    if (issue == null || !mounted) {
+      detailsController.dispose();
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final result = await RiderApi.instance.reportTaskException(
+        taskId: (task['id'] as num).toInt(),
+        reason: issue['reason']!,
+        details: issue['details']!,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result['message']?.toString() ?? 'Issue sent to Logistics.',
+            ),
+          ),
+        );
+      }
+      await _refreshOrder();
+    } on RiderApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+      if (error.statusCode == 409) await _refreshOrder();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not send the issue. Check your connection and retry.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      detailsController.dispose();
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
-  // ── Confirm ──────────────────────────────────────────────────────
-  void _confirmDelivery() {
-    HapticFeedback.mediumImpact();
-    setState(() => _confirmed = true);
-    showModalBottomSheet(
-      context: context,
-      isDismissible: false,
-      enableDrag: false,
-      backgroundColor: Colors.transparent,
-      builder: (sheetContext) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-        ),
-        padding: EdgeInsets.fromLTRB(
-          28,
-          28,
-          28,
-          28 + MediaQuery.of(sheetContext).padding.bottom,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 80,
-              height: 80,
-              decoration: const BoxDecoration(
-                color: _C.raisinSoft,
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.check_circle_rounded,
-                color: _C.raisin,
-                size: 48,
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'Delivery Confirmed!',
-              style: TextStyle(
-                color: _C.ink,
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Order #VD-00125 has been marked as delivered.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: _C.muted, fontSize: 14, height: 1.5),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: _C.raisinSoft,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Text(
-                '₱ 85.00 added to your earnings',
-                style: TextStyle(
-                  color: _C.prune,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+  Future<Map<String, String>?> _collectDeliveryProof() async {
+    final nameController = TextEditingController();
+    XFile? photo;
+    try {
+      return await showDialog<Map<String, String>>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: const Text('Confirm delivery'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Enter the recipient name and take a delivery photo.',
                 ),
-              ),
-            ),
-            const SizedBox(height: 28),
-            SizedBox(
-              width: double.infinity,
-              height: 54,
-              child: ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(sheetContext); // close this sheet
-                  Navigator.pop(context); // leave the details screen
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _C.prune,
-                  foregroundColor: Colors.white,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(_radius),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: nameController,
+                  textCapitalization: TextCapitalization.words,
+                  onChanged: (_) => setDialogState(() {}),
+                  decoration: const InputDecoration(
+                    labelText: 'Recipient name',
+                    border: OutlineInputBorder(),
                   ),
                 ),
-                child: const Text(
-                  'Back to Home',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final captured = await ImagePicker().pickImage(
+                      source: ImageSource.camera,
+                      imageQuality: 80,
+                      maxWidth: 1600,
+                      maxHeight: 1600,
+                    );
+                    if (captured == null || !context.mounted) return;
+                    final bytes = await captured.length();
+                    if (!mounted) return;
+                    if (bytes > 5 * 1024 * 1024) {
+                      ScaffoldMessenger.of(this.context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Photo must be 5 MB or smaller.'),
+                        ),
+                      );
+                      return;
+                    }
+                    setDialogState(() => photo = captured);
+                  },
+                  icon: const Icon(Icons.camera_alt_outlined),
+                  label: Text(photo == null ? 'Take photo' : 'Retake photo'),
                 ),
-              ),
+                if (photo != null)
+                  Text(
+                    photo!.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
             ),
-          ],
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed:
+                    photo == null || nameController.text.trim().length < 2
+                    ? null
+                    : () => Navigator.pop(dialogContext, {
+                        'recipient': nameController.text.trim(),
+                        'photo': photo!.path,
+                      }),
+                child: const Text('Submit proof'),
+              ),
+            ],
+          ),
         ),
-      ),
-    );
+      );
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not open the camera. Check camera permission and retry.',
+            ),
+          ),
+        );
+      }
+      return null;
+    } finally {
+      nameController.dispose();
+    }
+  }
+
+  String _newUuid() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
   }
 
   // ── Screen ───────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    final canConfirm = _parcelPhotoPath != null && _deliveredPhotoPath != null;
+    final stage = riderStageOf(_order);
+    final scanType = riderScanTypeFor(_order);
+    final scanTarget = _map(_map(_order['planned_route'])['scan_target']);
+    final task = _map(_order['task']);
+    final taskFailed = task['status'] == 'failed';
+    final canReportIssue =
+        !_finished &&
+        task.isNotEmpty &&
+        !taskFailed &&
+        ['assigned', 'in_progress'].contains(task['status']);
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      // Light status bar icons because the header is dark
       value: SystemUiOverlayStyle.light,
       child: Scaffold(
         backgroundColor: _C.background,
@@ -320,33 +610,55 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildHeader(),
+              _buildHeader(stage),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 24, 20, 24),
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    if (_finished) ...[
+                      _buildFinishedCard(),
+                      const SizedBox(height: 20),
+                    ] else if (stage == RiderStage.onTheWayToHub ||
+                        stage == RiderStage.onTheWayToBuyer ||
+                        (stage == RiderStage.linehaul &&
+                            scanTarget['facility_id'] != null)) ...[
+                      _buildOnTheWayBanner(stage),
+                      const SizedBox(height: 20),
+                    ],
                     _buildRouteSection(),
                     const SizedBox(height: 24),
-                    _buildCustomerSection(),
+                    _buildStopSection(),
                     const SizedBox(height: 24),
-                    _buildItemsSection(),
-                    const SizedBox(height: 24),
-                    _buildProofSection(canConfirm),
+                    _buildActionSection(scanType, scanTarget, taskFailed),
+                    if (canReportIssue) ...[
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _busy
+                              ? null
+                              : () => _reportTaskIssue(task),
+                          icon: const Icon(Icons.report_problem_outlined),
+                          label: const Text('Report an issue'),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
             ],
           ),
         ),
-        bottomNavigationBar: _buildConfirmBar(canConfirm),
+        bottomNavigationBar: _buildBottomBar(scanType, scanTarget, taskFailed),
       ),
     );
   }
 
-  // ── Dark header: back button + order summary ─────────────────────
-  Widget _buildHeader() {
+  // ── Dark header: back button + tracking number + status ─────────
+  Widget _buildHeader(RiderStage stage) {
     final topInset = MediaQuery.of(context).padding.top;
+    final style = _stageStyle(stage);
 
     return Container(
       width: double.infinity,
@@ -368,7 +680,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
           Row(
             children: [
               GestureDetector(
-                onTap: () => Navigator.pop(context),
+                onTap: () => Navigator.pop(context, true),
                 behavior: HitTestBehavior.opaque,
                 child: Container(
                   width: 40,
@@ -387,7 +699,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
               ),
               const SizedBox(width: 14),
               const Text(
-                'Delivery Details',
+                'Parcel Details',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 22,
@@ -397,7 +709,6 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
             ],
           ),
           const SizedBox(height: 18),
-          // Glass-style order card (same look as the other headers)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(16),
@@ -408,60 +719,59 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
             ),
             child: Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Order',
-                        style: TextStyle(
+                        riderAssignmentLabel(_order).toUpperCase(),
+                        style: const TextStyle(
                           color: Color(0xB3FFFFFF),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.6,
                         ),
                       ),
-                      SizedBox(height: 2),
+                      const SizedBox(height: 4),
                       Text(
-                        '#VD-00125',
-                        style: TextStyle(
+                        _text(_order['tracking_number']).isEmpty
+                            ? 'Assigned parcel'
+                            : _text(_order['tracking_number']),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
                           color: _C.lin,
-                          fontSize: 26,
+                          fontSize: 22,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.access_time_rounded,
-                            size: 14,
-                            color: Color(0xB3FFFFFF),
-                          ),
-                          SizedBox(width: 6),
-                          Text(
-                            'Today, 11:30 AM',
-                            style: TextStyle(
-                              color: Color(0xB3FFFFFF),
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
+                      const SizedBox(height: 6),
+                      Text(
+                        riderStageTitle(_order),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(width: 12),
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
                     vertical: 6,
                   ),
                   decoration: BoxDecoration(
-                    color: _C.brique,
+                    color: style.fg,
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: const Text(
-                    'On the way',
-                    style: TextStyle(
+                  child: Text(
+                    riderStageBadge(stage),
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
@@ -476,75 +786,109 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     );
   }
 
-  // ── Route ────────────────────────────────────────────────────────
+  // ── "On the way" banner: the next warehouse / station / buyer ───
+  Widget _buildOnTheWayBanner(RiderStage stage) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _C.briqueSoft,
+        borderRadius: BorderRadius.circular(_radius),
+        border: Border.all(color: _C.brique.withAlpha(60)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: const BoxDecoration(
+              color: _C.brique,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              stage == RiderStage.onTheWayToBuyer
+                  ? Icons.near_me_rounded
+                  : Icons.local_shipping_rounded,
+              color: Colors.white,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  riderStageTitle(_order),
+                  style: const TextStyle(
+                    color: _C.brique,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  riderStageSubtitle(_order),
+                  style: const TextStyle(
+                    color: _C.ink,
+                    fontSize: 13,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFinishedCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: _C.raisinSoft,
+        borderRadius: BorderRadius.circular(_radius),
+        border: Border.all(color: _C.raisin.withAlpha(60)),
+      ),
+      child: const Row(
+        children: [
+          Icon(Icons.check_circle_rounded, color: _C.raisin, size: 26),
+          SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'This parcel is no longer in your active work. Logistics has the next step.',
+              style: TextStyle(color: _C.ink, fontSize: 13, height: 1.4),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Route: where the parcel came from and where it goes next ────
   Widget _buildRouteSection() {
+    final nodes = _routeNodes(_order);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            const Expanded(child: _SectionTitle('Route')),
-            GestureDetector(
-              onTap: _toggleMap,
-              behavior: HitTestBehavior.opaque,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: _C.raisinSoft,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      _showMapPreview ? Icons.map_rounded : Icons.map_outlined,
-                      size: 15,
-                      color: _C.prune,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      _showMapPreview ? 'Hide map' : 'Show map',
-                      style: const TextStyle(
-                        color: _C.prune,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
+        const _SectionTitle('Route'),
         const SizedBox(height: 12),
         _Card(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _RouteStop(
-                dotColor: _C.raisin,
-                icon: Icons.circle,
-                label: 'Pickup',
-                address: 'Vendo Warehouse, Quezon City',
-              ),
-              Container(
-                width: 2,
-                height: 20,
-                margin: const EdgeInsets.only(left: 9, top: 3, bottom: 3),
-                color: _C.border,
-              ),
-              const _RouteStop(
-                dotColor: _C.brique,
-                icon: Icons.location_on_rounded,
-                label: 'Drop-off',
-                address: _kDestinationLabel,
-              ),
-              if (_showMapPreview) ...[
-                const SizedBox(height: 16),
-                _buildMapPreview(),
+              for (var i = 0; i < nodes.length; i++) ...[
+                _RouteStop(node: nodes[i]),
+                if (i < nodes.length - 1)
+                  Container(
+                    width: 2,
+                    height: 18,
+                    margin: const EdgeInsets.only(left: 9, top: 3, bottom: 3),
+                    color: _C.border,
+                  ),
               ],
             ],
           ),
@@ -553,111 +897,18 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     );
   }
 
-  Widget _buildMapPreview() {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: SizedBox(
-        height: 220,
-        child: Stack(
-          children: [
-            FlutterMap(
-              mapController: _previewMapCtrl,
-              options: MapOptions(
-                initialCenter: _currentLocation ?? _kDestination,
-                initialZoom: 13,
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.vendo_rider',
-                ),
-                if (_currentLocation != null)
-                  PolylineLayer(
-                    polylines: [
-                      Polyline(
-                        points: [_currentLocation!, _kDestination],
-                        color: _C.prune,
-                        strokeWidth: 4,
-                      ),
-                    ],
-                  ),
-                MarkerLayer(
-                  markers: [
-                    if (_currentLocation != null)
-                      Marker(
-                        point: _currentLocation!,
-                        width: 30,
-                        height: 30,
-                        child: _MapPin(
-                          color: _C.raisin,
-                          icon: Icons.person_pin_rounded,
-                        ),
-                      ),
-                    Marker(
-                      point: _kDestination,
-                      width: 30,
-                      height: 30,
-                      child: _MapPin(
-                        color: _C.brique,
-                        icon: Icons.location_on_rounded,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            // Full map button
-            Positioned(
-              top: 10,
-              right: 10,
-              child: GestureDetector(
-                onTap: _openFullMap,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  decoration: BoxDecoration(
-                    color: _C.prune,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: const [
-                      BoxShadow(color: Color(0x44000000), blurRadius: 8),
-                    ],
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.fullscreen_rounded,
-                        color: Colors.white,
-                        size: 16,
-                      ),
-                      SizedBox(width: 5),
-                      Text(
-                        'Full Map',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  // ── Stop / contact ───────────────────────────────────────────────
+  Widget _buildStopSection() {
+    final stop = _map(_order['stop']);
+    final name = _text(stop['name']);
+    final phone = _text(stop['phone']);
+    final address = _text(stop['address']);
+    final isSeller = _order['assignment'] == 'pickup';
 
-  // ── Customer ─────────────────────────────────────────────────────
-  Widget _buildCustomerSection() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _SectionTitle('Customer'),
+        _SectionTitle(isSeller ? 'Seller' : 'Recipient'),
         const SizedBox(height: 12),
         _Card(
           child: Row(
@@ -669,44 +920,43 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                   color: _C.raisinSoft,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(
-                  Icons.person_rounded,
+                child: Icon(
+                  isSeller ? Icons.storefront_outlined : Icons.person_rounded,
                   color: _C.raisin,
                   size: 24,
                 ),
               ),
               const SizedBox(width: 12),
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Pedro Bautista',
-                      style: TextStyle(
+                      name.isEmpty ? 'Contact unavailable' : name,
+                      style: const TextStyle(
                         color: _C.ink,
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    SizedBox(height: 2),
-                    Text(
-                      '+63 912 345 6789',
-                      style: TextStyle(color: _C.muted, fontSize: 13),
-                    ),
+                    const SizedBox(height: 2),
+                    if (phone.isNotEmpty)
+                      Text(
+                        phone,
+                        style: const TextStyle(color: _C.muted, fontSize: 13),
+                      ),
+                    if (address.isNotEmpty)
+                      Text(
+                        address,
+                        style: const TextStyle(
+                          color: _C.muted,
+                          fontSize: 13,
+                          height: 1.4,
+                        ),
+                      ),
                   ],
                 ),
               ),
-              _ActionButton(
-                icon: Icons.call_rounded,
-                filled: true,
-                onTap: () {}, // TODO: start a phone call
-              ),
-              const SizedBox(width: 8),
-              _ActionButton(
-                icon: Icons.chat_bubble_outline_rounded,
-                filled: false,
-                onTap: () {}, // TODO: open chat / SMS
-              ),
             ],
           ),
         ),
@@ -714,86 +964,65 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     );
   }
 
-  // ── Order items ──────────────────────────────────────────────────
-  Widget _buildItemsSection() {
+  // ── Scan action detail (the primary button is in the bottom bar) ─
+  Widget _buildActionSection(
+    String? scanType,
+    Map<String, dynamic> scanTarget,
+    bool taskFailed,
+  ) {
+    if (_finished) return const SizedBox.shrink();
+    final hub = _text(_order['pickup_center']);
+    String message;
+    if (taskFailed) {
+      message =
+          'Paused: Logistics needs to review this task before you can scan.';
+    } else if (scanTarget['facility_id'] is num) {
+      message =
+          'Scan the parcel label at ${_text(scanTarget['name'])}. The server checks the route order before accepting it.';
+    } else if (scanType != null) {
+      message = switch (scanType) {
+        'pickup' =>
+          'Scan the label when the seller hands you the parcel. The next step is $hub.',
+        'origin_arrival' =>
+          'You are carrying this parcel. Scan it at ${hub.isEmpty ? 'the origin hub' : hub} on arrival.',
+        'out_for_delivery' =>
+          'Scan the label when you leave for this delivery.',
+        _ => 'Scan the label after handing the parcel to the recipient.',
+      };
+    } else if (_order['assignment'] == 'linehaul') {
+      message =
+          'No facility scan is due yet. Refresh after Logistics sets the route or the previous stop is completed.';
+    } else {
+      message = 'No rider scan is available at this stage.';
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _SectionTitle('Order Items'),
-        const SizedBox(height: 12),
-        const _Card(
-          child: Column(
-            children: [
-              _OrderItem(name: 'Wireless Earbuds', qty: '1', price: '₱ 650'),
-              Divider(height: 1, thickness: 1, color: _C.border),
-              _OrderItem(name: 'Phone Case', qty: '2', price: '₱ 180'),
-              Divider(height: 1, thickness: 1, color: _C.border),
-              SizedBox(height: 12),
-              _TotalRow(label: 'Delivery Fee', value: '₱ 85'),
-              SizedBox(height: 10),
-              _TotalRow(label: 'Total', value: '₱ 915', bold: true),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ── Proof of delivery: two photos needed ─────────────────────────
-  Widget _buildProofSection(bool canConfirm) {
-    final added =
-        (_parcelPhotoPath != null ? 1 : 0) +
-        (_deliveredPhotoPath != null ? 1 : 0);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Expanded(child: _SectionTitle('Proof of Delivery')),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: canConfirm ? _C.raisinSoft : _C.briqueSoft,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                canConfirm ? 'Added' : '$added of 2 added',
-                style: TextStyle(
-                  color: canConfirm ? _C.raisin : _C.brique,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
-        ),
+        const _SectionTitle('Next action'),
         const SizedBox(height: 12),
         _Card(
-          borderColor: canConfirm ? _C.raisin : _C.border,
-          child: Column(
+          borderColor: taskFailed ? _C.brique : _C.border,
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Two photos are needed before you can confirm this delivery.',
-                style: TextStyle(color: _C.muted, fontSize: 13, height: 1.4),
+              Icon(
+                taskFailed
+                    ? Icons.error_outline_rounded
+                    : Icons.qr_code_scanner_rounded,
+                color: taskFailed ? _C.brique : _C.raisin,
+                size: 22,
               ),
-              const SizedBox(height: 18),
-              _buildPhotoStep(
-                slot: _ProofSlot.parcel,
-                step: '1',
-                title: 'Photo of the parcel',
-                hint: 'Take a clear photo of the parcel you are delivering.',
-              ),
-              const SizedBox(height: 20),
-              const Divider(height: 1, thickness: 1, color: _C.border),
-              const SizedBox(height: 20),
-              _buildPhotoStep(
-                slot: _ProofSlot.delivered,
-                step: '2',
-                title: 'Parcel delivered to the buyer',
-                hint:
-                    'Take a photo of the parcel after handing it to the buyer.',
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(
+                    color: _C.ink,
+                    fontSize: 13,
+                    height: 1.45,
+                  ),
+                ),
               ),
             ],
           ),
@@ -802,180 +1031,47 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     );
   }
 
-  // One numbered step: title, short hint, and the photo box
-  Widget _buildPhotoStep({
-    required _ProofSlot slot,
-    required String step,
-    required String title,
-    required String hint,
-  }) {
-    final path = _pathFor(slot);
-    final hasPhoto = path != null;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Container(
-              width: 24,
-              height: 24,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: hasPhoto ? _C.prune : _C.raisinSoft,
-                shape: BoxShape.circle,
-              ),
-              child: hasPhoto
-                  ? const Icon(Icons.check_rounded, color: _C.lin, size: 15)
-                  : Text(
-                      step,
-                      style: const TextStyle(
-                        color: _C.raisin,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                title,
-                style: const TextStyle(
-                  color: _C.ink,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
+  // ── Bottom bar: the one action the server currently allows ──────
+  Widget? _buildBottomBar(
+    String? scanType,
+    Map<String, dynamic> scanTarget,
+    bool taskFailed,
+  ) {
+    final Widget? primary;
+    if (_finished) {
+      primary = FilledButton.icon(
+        onPressed: () => Navigator.pop(context, true),
+        icon: const Icon(Icons.arrow_back_rounded, size: 20),
+        label: const Text('Back to deliveries'),
+        style: _buttonStyle,
+      );
+    } else if (scanTarget['facility_id'] is num) {
+      final facility = _text(scanTarget['name']);
+      primary = FilledButton.icon(
+        onPressed: _busy ? null : _scanFacility,
+        icon: const Icon(Icons.qr_code_scanner, size: 20),
+        label: Text(
+          facility.isEmpty ? 'Scan at facility' : 'Scan at $facility',
         ),
-        Padding(
-          padding: const EdgeInsets.only(left: 34, top: 2, bottom: 12),
-          child: Text(
-            hint,
-            style: const TextStyle(color: _C.muted, fontSize: 12, height: 1.4),
-          ),
+        style: _buttonStyle,
+      );
+    } else if (scanType != null && !taskFailed) {
+      final needsProof =
+          scanType == 'delivered' && _order['delivery_proof_required'] == true;
+      primary = FilledButton.icon(
+        onPressed: _busy ? null : _scan,
+        icon: const Icon(Icons.qr_code_scanner, size: 20),
+        label: Text(
+          needsProof
+              ? 'Scan and add delivery proof'
+              : riderScanLabelFor(scanType),
         ),
-        GestureDetector(
-          onTap: () => _takeProofPhoto(slot),
-          child: path != null
-              ? _buildPhotoPreview(path)
-              : _buildPhotoPlaceholder(),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildPhotoPlaceholder() {
-    return Container(
-      width: double.infinity,
-      height: 120,
-      decoration: BoxDecoration(
-        color: _C.background,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _C.border, width: 1.5),
-      ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            width: 46,
-            height: 46,
-            decoration: const BoxDecoration(
-              color: _C.raisinSoft,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.camera_alt_outlined,
-              color: _C.raisin,
-              size: 24,
-            ),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Tap to take or upload photo',
-            style: TextStyle(
-              color: _C.muted,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPhotoPreview(String path) {
-    return Stack(
-      children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: Image.file(
-            File(path),
-            width: double.infinity,
-            height: 180,
-            fit: BoxFit.cover,
-          ),
-        ),
-        Positioned(
-          top: 10,
-          right: 10,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: Colors.black.withAlpha(153),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.refresh_rounded, color: Colors.white, size: 14),
-                SizedBox(width: 4),
-                Text(
-                  'Retake',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        Positioned(
-          bottom: 10,
-          left: 10,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: _C.prune,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.check_circle_rounded, color: _C.lin, size: 14),
-                SizedBox(width: 4),
-                Text(
-                  'Photo added',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ── Confirm bar: always visible at the bottom ────────────────────
-  Widget _buildConfirmBar(bool canConfirm) {
-    final enabled = canConfirm && !_confirmed;
+        style: _buttonStyle,
+      );
+    } else {
+      primary = null;
+    }
+    if (primary == null) return null;
 
     return Container(
       decoration: const BoxDecoration(
@@ -989,72 +1085,235 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (!canConfirm)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(
-                        Icons.info_outline_rounded,
-                        size: 16,
-                        color: _C.brique,
-                      ),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                          _missingHint,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: _C.muted, fontSize: 13),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: ElevatedButton.icon(
-                  onPressed: enabled ? _confirmDelivery : null,
-                  icon: Icon(
-                    _confirmed
-                        ? Icons.check_circle_rounded
-                        : Icons.check_circle_outline_rounded,
-                    size: 20,
-                  ),
-                  label: Text(_confirmed ? 'Delivered' : 'Confirm Delivered'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _C.prune,
-                    disabledBackgroundColor: _C.disabled,
-                    foregroundColor: Colors.white,
-                    disabledForegroundColor: Colors.white,
-                    elevation: 0,
-                    textStyle: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(_radius),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
+          child: SizedBox(width: double.infinity, height: 54, child: primary),
         ),
       ),
     );
   }
+
+  ButtonStyle get _buttonStyle => FilledButton.styleFrom(
+    backgroundColor: _C.prune,
+    disabledBackgroundColor: _C.disabled,
+    foregroundColor: Colors.white,
+    disabledForegroundColor: Colors.white,
+    elevation: 0,
+    textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_radius)),
+  );
+
+  // ── Route node data ──────────────────────────────────────────────
+  List<_RouteNode> _routeNodes(Map<String, dynamic> order) {
+    final route = _map(order['planned_route']);
+    final stop = _map(order['stop']);
+    final hub = _text(order['pickup_center']);
+
+    if (order['assignment'] == 'linehaul') {
+      final origin = _text(route['origin_main_hub']);
+      final destination = _text(route['destination_main_hub']);
+      final nodes = <_RouteNode>[
+        _RouteNode(
+          color: _C.raisin,
+          icon: Icons.warehouse_outlined,
+          label: 'Origin Main Hub',
+          title: origin.isEmpty ? hub : origin,
+          subtitle: 'Where the trip starts',
+        ),
+      ];
+      final checkpoints = route['checkpoints'];
+      if (checkpoints is List) {
+        for (final checkpoint in checkpoints) {
+          final data = _map(checkpoint);
+          final name = _text(data['name']);
+          if (name.isEmpty) continue;
+          nodes.add(
+            _RouteNode(
+              color: _C.brique,
+              icon: Icons.location_on_rounded,
+              label: 'Facility stop',
+              title: name,
+              subtitle: [
+                _text(data['municipality']),
+                _text(data['province']),
+              ].where((value) => value.isNotEmpty).join(' · '),
+            ),
+          );
+        }
+      }
+      nodes.add(
+        _RouteNode(
+          color: _C.prune,
+          icon: Icons.flag_outlined,
+          label: 'Destination Main Hub',
+          title: destination.isEmpty
+              ? (_text(order['destination_center']).isEmpty
+                    ? 'Set by Logistics'
+                    : _text(order['destination_center']))
+              : destination,
+          subtitle: 'Final Main Hub on this route',
+        ),
+      );
+      return nodes;
+    }
+
+    final stopTitle = _text(stop['name']);
+    final stopAddress = _text(stop['address']);
+    if (order['assignment'] == 'pickup') {
+      return [
+        _RouteNode(
+          color: _C.raisin,
+          icon: Icons.storefront_outlined,
+          label: 'Pickup',
+          title: stopTitle.isEmpty ? 'Seller' : stopTitle,
+          subtitle: stopAddress.isEmpty ? 'Address unavailable' : stopAddress,
+        ),
+        _RouteNode(
+          color: _C.brique,
+          icon: Icons.warehouse_outlined,
+          label: 'Origin hub',
+          title: hub.isEmpty ? 'Logistics hub' : hub,
+          subtitle: 'Sorting hub the parcel goes to next',
+        ),
+      ];
+    }
+
+    final facility = _map(order['dispatch_facility']);
+    final facilityName = _text(facility['name']);
+    return [
+      _RouteNode(
+        color: _C.raisin,
+        icon: Icons.warehouse_outlined,
+        label: 'Dispatch station',
+        title: facilityName.isEmpty
+            ? (hub.isEmpty ? 'Logistics hub' : hub)
+            : facilityName,
+        subtitle: [
+          _text(facility['municipality']),
+          _text(facility['province']),
+          _text(facility['address']),
+        ].where((value) => value.isNotEmpty).join(' · '),
+      ),
+      _RouteNode(
+        color: _C.brique,
+        icon: Icons.location_on_rounded,
+        label: 'Drop-off',
+        title: stopTitle.isEmpty ? 'Recipient' : stopTitle,
+        subtitle: stopAddress.isEmpty ? 'Address unavailable' : stopAddress,
+      ),
+    ];
+  }
+
+  _StageStyle _stageStyle(RiderStage stage) => _StageStyle.of(stage);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Small widgets
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Flat white card with a thin border (same as the other screens)
+class _StageStyle {
+  final Color fg, bg;
+  final IconData icon;
+
+  const _StageStyle(this.fg, this.bg, this.icon);
+
+  static _StageStyle of(RiderStage stage) => switch (stage) {
+    RiderStage.readyForPickup => const _StageStyle(
+      Color(0xFF8A6D1A),
+      _C.goldSoft,
+      Icons.shopping_bag_outlined,
+    ),
+    RiderStage.onTheWayToHub => const _StageStyle(
+      _C.brique,
+      _C.briqueSoft,
+      Icons.local_shipping_rounded,
+    ),
+    RiderStage.forDelivery => const _StageStyle(
+      _C.raisin,
+      _C.raisinSoft,
+      Icons.inventory_2_outlined,
+    ),
+    RiderStage.onTheWayToBuyer => const _StageStyle(
+      _C.brique,
+      _C.briqueSoft,
+      Icons.near_me_rounded,
+    ),
+    RiderStage.linehaul => const _StageStyle(
+      _C.prune,
+      _C.raisinSoft,
+      Icons.local_shipping_outlined,
+    ),
+    RiderStage.other => const _StageStyle(
+      _C.muted,
+      Color(0xFFF1EEF1),
+      Icons.inventory_2_outlined,
+    ),
+  };
+}
+
+class _RouteNode {
+  final Color color;
+  final IconData icon;
+  final String label, title, subtitle;
+
+  const _RouteNode({
+    required this.color,
+    required this.icon,
+    required this.label,
+    required this.title,
+    required this.subtitle,
+  });
+}
+
+class _RouteStop extends StatelessWidget {
+  final _RouteNode node;
+
+  const _RouteStop({required this.node});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 20,
+          height: 20,
+          decoration: BoxDecoration(color: node.color, shape: BoxShape.circle),
+          child: Icon(node.icon, color: Colors.white, size: 11),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                node.label,
+                style: const TextStyle(color: _C.muted, fontSize: 12),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                node.title,
+                style: const TextStyle(
+                  color: _C.ink,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (node.subtitle.isNotEmpty)
+                Text(
+                  node.subtitle,
+                  style: const TextStyle(
+                    color: _C.muted,
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _Card extends StatelessWidget {
   final Widget child;
   final Color borderColor;
@@ -1107,260 +1366,128 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
-class _RouteStop extends StatelessWidget {
-  final Color dotColor;
-  final IconData icon;
-  final String label, address;
-
-  const _RouteStop({
-    required this.dotColor,
-    required this.icon,
-    required this.label,
-    required this.address,
-  });
+// ─────────────────────────────────────────────────────────────────────────────
+// Parcel label scanner (Android/iOS camera, Linux zbarcam)
+// ─────────────────────────────────────────────────────────────────────────────
+class _ParcelScanner extends StatefulWidget {
+  const _ParcelScanner({required this.trackingNumber});
+  final String trackingNumber;
 
   @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+  State<_ParcelScanner> createState() => _ParcelScannerState();
+}
+
+class _ParcelScannerState extends State<_ParcelScanner> {
+  final MobileScannerController? _mobileCamera =
+      defaultTargetPlatform == TargetPlatform.linux
+      ? null
+      : MobileScannerController(
+          formats: const [BarcodeFormat.qrCode, BarcodeFormat.code128],
+        );
+  bool _found = false;
+  Process? _linuxCamera;
+  StreamSubscription<String>? _linuxCodes;
+  String _cameraMessage = 'Opening laptop camera…';
+
+  @override
+  void initState() {
+    super.initState();
+    if (defaultTargetPlatform == TargetPlatform.linux) _startLinuxCamera();
+  }
+
+  Future<void> _startLinuxCamera() async {
+    try {
+      final camera = await Process.start('zbarcam', [
+        '--raw',
+        '--set',
+        'qrcode.enable=1',
+        '--set',
+        'code128.enable=1',
+      ]);
+      if (!mounted) {
+        camera.kill();
+        return;
+      }
+      _linuxCamera = camera;
+      setState(
+        () => _cameraMessage =
+            'Point the laptop camera at the printed QR or barcode. The camera preview opens in a separate window.',
+      );
+      _linuxCodes = camera.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((code) {
+            if (_found || !mounted) return;
+            if (code.trim() == widget.trackingNumber) {
+              _found = true;
+              Navigator.pop(context, widget.trackingNumber);
+            } else if (code.trim().isNotEmpty) {
+              setState(
+                () => _cameraMessage =
+                    'That code belongs to a different parcel. Scan the assigned label.',
+              );
+            }
+          });
+      final exitCode = await camera.exitCode;
+      if (mounted && !_found) {
+        setState(
+          () => _cameraMessage =
+              'Camera reader closed (exit $exitCode). Check webcam access and retry.',
+        );
+      }
+    } on ProcessException {
+      if (mounted) {
+        setState(
+          () => _cameraMessage =
+              'Linux camera reader is missing. Install Fedora package zbar, then reopen this scan.',
+        );
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _linuxCodes?.cancel();
+    _linuxCamera?.kill();
+    if (_mobileCamera != null) unawaited(_mobileCamera.dispose());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Scan shipping label')),
+    body: Column(
       children: [
-        Container(
-          width: 20,
-          height: 20,
-          decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
-          child: Icon(icon, color: Colors.white, size: 11),
-        ),
-        const SizedBox(width: 12),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(color: _C.muted, fontSize: 12),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                address,
-                style: const TextStyle(
-                  color: _C.ink,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
+          child: defaultTargetPlatform == TargetPlatform.linux
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(_cameraMessage, textAlign: TextAlign.center),
+                  ),
+                )
+              : MobileScanner(
+                  controller: _mobileCamera!,
+                  onDetect: (capture) {
+                    if (_found) return;
+                    for (final barcode in capture.barcodes) {
+                      if (barcode.rawValue == widget.trackingNumber) {
+                        _found = true;
+                        Navigator.pop(context, widget.trackingNumber);
+                        return;
+                      }
+                    }
+                  },
                 ),
-              ),
-            ],
+        ),
+        Padding(
+          padding: const EdgeInsets.all(20),
+          child: Text(
+            'Scan the barcode or QR on ${widget.trackingNumber}. Only this assigned parcel will be accepted.',
+            textAlign: TextAlign.center,
           ),
         ),
       ],
-    );
-  }
-}
-
-class _MapPin extends StatelessWidget {
-  final Color color;
-  final IconData icon;
-
-  const _MapPin({required this.color, required this.icon});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 2),
-      ),
-      child: Icon(icon, color: Colors.white, size: 16),
-    );
-  }
-}
-
-class _ActionButton extends StatelessWidget {
-  final IconData icon;
-  final bool filled;
-  final VoidCallback onTap;
-
-  const _ActionButton({
-    required this.icon,
-    required this.filled,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 42,
-        height: 42,
-        decoration: BoxDecoration(
-          color: filled ? _C.prune : _C.raisinSoft,
-          shape: BoxShape.circle,
-        ),
-        child: Icon(icon, color: filled ? Colors.white : _C.prune, size: 20),
-      ),
-    );
-  }
-}
-
-class _OrderItem extends StatelessWidget {
-  final String name, qty, price;
-
-  const _OrderItem({
-    required this.name,
-    required this.qty,
-    required this.price,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Row(
-        children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: const BoxDecoration(
-              color: _C.raisinSoft,
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.inventory_2_outlined,
-              color: _C.raisin,
-              size: 18,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              name,
-              style: const TextStyle(
-                color: _C.ink,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          Text('x$qty', style: const TextStyle(color: _C.muted, fontSize: 13)),
-          const SizedBox(width: 16),
-          Text(
-            price,
-            style: const TextStyle(
-              color: _C.ink,
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TotalRow extends StatelessWidget {
-  final String label, value;
-  final bool bold;
-
-  const _TotalRow({
-    required this.label,
-    required this.value,
-    this.bold = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            color: bold ? _C.ink : _C.muted,
-            fontSize: bold ? 15 : 13,
-            fontWeight: bold ? FontWeight.w800 : FontWeight.w500,
-          ),
-        ),
-        const Spacer(),
-        Text(
-          value,
-          style: TextStyle(
-            color: bold ? _C.prune : _C.ink,
-            fontSize: bold ? 18 : 13,
-            fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _SourceTile extends StatelessWidget {
-  final IconData icon;
-  final String title, subtitle;
-  final VoidCallback onTap;
-
-  const _SourceTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: _C.background,
-      borderRadius: BorderRadius.circular(_radius),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(_radius),
-            border: Border.all(color: _C.border),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 46,
-                height: 46,
-                decoration: const BoxDecoration(
-                  color: _C.raisinSoft,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, color: _C.raisin, size: 22),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        color: _C.ink,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: const TextStyle(color: _C.muted, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-              const Icon(
-                Icons.chevron_right_rounded,
-                color: _C.muted,
-                size: 20,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+    ),
+  );
 }
