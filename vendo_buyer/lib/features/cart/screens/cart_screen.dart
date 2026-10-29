@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:vendo_buyer/core/api/api_models.dart';
+import 'package:vendo_buyer/core/api/buyer_api.dart';
+import 'package:vendo_buyer/features/checkout/screens/checkout_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Palette (matches the buyer app)
@@ -21,27 +24,37 @@ class _C {
 // Placeholder data models
 // ─────────────────────────────────────────────────────────────────────────────
 class _CartItem {
+  final int id;
+  final int productId;
   final String name;
   final String variant;
-  final int price;
+  final double price;
+  final String image;
+  final int stock;
   final IconData icon;
   bool selected = false;
-  int qty = 1;
+  int qty;
 
   _CartItem({
+    required this.id,
+    required this.productId,
     required this.name,
     required this.variant,
     required this.price,
+    required this.image,
+    required this.stock,
     required this.icon,
+    this.qty = 1,
   });
 }
 
 class _CartShop {
+  final int sellerId;
   final String name;
   final List<_CartItem> items;
   bool selected = false;
 
-  _CartShop({required this.name, required this.items});
+  _CartShop({required this.sellerId, required this.name, required this.items});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,66 +68,93 @@ class CartScreen extends StatefulWidget {
 }
 
 class _CartScreenState extends State<CartScreen> {
-  // Placeholder data — will be replaced with API data
-  final List<_CartShop> _shops = [
-    _CartShop(
-      name: 'Vendo Official Store',
-      items: [
-        _CartItem(
-          name: 'Wireless Earbuds Pro',
-          variant: 'Black',
-          price: 1299,
-          icon: Icons.headphones,
-        ),
-        _CartItem(
-          name: 'USB-C Charging Cable 2m',
-          variant: 'White',
-          price: 249,
-          icon: Icons.cable,
-        ),
-      ],
-    ),
-    _CartShop(
-      name: 'Tech Gadgets PH',
-      items: [
-        _CartItem(
-          name: 'Smart Watch Series 5',
-          variant: 'Silver / 44mm',
-          price: 2499,
-          icon: Icons.watch,
-        ),
-      ],
-    ),
-    _CartShop(
-      name: 'Fashion Hub MNL',
-      items: [
-        _CartItem(
-          name: "Women's Running Sneakers",
-          variant: 'White / Size 7',
-          price: 1799,
-          icon: Icons.do_not_step,
-        ),
-        _CartItem(
-          name: 'Canvas Tote Bag',
-          variant: 'Beige',
-          price: 599,
-          icon: Icons.backpack,
-        ),
-      ],
-    ),
-  ];
+  List<_CartShop> _shops = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCart();
+  }
+
+  Future<void> _loadCart() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final cart = await BuyerApi.instance.cart();
+      if (!mounted) return;
+      setState(() {
+        _shops = cart.shops.map(_mapShop).toList();
+        _loading = false;
+        _selectAll = false;
+      });
+    } on BuyerApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Could not reach Vendo. Check your connection and retry.';
+        _loading = false;
+      });
+    }
+  }
+
+  _CartShop _mapShop(ApiCartShop shop) => _CartShop(
+    sellerId: shop.sellerId,
+    name: shop.shop,
+    items: shop.items
+        .map((line) => _CartItem(
+              id: line.id,
+              productId: line.productId,
+              name: line.name,
+              variant: line.variantText,
+              price: line.unitPriceValue,
+              image: line.image,
+              stock: line.stock,
+              qty: line.quantity,
+              icon: Icons.shopping_bag_outlined,
+            ))
+        .toList(),
+  );
 
   bool _selectAll = false;
 
   int get _totalItems => _shops.fold(0, (s, shop) => s + shop.items.length);
 
-  int get _selectedTotal => _shops.fold(0, (sum, shop) {
+  double get _selectedTotal => _shops.fold<double>(0, (sum, shop) {
     return sum +
-        shop.items.fold(
+        shop.items.fold<double>(
           0,
           (s, item) => s + (item.selected ? item.price * item.qty : 0),
         );
   });
+
+  List<int> get _selectedIds => _shops
+      .expand((shop) => shop.items)
+      .where((item) => item.selected)
+      .map((item) => item.id)
+      .toList();
+
+  Future<void> _checkout() async {
+    final ids = _selectedIds;
+    if (ids.isEmpty) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => CheckoutScreen(itemIds: ids)),
+    );
+    if (mounted) _loadCart();
+  }
+
+  void _toast(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
 
   int get _selectedCount => _shops.fold(
     0,
@@ -154,17 +194,39 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   void _syncSelectAll() {
-    _selectAll = _shops.every((shop) => shop.items.every((i) => i.selected));
+    _selectAll = _shops.isNotEmpty &&
+        _shops.every((shop) => shop.items.isNotEmpty && shop.items.every((i) => i.selected));
   }
 
-  void _changeQty(_CartItem item, int delta) {
-    setState(() {
-      final next = item.qty + delta;
-      if (next >= 1) item.qty = next;
-    });
+  Future<void> _changeQty(_CartItem item, int delta) async {
+    final next = item.qty + delta;
+    if (next < 1 || next > item.stock) return;
+    final previous = item.qty;
+    setState(() => item.qty = next);
+    try {
+      await BuyerApi.instance.updateCartLine(item.id, next);
+    } on BuyerApiException catch (e) {
+      if (!mounted) return;
+      setState(() => item.qty = previous);
+      _toast(e.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => item.qty = previous);
+      _toast('Could not update the cart. Check your connection.');
+    }
   }
 
-  void _deleteItem(_CartShop shop, _CartItem item) {
+  Future<void> _deleteItem(_CartShop shop, _CartItem item) async {
+    try {
+      await BuyerApi.instance.removeCartLine(item.id);
+    } on BuyerApiException catch (e) {
+      if (mounted) _toast(e.message);
+      return;
+    } catch (_) {
+      if (mounted) _toast('Could not remove the item. Check your connection.');
+      return;
+    }
+    if (!mounted) return;
     setState(() {
       shop.items.remove(item);
       if (shop.items.isEmpty) _shops.remove(shop);
@@ -179,11 +241,33 @@ class _CartScreenState extends State<CartScreen> {
       body: Column(
         children: [
           // ── Header ──────────────────────────────────────────────
-          _CartHeader(totalItems: _totalItems),
+          _CartHeader(
+            totalItems: _totalItems,
+            onBack: () => Navigator.of(context).maybePop(),
+          ),
 
           // ── List ────────────────────────────────────────────────
           Expanded(
-            child: _shops.isEmpty
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(28),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_error!, textAlign: TextAlign.center),
+                          const SizedBox(height: 12),
+                          FilledButton(
+                            onPressed: _loadCart,
+                            child: const Text('Try again'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : _shops.isEmpty
                 ? const _EmptyCart()
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
@@ -212,6 +296,7 @@ class _CartScreenState extends State<CartScreen> {
             onSelectAll: _toggleAll,
             total: _selectedTotal,
             selectedCount: _selectedCount,
+            onCheckout: _checkout,
           ),
         ],
       ),
@@ -224,7 +309,8 @@ class _CartScreenState extends State<CartScreen> {
 // ─────────────────────────────────────────────────────────────────────────────
 class _CartHeader extends StatelessWidget {
   final int totalItems;
-  const _CartHeader({required this.totalItems});
+  final VoidCallback onBack;
+  const _CartHeader({required this.totalItems, required this.onBack});
 
   @override
   Widget build(BuildContext context) {
@@ -242,9 +328,10 @@ class _CartHeader extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(4, 4, 16, 12),
           child: Row(
             children: [
-              // Back arrow (visual only inside tab — kept for consistency)
+              // Cart is opened as a pushed route, so the arrow returns to the previous screen.
               IconButton(
-                onPressed: () {},
+                onPressed: onBack,
+                tooltip: 'Back',
                 icon: const Icon(
                   Icons.arrow_back_rounded,
                   color: Colors.white,
@@ -466,17 +553,26 @@ class _CartItemRow extends StatelessWidget {
           ),
           const SizedBox(width: 10),
 
-          // Product image placeholder
-          Container(
-            width: 84,
-            height: 84,
-            decoration: BoxDecoration(
-              color: const Color(0xFFEDE5F5),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _C.border),
-            ),
-            child: Center(
-              child: Icon(item.icon, size: 36, color: _C.purpleMid),
+          // Product photo (falls back to an icon when the photo cannot load)
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.network(
+              item.image,
+              width: 84,
+              height: 84,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => Container(
+                width: 84,
+                height: 84,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEDE5F5),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _C.border),
+                ),
+                child: Center(
+                  child: Icon(item.icon, size: 36, color: _C.purpleMid),
+                ),
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -684,14 +780,16 @@ class _VendoVoucherRow extends StatelessWidget {
 class _CheckoutBar extends StatelessWidget {
   final bool selectAll;
   final ValueChanged<bool?> onSelectAll;
-  final int total;
+  final double total;
   final int selectedCount;
+  final VoidCallback? onCheckout;
 
   const _CheckoutBar({
     required this.selectAll,
     required this.onSelectAll,
     required this.total,
     required this.selectedCount,
+    this.onCheckout,
   });
 
   @override
@@ -733,7 +831,7 @@ class _CheckoutBar extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    '₱${total == 0 ? '0' : _formatPrice(total)}',
+                    '₱${_formatPrice(total)}',
                     style: const TextStyle(
                       color: _C.orange,
                       fontSize: 17,
@@ -748,7 +846,7 @@ class _CheckoutBar extends StatelessWidget {
               SizedBox(
                 height: 44,
                 child: ElevatedButton(
-                  onPressed: selectedCount > 0 ? () {} : null,
+                  onPressed: selectedCount > 0 ? onCheckout : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _C.orange,
                     disabledBackgroundColor: const Color(0xFFCCCCCC),
@@ -775,13 +873,18 @@ class _CheckoutBar extends StatelessWidget {
     );
   }
 
-  String _formatPrice(int p) {
-    final s = p.toString();
+  String _formatPrice(double value) {
+    final text = value % 1 == 0
+        ? value.toStringAsFixed(0)
+        : value.toStringAsFixed(2);
+    final parts = text.split('.');
+    final whole = parts.first;
     final buf = StringBuffer();
-    for (var i = 0; i < s.length; i++) {
-      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
-      buf.write(s[i]);
+    for (var i = 0; i < whole.length; i++) {
+      if (i > 0 && (whole.length - i) % 3 == 0) buf.write(',');
+      buf.write(whole[i]);
     }
+    if (parts.length > 1) buf.write('.${parts.last}');
     return buf.toString();
   }
 }

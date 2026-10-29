@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:vendo_buyer/core/api/buyer_api.dart';
 import 'package:vendo_buyer/features/auth/screens/login_screen.dart';
+import 'package:vendo_buyer/features/home/screens/home_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -28,18 +30,21 @@ class _SplashScreenState extends State<SplashScreen>
     ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutBack));
     _ctrl.forward();
 
-    Future.delayed(const Duration(milliseconds: 2600), () {
-      if (mounted) {
-        Navigator.pushReplacement(
-          context,
-          PageRouteBuilder(
-            pageBuilder: (_, __, ___) => const LoginScreen(),
-            transitionsBuilder: (_, anim, __, child) =>
-                FadeTransition(opacity: anim, child: child),
-            transitionDuration: const Duration(milliseconds: 500),
-          ),
-        );
-      }
+    Future.delayed(const Duration(milliseconds: 2600), () async {
+      if (!mounted) return;
+      // A stored buyer token opens the storefront; otherwise start at sign-in.
+      final signedIn = await BuyerApi.instance.hasToken();
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        PageRouteBuilder(
+          pageBuilder: (_, __, ___) =>
+              signedIn ? const HomeScreen() : const LoginScreen(),
+          transitionsBuilder: (_, anim, __, child) =>
+              FadeTransition(opacity: anim, child: child),
+          transitionDuration: const Duration(milliseconds: 500),
+        ),
+      );
     });
   }
 

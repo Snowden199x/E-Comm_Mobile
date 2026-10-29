@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_buyer/core/api/buyer_api.dart';
 import 'package:vendo_buyer/features/auth/screens/login_screen.dart';
+import 'package:vendo_buyer/features/notifications/screens/notifications_screen.dart';
+import 'package:vendo_buyer/features/orders/screens/orders_screen.dart';
+import 'package:vendo_buyer/features/saved/screens/saved_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Palette — matches the rest of the buyer app
@@ -146,7 +149,7 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                     // ── Account section ─────────────────────────
                     _Section(
                       title: 'Account',
-                      items: const [
+                      items: [
                         _MenuItem(
                           icon: Icons.person_outline_rounded,
                           label: 'Personal Information',
@@ -161,7 +164,13 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                         ),
                         _MenuItem(
                           icon: Icons.notifications_outlined,
-                          label: 'Notification Settings',
+                          label: 'Notifications',
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const NotificationsScreen(),
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -170,20 +179,28 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                     // ── Shopping section ────────────────────────
                     _Section(
                       title: 'Shopping',
-                      items: const [
+                      items: [
                         _MenuItem(
                           icon: Icons.receipt_long_outlined,
                           label: 'My Orders',
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const OrdersScreen()),
+                          ),
                         ),
                         _MenuItem(
                           icon: Icons.favorite_border_rounded,
                           label: 'Saved Items',
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const SavedScreen()),
+                          ),
                         ),
-                        _MenuItem(
+                        const _MenuItem(
                           icon: Icons.local_offer_outlined,
                           label: 'My Vouchers',
                         ),
-                        _MenuItem(
+                        const _MenuItem(
                           icon: Icons.star_border_rounded,
                           label: 'My Reviews',
                         ),
@@ -601,13 +618,14 @@ class _Section extends StatelessWidget {
 class _MenuItem extends StatelessWidget {
   final IconData icon;
   final String label;
+  final VoidCallback? onTap;
 
-  const _MenuItem({required this.icon, required this.label});
+  const _MenuItem({required this.icon, required this.label, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () {},
+      onTap: onTap ?? () {},
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
         child: Row(

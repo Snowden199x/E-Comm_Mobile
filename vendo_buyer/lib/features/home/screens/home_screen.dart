@@ -2,8 +2,12 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:vendo_buyer/core/api/api_models.dart';
+import 'package:vendo_buyer/core/api/buyer_api.dart';
 import 'package:vendo_buyer/features/cart/screens/cart_screen.dart';
-import 'package:vendo_buyer/features/product/screens/product_detail_screen.dart';
+import 'package:vendo_buyer/features/home/screens/category_products_screen.dart';
+import 'package:vendo_buyer/features/orders/screens/orders_screen.dart';
+import 'package:vendo_buyer/features/product/screens/api_product_screen.dart';
 import 'package:vendo_buyer/features/profile/screens/profile_screen.dart';
 import 'package:vendo_buyer/features/saved/screens/saved_screen.dart';
 
@@ -110,6 +114,55 @@ class _HomeTabState extends State<_HomeTab> {
   final PageController _bannerCtrl = PageController();
   int _bannerPage = 0;
 
+  List<_Product> _products = const [];
+  List<_HomeCategory> _categories = const [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadHome();
+  }
+
+  Future<void> _loadHome() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final data = await BuyerApi.instance.home();
+      if (!mounted) return;
+      setState(() {
+        _products = (data['products'] as List? ?? [])
+            .map((e) => ApiProduct.fromJson(Map<String, dynamic>.from(e as Map)))
+            .map(_Product.fromApi)
+            .toList();
+        _categories = (data['categories'] as List? ?? [])
+            .map(
+              (e) => _HomeCategory(
+                int.tryParse('${e['id']}') ?? 0,
+                '${e['name']}',
+              ),
+            )
+            .toList();
+        _loading = false;
+      });
+    } on BuyerApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Could not reach Vendo. Check your connection and retry.';
+        _loading = false;
+      });
+    }
+  }
+
   @override
   void dispose() {
     _bannerCtrl.dispose();
@@ -154,7 +207,7 @@ class _HomeTabState extends State<_HomeTab> {
               // ── Shop by category ────────────────────────────────
               _SectionHeader(title: 'Shop by Category', onSeeAll: () {}),
               const SizedBox(height: 10),
-              _CategoryRow(),
+              _CategoryRow(categories: _categories),
 
               const SizedBox(height: 20),
 
@@ -165,7 +218,41 @@ class _HomeTabState extends State<_HomeTab> {
                 onSeeAll: () {},
               ),
               const SizedBox(height: 10),
-              _ProductGrid(),
+              if (_loading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 28),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                  child: Column(
+                    children: [
+                      Text(
+                        _error!,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: _C.muted, fontSize: 12.5),
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton(
+                        onPressed: _loadHome,
+                        child: const Text('Try again'),
+                      ),
+                    ],
+                  ),
+                )
+              else if (_products.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 28),
+                  child: Center(
+                    child: Text(
+                      'No products are available yet.',
+                      style: TextStyle(color: _C.muted, fontSize: 12.5),
+                    ),
+                  ),
+                )
+              else
+                _ProductGrid(products: _products),
 
               const SizedBox(height: 32),
             ],
@@ -374,10 +461,25 @@ class _QuickActionTile extends StatelessWidget {
   final _QuickAction action;
   const _QuickActionTile({required this.action});
 
+  void _open(BuildContext context) {
+    switch (action.label) {
+      case 'Track Orders':
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const OrdersScreen()),
+        );
+      case 'Saved Items':
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const SavedScreen()),
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {},
+      onTap: () => _open(context),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -745,22 +847,40 @@ class _SectionHeader extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 // Shop by category  — circular icons in a scrollable row
 // ─────────────────────────────────────────────────────────────────────────────
+/// Top-level categories from `GET /api/v1/buyer/home`.
+class _HomeCategory {
+  final int id;
+  final String name;
+  const _HomeCategory(this.id, this.name);
+}
+
 class _CategoryRow extends StatelessWidget {
-  static const _cats = <_Cat>[
-    _Cat(Icons.devices_outlined, 'Electronics\n& Gadgets'),
-    _Cat(Icons.checkroom_outlined, "Women's\nApparel"),
-    _Cat(Icons.man_outlined, "Men's\nApparel"),
-    _Cat(Icons.child_care_outlined, 'Kids and\nBaby'),
-    _Cat(Icons.home_outlined, 'Home and\nGarden'),
-    _Cat(Icons.sports_basketball_outlined, 'Sports and\nOutdoors'),
-    _Cat(Icons.spa_outlined, 'Health and\nBeauty'),
-    _Cat(Icons.menu_book_outlined, 'Books and\nMedia'),
-    _Cat(Icons.restaurant_outlined, 'Food and\nGourmet'),
-    _Cat(Icons.two_wheeler_outlined, 'Automotive\n& Moto'),
-  ];
+  final List<_HomeCategory> categories;
+  const _CategoryRow({required this.categories});
+
+  static const _icons = <String, IconData>{
+    'Electronics and Gadgets': Icons.devices_outlined,
+    "Women's Apparel": Icons.checkroom_outlined,
+    "Men's Apparel": Icons.man_outlined,
+    'Kids and Baby': Icons.child_care_outlined,
+    'Home and Garden': Icons.home_outlined,
+    'Sports and Outdoors': Icons.sports_basketball_outlined,
+    'Health and Beauty': Icons.spa_outlined,
+    'Makeup & Cosmetics': Icons.brush_outlined,
+    'Books and Media': Icons.menu_book_outlined,
+    'Food and Gourmet': Icons.restaurant_outlined,
+    'Automotive & Motorcycle': Icons.two_wheeler_outlined,
+    'Furniture and Office Equipment': Icons.chair_outlined,
+    'Jewelry and Watches': Icons.watch_outlined,
+    'Office and School Supplies': Icons.edit_outlined,
+    'Pet Supplies': Icons.pets_outlined,
+  };
 
   @override
   Widget build(BuildContext context) {
+    if (categories.isEmpty) {
+      return const SizedBox.shrink();
+    }
     return Container(
       color: _C.white,
       padding: const EdgeInsets.symmetric(vertical: 12),
@@ -769,9 +889,26 @@ class _CategoryRow extends StatelessWidget {
         child: ListView.separated(
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 14),
-          itemCount: _cats.length,
+          itemCount: categories.length,
           separatorBuilder: (_, __) => const SizedBox(width: 4),
-          itemBuilder: (_, i) => _CatTile(cat: _cats[i]),
+          itemBuilder: (_, i) {
+            final category = categories[i];
+            return _CatTile(
+              cat: _Cat(
+                _icons[category.name] ?? Icons.category_outlined,
+                category.name,
+              ),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => CategoryProductsScreen(
+                    categoryId: category.id,
+                    title: category.name,
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
@@ -786,12 +923,13 @@ class _Cat {
 
 class _CatTile extends StatelessWidget {
   final _Cat cat;
-  const _CatTile({required this.cat});
+  final VoidCallback? onTap;
+  const _CatTile({required this.cat, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () {},
+      onTap: onTap,
       child: SizedBox(
         width: 66,
         child: Column(
@@ -829,70 +967,8 @@ class _CatTile extends StatelessWidget {
 // Product grid  — 2-column cards (discount badge, promo tag, sold, delivery)
 // ─────────────────────────────────────────────────────────────────────────────
 class _ProductGrid extends StatelessWidget {
-  static const _products = <_Product>[
-    _Product(
-      title: 'Wireless Earbuds Bluetooth 5.3 High Quality Sound',
-      price: '1,299',
-      sold: '10K+ sold',
-      delivery: '1-3 Days',
-      location: 'Valenzuela City',
-      icon: Icons.headphones,
-      discount: '-45%',
-      promo: '₱50 off Ends in 1 Hour',
-      tag: 'Cash on Delivery',
-      isLive: true,
-    ),
-    _Product(
-      title: 'Smart Watch Waterproof Fitness Tracker',
-      price: '2,499',
-      sold: '5K+ sold',
-      delivery: '2-4 Days',
-      location: 'Quezon City',
-      icon: Icons.watch,
-      discount: '-30%',
-      promo: '₱100 off Ends in 3 Hours',
-      tag: 'Cash on Delivery',
-    ),
-    _Product(
-      title: 'Travel Backpack Large Capacity Water Resistant',
-      price: '899',
-      sold: '8K+ sold',
-      delivery: '1-3 Days',
-      location: 'Manila',
-      icon: Icons.backpack,
-      discount: '-52%',
-      isLive: true,
-    ),
-    _Product(
-      title: 'Basketball Official Size Indoor Outdoor',
-      price: '599',
-      sold: '2K+ sold',
-      delivery: '3-5 Days',
-      location: 'Pasig City',
-      icon: Icons.sports_basketball,
-      promo: '₱20 off Ends in 2 Hours',
-    ),
-    _Product(
-      title: "Women's Sneakers Comfortable Casual Shoes",
-      price: '1,799',
-      sold: '6K+ sold',
-      delivery: '2-4 Days',
-      location: 'Caloocan City',
-      icon: Icons.do_not_step,
-      discount: '-25%',
-      tag: 'Cash on Delivery',
-    ),
-    _Product(
-      title: 'Coffee Maker Automatic Drip Machine',
-      price: '3,299',
-      sold: '1K+ sold',
-      delivery: '1-3 Days',
-      location: 'Makati City',
-      icon: Icons.coffee,
-      discount: '-18%',
-      promo: '₱150 off Ends in 5 Hours',
-    ),
-  ];
+  final List<_Product> products;
+  const _ProductGrid({required this.products});
 
   @override
   Widget build(BuildContext context) {
@@ -901,26 +977,28 @@ class _ProductGrid extends StatelessWidget {
       child: GridView.builder(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
-        itemCount: _products.length,
+        itemCount: products.length,
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 2,
           mainAxisSpacing: 10,
           crossAxisSpacing: 10,
           childAspectRatio: 0.56,
         ),
-        itemBuilder: (_, i) => _ProductCard(product: _products[i]),
+        itemBuilder: (_, i) => _ProductCard(product: products[i]),
       ),
     );
   }
 }
 
 class _Product {
+  final int id;
+  final String image;
   final String title, price, sold, delivery, location;
   final IconData icon;
   final String? discount; // e.g. '-84%'
-  final String? promo; // e.g. '₱3 off Ends in 1 Hour'
-  final String? tag; // small label at the bottom of the image
-  final bool isLive;
+  final String? promo = null; // e.g. '₱3 off Ends in 1 Hour'
+  final String? tag = null; // small label at the bottom of the image
+  final bool isLive = false;
 
   const _Product({
     required this.title,
@@ -929,11 +1007,23 @@ class _Product {
     required this.delivery,
     required this.location,
     required this.icon,
+    this.id = 0,
+    this.image = '',
     this.discount,
-    this.promo,
-    this.tag,
-    this.isLive = false,
   });
+
+  /// Maps a live API product card to this view model (the price arrives with the ₱ sign).
+  factory _Product.fromApi(ApiProduct product) => _Product(
+    id: product.id,
+    image: product.image,
+    title: product.name,
+    price: product.price.replaceFirst('₱', ''),
+    sold: product.sold > 0 ? '${product.sold} sold' : 'New arrival',
+    delivery: 'COD',
+    location: product.shop,
+    icon: Icons.shopping_bag_outlined,
+    discount: product.discountPercent > 0 ? '-${product.discountPercent}%' : null,
+  );
 }
 
 class _ProductCard extends StatefulWidget {
@@ -957,19 +1047,9 @@ class _ProductCardState extends State<_ProductCard> {
       onTap: () => Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => ProductDetailScreen(
-            product: ProductData(
-              title: p.title,
-              price: p.price,
-              sold: p.sold,
-              delivery: p.delivery,
-              location: p.location,
-              icon: p.icon,
-              discount: p.discount,
-              promo: p.promo,
-              tag: p.tag,
-              isLive: p.isLive,
-            ),
+          builder: (_) => ApiProductScreen(
+            productId: p.id,
+            title: p.title,
           ),
         ),
       ),
@@ -987,11 +1067,16 @@ class _ProductCardState extends State<_ProductCard> {
             Expanded(
               child: Stack(
                 children: [
-                  Container(
-                    width: double.infinity,
-                    color: const Color(0xFFEDE5F5),
-                    child: Center(
-                      child: Icon(p.icon, size: 56, color: _C.purpleMid),
+                  Positioned.fill(
+                    child: Image.network(
+                      p.image,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => Container(
+                        color: const Color(0xFFEDE5F5),
+                        child: Center(
+                          child: Icon(p.icon, size: 56, color: _C.purpleMid),
+                        ),
+                      ),
                     ),
                   ),
                   // Heart (top-left)

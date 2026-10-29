@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:vendo_buyer/core/api/api_models.dart';
 import 'package:vendo_buyer/core/api/buyer_api.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -128,11 +129,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   // Step 2 controllers
   final _phoneCtrl = TextEditingController();
-  final _provinceCtrl = TextEditingController();
-  final _municipalityCtrl = TextEditingController();
-  final _barangayCtrl = TextEditingController();
   final _streetCtrl = TextEditingController();
   final _zipCodeCtrl = TextEditingController();
+
+  // Step 2 address picks, loaded from the PSGC location API
+  List<ApiProvince> _provinces = const [];
+  List<ApiCity> _municipalities = const [];
+  List<ApiBarangay> _barangays = const [];
+  ApiProvince? _province;
+  ApiCity? _municipality;
+  ApiBarangay? _barangay;
+  bool _loadingProvinces = false;
+  bool _loadingBarangays = false;
 
   // Step 3
   bool _agreedToTerms = false;
@@ -162,6 +170,52 @@ class _RegisterScreenState extends State<RegisterScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _loadProvinces();
+  }
+
+  Future<void> _loadProvinces() async {
+    setState(() => _loadingProvinces = true);
+    try {
+      final provinces = await BuyerApi.instance.locations();
+      if (!mounted) return;
+      setState(() {
+        _provinces = provinces;
+        _loadingProvinces = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingProvinces = false);
+      _showSnack('Could not load the province list. Check your connection.');
+    }
+  }
+
+  Future<void> _loadBarangays(ApiCity city) async {
+    setState(() {
+      _loadingBarangays = true;
+      _barangays = const [];
+      _barangay = null;
+    });
+    try {
+      final barangays = await BuyerApi.instance.barangays(city.code);
+      if (!mounted) return;
+      setState(() {
+        _barangays = barangays;
+        _loadingBarangays = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loadingBarangays = false);
+      _showSnack('Could not load the barangay list. Check your connection.');
+    }
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  @override
   void dispose() {
     _lastNameCtrl.dispose();
     _firstNameCtrl.dispose();
@@ -172,9 +226,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _passwordCtrl.dispose();
     _confirmPasswordCtrl.dispose();
     _phoneCtrl.dispose();
-    _provinceCtrl.dispose();
-    _municipalityCtrl.dispose();
-    _barangayCtrl.dispose();
     _streetCtrl.dispose();
     _zipCodeCtrl.dispose();
     _scroll.dispose();
@@ -203,9 +254,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
       }
     } else if (_currentStep == 1) {
       if (_phoneCtrl.text.trim().isEmpty) newErrors.add('phone');
-      if (_provinceCtrl.text.trim().isEmpty) newErrors.add('province');
-      if (_municipalityCtrl.text.trim().isEmpty) newErrors.add('municipality');
-      if (_barangayCtrl.text.trim().isEmpty) newErrors.add('barangay');
+      if (_province == null) newErrors.add('province');
+      if (_municipality == null) newErrors.add('municipality');
+      if (_barangay == null) newErrors.add('barangay');
       if (_streetCtrl.text.trim().isEmpty) newErrors.add('street');
       if (_zipCodeCtrl.text.trim().isEmpty) newErrors.add('zipCode');
     }
@@ -292,9 +343,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
           if (_idCategory == 'secondary') 'id_type_2': _secondaryId2Type ?? '',
           'password': _passwordCtrl.text,
           'password_confirmation': _confirmPasswordCtrl.text,
-          'province': _provinceCtrl.text.trim(),
-          'municipality': _municipalityCtrl.text.trim(),
-          'barangay': _barangayCtrl.text.trim(),
+          'province': _province?.name ?? '',
+          'municipality': _municipality?.name ?? '',
+          'barangay': _barangay?.name ?? '',
           'street': _streetCtrl.text.trim(),
           'zip_code': _zipCodeCtrl.text.trim(),
           'contact_number': _phoneCtrl.text.trim(),
@@ -527,6 +578,31 @@ class _RegisterScreenState extends State<RegisterScreen> {
   // Small helpers
   // ────────────────────────────────────────────────────────────────
   static const SizedBox _gap = SizedBox(height: 18);
+
+  /// Read-only picker used for the PSGC address fields; the options come from the buyer API.
+  Widget _locationDropdown({
+    required String hint,
+    required IconData icon,
+    required bool hasError,
+    required bool loading,
+    required String? value,
+    required List<DropdownMenuItem<String>> items,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return DropdownButtonFormField<String>(
+      key: ValueKey('$hint-$value-${items.length}'),
+      initialValue: value,
+      isExpanded: true,
+      decoration: _decoration(
+        hint: loading ? 'Loading…' : hint,
+        icon: icon,
+        error: hasError,
+      ),
+      style: TextStyle(color: _C.raisin, fontSize: 15),
+      items: items,
+      onChanged: loading ? null : onChanged,
+    );
+  }
 
   Widget _col(String label, Widget child, {bool required = false}) {
     return Column(
@@ -866,33 +942,95 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _gap,
         _col(
           'Province',
-          _Field(
-            controller: _provinceCtrl,
-            hasError: _errors.contains('province'),
-            hint: 'Enter province',
+          _locationDropdown(
+            hint: 'Select province',
             icon: Icons.map_outlined,
+            hasError: _errors.contains('province'),
+            loading: _loadingProvinces,
+            value: _province?.code,
+            items: _provinces
+                .map(
+                  (province) => DropdownMenuItem(
+                    value: province.code,
+                    child: Text(province.name, overflow: TextOverflow.ellipsis),
+                  ),
+                )
+                .toList(),
+            onChanged: (code) {
+              if (code == null) return;
+              for (final province in _provinces) {
+                if (province.code == code) {
+                  setState(() {
+                    _province = province;
+                    _municipalities = province.cities;
+                    _municipality = null;
+                    _barangay = null;
+                    _barangays = const [];
+                  });
+                }
+              }
+            },
           ),
           required: true,
         ),
         _gap,
         _col(
           'Municipality / City',
-          _Field(
-            controller: _municipalityCtrl,
-            hasError: _errors.contains('municipality'),
-            hint: 'Enter municipality or city',
+          _locationDropdown(
+            hint: _province == null
+                ? 'Select a province first'
+                : 'Select municipality or city',
             icon: Icons.location_city_outlined,
+            hasError: _errors.contains('municipality'),
+            loading: false,
+            value: _municipality?.code,
+            items: _municipalities
+                .map(
+                  (city) => DropdownMenuItem(
+                    value: city.code,
+                    child: Text(city.name, overflow: TextOverflow.ellipsis),
+                  ),
+                )
+                .toList(),
+            onChanged: (code) {
+              if (code == null) return;
+              for (final city in _municipalities) {
+                if (city.code == code) {
+                  setState(() => _municipality = city);
+                  _loadBarangays(city);
+                }
+              }
+            },
           ),
           required: true,
         ),
         _gap,
         _col(
           'Barangay',
-          _Field(
-            controller: _barangayCtrl,
-            hasError: _errors.contains('barangay'),
-            hint: 'Enter barangay',
+          _locationDropdown(
+            hint: _municipality == null
+                ? 'Select a city first'
+                : 'Select barangay',
             icon: Icons.holiday_village_outlined,
+            hasError: _errors.contains('barangay'),
+            loading: _loadingBarangays,
+            value: _barangay?.code,
+            items: _barangays
+                .map(
+                  (barangay) => DropdownMenuItem(
+                    value: barangay.code,
+                    child: Text(barangay.name, overflow: TextOverflow.ellipsis),
+                  ),
+                )
+                .toList(),
+            onChanged: (code) {
+              if (code == null) return;
+              for (final barangay in _barangays) {
+                if (barangay.code == code) {
+                  setState(() => _barangay = barangay);
+                }
+              }
+            },
           ),
           required: true,
         ),
@@ -957,7 +1095,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 value: fullName.isEmpty ? '—' : fullName,
               ),
               item2: _RC(label: 'Phone Number', value: val(_phoneCtrl.text)),
-              item3: _RC(label: 'Province', value: val(_provinceCtrl.text)),
+              item3: _RC(
+                label: 'Province',
+                value: val(_province?.name ?? ''),
+              ),
               item4: _RC(
                 label: 'Street/House No.',
                 value: val(_streetCtrl.text),
@@ -968,14 +1109,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
               item2: _RC(label: 'Birthday', value: val(_birthdayCtrl.text)),
               item3: _RC(
                 label: 'Municipality',
-                value: val(_municipalityCtrl.text),
+                value: val(_municipality?.name ?? ''),
               ),
               item4: _RC(label: 'Zip Code', value: val(_zipCodeCtrl.text)),
             ),
             _ReviewRow4(
               item1: _RC(label: 'Email', value: val(_emailCtrl.text)),
               item2: _RC(label: 'Age', value: val(_ageCtrl.text)),
-              item3: _RC(label: 'Barangay', value: val(_barangayCtrl.text)),
+              item3: _RC(
+                label: 'Barangay',
+                value: val(_barangay?.name ?? ''),
+              ),
               item4: _RC(
                 label: 'ID Category',
                 value: _idCategory == 'primary'
