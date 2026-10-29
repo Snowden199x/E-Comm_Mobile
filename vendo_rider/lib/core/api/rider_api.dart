@@ -309,6 +309,29 @@ class RiderApi {
     return _body(response);
   }
 
+  Future<Map<String, dynamic>> riderNotifications() async {
+    final response = await http
+        .get(Uri.parse('$baseUrl/notifications'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 20));
+    return _body(response);
+  }
+
+  Future<void> markRiderNotificationRead(int notificationId) async {
+    final response = await http
+        .post(Uri.parse('$baseUrl/notifications/$notificationId/read'),
+            headers: await _authHeaders())
+        .timeout(const Duration(seconds: 20));
+    _body(response);
+  }
+
+  Future<void> markAllRiderNotificationsRead() async {
+    final response = await http
+        .post(Uri.parse('$baseUrl/notifications/read-all'),
+            headers: await _authHeaders())
+        .timeout(const Duration(seconds: 20));
+    _body(response);
+  }
+
   Future<Map<String, dynamic>> earnings({bool transportDriver = false}) async {
     final base = transportDriver ? transportDriverBaseUrl : baseUrl;
     final headers = transportDriver
