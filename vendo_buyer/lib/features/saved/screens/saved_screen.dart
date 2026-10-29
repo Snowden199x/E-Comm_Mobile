@@ -1,41 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:vendo_buyer/core/api/api_models.dart';
+import 'package:vendo_buyer/core/api/buyer_api.dart';
+import 'package:vendo_buyer/features/product/screens/api_product_screen.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Palette (matches the buyer app)
-// ─────────────────────────────────────────────────────────────────────────────
-class _C {
-  static const headerTop = Color(0xFF3B1F52);
-  static const headerBot = Color(0xFF2A1440);
-  static const orange = Color(0xFFE8873A);
-  static const purpleDark = Color(0xFF2D1B3D);
-  static const purpleMid = Color(0xFF7B2FBE);
-  static const bg = Color(0xFFF4F1F8);
-  static const white = Color(0xFFFFFFFF);
-  static const ink = Color(0xFF1A1A2E);
-  static const muted = Color(0xFF888888);
-  static const border = Color(0xFFECE6EA);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Placeholder saved item model
-// ─────────────────────────────────────────────────────────────────────────────
-class _SavedItem {
-  final String name;
-  final String shop;
-  final String price;
-  final IconData icon;
-
-  const _SavedItem({
-    required this.name,
-    required this.shop,
-    required this.price,
-    required this.icon,
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Saved Items Screen
-// ─────────────────────────────────────────────────────────────────────────────
+/// Saved items from `GET /api/v1/buyer/saved-items` (the same list the web heart buttons use).
 class SavedScreen extends StatefulWidget {
   const SavedScreen({super.key});
 
@@ -44,95 +12,132 @@ class SavedScreen extends StatefulWidget {
 }
 
 class _SavedScreenState extends State<SavedScreen> {
-  // Placeholder data — will be replaced with API data
-  final List<_SavedItem> _items = const [
-    _SavedItem(
-      name: 'Wireless Earbuds Pro',
-      shop: 'Vendo Official Store',
-      price: '₱1,299',
-      icon: Icons.headphones,
-    ),
-    _SavedItem(
-      name: 'Smart Watch Series 5',
-      shop: 'Tech Gadgets PH',
-      price: '₱2,499',
-      icon: Icons.watch,
-    ),
-    _SavedItem(
-      name: "Women's Running Sneakers",
-      shop: 'Fashion Hub MNL',
-      price: '₱1,799',
-      icon: Icons.do_not_step,
-    ),
-    _SavedItem(
-      name: 'Travel Backpack Pro',
-      shop: 'Outdoor Gear PH',
-      price: '₱899',
-      icon: Icons.backpack,
-    ),
-    _SavedItem(
-      name: 'Coffee Maker Deluxe',
-      shop: 'Home Essentials Store',
-      price: '₱3,299',
-      icon: Icons.coffee,
-    ),
-  ];
+  static const _headerTop = Color(0xFF3B1F52);
+  static const _headerBot = Color(0xFF2A1440);
+  static const _purpleMid = Color(0xFF7B2FBE);
+  static const _bg = Color(0xFFF4F1F8);
+  static const _white = Colors.white;
+  static const _ink = Color(0xFF1A1A2E);
+  static const _muted = Color(0xFF888888);
+  static const _border = Color(0xFFECE6EA);
+
+  List<ApiProduct> _items = const [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final items = await BuyerApi.instance.savedItems();
+      if (!mounted) return;
+      setState(() {
+        _items = items;
+        _loading = false;
+      });
+    } on BuyerApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.message;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Could not reach Vendo. Check your connection and retry.';
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _remove(ApiProduct product) async {
+    final previous = _items;
+    setState(() => _items = _items.where((item) => item.id != product.id).toList());
+    try {
+      await BuyerApi.instance.removeSavedItem(product.id);
+    } on BuyerApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _items = previous);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _items = previous);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not update saved items. Check your connection.')),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _C.bg,
+      backgroundColor: _bg,
       body: Column(
         children: [
-          _SavedHeader(count: _items.length),
+          _header(),
           Expanded(
-            child: _items.isEmpty
-                ? const _EmptySaved()
-                : GridView.builder(
-                    padding: const EdgeInsets.fromLTRB(12, 14, 12, 24),
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          mainAxisSpacing: 10,
-                          crossAxisSpacing: 10,
-                          childAspectRatio: 0.70,
-                        ),
-                    itemCount: _items.length,
-                    itemBuilder: (_, i) => _SavedCard(
-                      item: _items[i],
-                      onRemove: () => setState(() => _items.removeAt(i)),
-                    ),
-                  ),
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                    ? _errorState()
+                    : _items.isEmpty
+                        ? _emptyState()
+                        : RefreshIndicator(
+                            onRefresh: _load,
+                            child: GridView.builder(
+                              padding: const EdgeInsets.fromLTRB(12, 14, 12, 24),
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                mainAxisSpacing: 10,
+                                crossAxisSpacing: 10,
+                                childAspectRatio: 0.62,
+                              ),
+                              itemCount: _items.length,
+                              itemBuilder: (_, index) => _card(_items[index]),
+                            ),
+                          ),
           ),
         ],
       ),
     );
   }
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Header
-// ─────────────────────────────────────────────────────────────────────────────
-class _SavedHeader extends StatelessWidget {
-  final int count;
-  const _SavedHeader({required this.count});
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _header() {
+    // The screen is both a bottom-nav tab and a pushed route; only the pushed copy can go back.
+    final canPop = Navigator.of(context).canPop();
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [_C.headerTop, _C.headerBot],
+          colors: [_headerTop, _headerBot],
         ),
       ),
       child: SafeArea(
         bottom: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+          padding: EdgeInsets.fromLTRB(canPop ? 4 : 16, 12, 16, 14),
           child: Row(
             children: [
+              if (canPop)
+                IconButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  tooltip: 'Back',
+                  icon: const Icon(
+                    Icons.arrow_back_rounded,
+                    color: Colors.white,
+                    size: 24,
+                  ),
+                ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -147,7 +152,7 @@ class _SavedHeader extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '$count item${count == 1 ? '' : 's'} saved',
+                      '${_items.length} item${_items.length == 1 ? '' : 's'} saved',
                       style: const TextStyle(
                         color: Color(0xCCFFFFFF),
                         fontSize: 12.5,
@@ -156,7 +161,6 @@ class _SavedHeader extends StatelessWidget {
                   ],
                 ),
               ),
-              // Heart illustration
               Container(
                 width: 40,
                 height: 40,
@@ -176,192 +180,152 @@ class _SavedHeader extends StatelessWidget {
       ),
     );
   }
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Saved item card
-// ─────────────────────────────────────────────────────────────────────────────
-class _SavedCard extends StatelessWidget {
-  final _SavedItem item;
-  final VoidCallback onRemove;
-
-  const _SavedCard({required this.item, required this.onRemove});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _C.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _C.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Image area
-          Expanded(
-            child: Stack(
-              children: [
-                Container(
-                  width: double.infinity,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFEDE5F5),
-                    borderRadius: BorderRadius.vertical(
-                      top: Radius.circular(11),
-                    ),
-                  ),
-                  child: Center(
-                    child: Icon(item.icon, size: 52, color: _C.purpleMid),
-                  ),
-                ),
-                // Remove (unsave) button
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: GestureDetector(
-                    onTap: onRemove,
-                    child: Container(
-                      width: 30,
-                      height: 30,
-                      decoration: const BoxDecoration(
-                        color: Colors.white,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(color: Color(0x22000000), blurRadius: 4),
-                        ],
-                      ),
-                      child: const Icon(
-                        Icons.favorite_rounded,
-                        size: 16,
-                        color: Colors.red,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+  Widget _card(ApiProduct product) {
+    return GestureDetector(
+      onTap: () async {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ApiProductScreen(productId: product.id, title: product.name),
           ),
-          // Details
-          Padding(
-            padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.name,
-                  style: const TextStyle(
-                    color: _C.ink,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                    height: 1.3,
+        );
+        if (mounted) _load();
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: _white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _border),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            AspectRatio(
+              aspectRatio: 1,
+              child: Stack(
+                children: [
+                  Image.network(
+                    product.image,
+                    fit: BoxFit.cover,
+                    width: double.infinity,
+                    errorBuilder: (_, __, ___) => Container(
+                      color: const Color(0xFFEDE5F5),
+                      child: const Icon(Icons.image_not_supported_outlined),
+                    ),
                   ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 3),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.storefront_outlined,
-                      size: 11,
-                      color: _C.muted,
-                    ),
-                    const SizedBox(width: 3),
-                    Expanded(
-                      child: Text(
-                        item.shop,
-                        style: const TextStyle(color: _C.muted, fontSize: 10.5),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      item.price,
-                      style: const TextStyle(
-                        color: _C.orange,
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    GestureDetector(
-                      onTap: () {},
+                  Positioned(
+                    top: 6,
+                    right: 6,
+                    child: GestureDetector(
+                      onTap: () => _remove(product),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 5,
+                        width: 28,
+                        height: 28,
+                        decoration: const BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
                         ),
-                        decoration: BoxDecoration(
-                          color: _C.purpleDark,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text(
-                          'Add to Cart',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                          ),
+                        child: const Icon(
+                          Icons.favorite,
+                          size: 16,
+                          color: Color(0xFFC0395B),
                         ),
                       ),
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    product.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 12, height: 1.3, color: _ink),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    product.price,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF52245B),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    product.shop,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 10.5, color: _muted),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
-}
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Empty state
-// ─────────────────────────────────────────────────────────────────────────────
-class _EmptySaved extends StatelessWidget {
-  const _EmptySaved();
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _emptyState() {
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 100,
-            height: 100,
+            width: 86,
+            height: 86,
             decoration: const BoxDecoration(
               color: Color(0xFFEDE5F5),
               shape: BoxShape.circle,
             ),
             child: const Icon(
               Icons.favorite_border_rounded,
-              size: 52,
-              color: _C.purpleMid,
+              size: 40,
+              color: _purpleMid,
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 14),
           const Text(
-            'No saved items yet',
-            style: TextStyle(
-              color: _C.ink,
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-            ),
+            'Nothing saved yet',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _ink),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           const Text(
-            'Tap the heart on any product to save it here.',
-            style: TextStyle(color: _C.muted, fontSize: 13),
+            'Tap the heart on a product to save it for later.',
             textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12.5, color: _muted),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _errorState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_rounded, size: 44, color: _muted),
+            const SizedBox(height: 12),
+            Text(_error ?? 'Something went wrong.', textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: _purpleMid),
+              onPressed: _load,
+              child: const Text('Try again'),
+            ),
+          ],
+        ),
       ),
     );
   }
