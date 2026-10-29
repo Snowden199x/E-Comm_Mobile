@@ -82,7 +82,7 @@ class _EarningsScreenState extends State<EarningsScreen> {
                         const SizedBox(height: 6),
                         Text(_money(_summary['accrued_total']), style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: _purple)),
                         const SizedBox(height: 6),
-                        Text('${_summary['hub_credits'] ?? 0} completed hub credits · ₱10 per eligible hub', style: const TextStyle(color: _muted)),
+                        Text('${_summary['hub_credits'] ?? 0} completed credits · accrued from completed deliveries', style: const TextStyle(color: _muted)),
                         const SizedBox(height: 10),
                         const Text('Accrued amounts are not a cash or bank payout. Vendo does not process payouts yet.', style: TextStyle(color: _muted, height: 1.35)),
                       ])),

@@ -8,7 +8,7 @@ import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/auth/screens/forgot_password_screen.dart';
 import 'package:vendo_rider/features/auth/screens/register_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/navigation_bar.dart';
-import 'package:vendo_rider/features/work/screens/transport_driver_screen.dart';
+import 'package:vendo_rider/features/transport_driver/screens/transport_driver_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the rest of the app
