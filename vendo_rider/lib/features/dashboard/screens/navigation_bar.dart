@@ -2,11 +2,11 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:vendo_rider/features/dashboard/screens/deliveries_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/earnings_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/home_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/map_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/profile_screen.dart';
-import 'package:vendo_rider/features/work/screens/rider_work_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the Home, Deliveries, Earnings and Profile screens
@@ -47,7 +47,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       onOpenParcels: () => _onTabSelected(_Tab.parcels),
       onOpenEarnings: () => _onTabSelected(_Tab.earnings),
     ),
-    const RiderWorkScreen(),
+    const DeliveriesScreen(),
     MapScreen(key: _mapKey, destination: null, destinationLabel: null),
     const EarningsScreen(),
     const ProfileScreen(),
