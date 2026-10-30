@@ -34,10 +34,10 @@ class DeliveriesScreen extends StatefulWidget {
   const DeliveriesScreen({super.key});
 
   @override
-  State<DeliveriesScreen> createState() => _DeliveriesScreenState();
+  State<DeliveriesScreen> createState() => DeliveriesScreenState();
 }
 
-class _DeliveriesScreenState extends State<DeliveriesScreen> {
+class DeliveriesScreenState extends State<DeliveriesScreen> {
   List<Map<String, dynamic>> _assignments = [];
   bool _loading = true;
   String? _error;
@@ -95,6 +95,10 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     }
   }
 
+  /// Reloads assigned work when the Parcels tab is opened or a new
+  /// assignment notification arrives.
+  Future<void> refreshAssignments() => _refresh();
+
   List<Map<String, dynamic>> get _visible => _assignments
       .where((order) => riderSupportsAssignment(order, _vehicleType))
       .toList();
@@ -112,6 +116,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
         'On the way',
       if (stages.contains(RiderStage.forDelivery)) 'Delivery',
       if (stages.contains(RiderStage.linehaul)) 'Linehaul',
+      if (stages.contains(RiderStage.deliveryFailed)) 'Failed',
     ];
   }
 
@@ -124,6 +129,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
             stage == RiderStage.onTheWayToBuyer,
       'Delivery' => stage == RiderStage.forDelivery,
       'Linehaul' => stage == RiderStage.linehaul,
+      'Failed' => stage == RiderStage.deliveryFailed,
       _ => true,
     };
   }
@@ -670,6 +676,11 @@ class _StageStyle {
       _C.prune,
       _C.raisinSoft,
       Icons.local_shipping_outlined,
+    ),
+    RiderStage.deliveryFailed => const _StageStyle(
+      _C.brique,
+      _C.briqueSoft,
+      Icons.timer_off_outlined,
     ),
     RiderStage.other => const _StageStyle(
       _C.muted,

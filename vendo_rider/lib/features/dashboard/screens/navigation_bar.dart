@@ -2,11 +2,13 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:vendo_rider/core/notifications/rider_notification_center.dart';
 import 'package:vendo_rider/features/dashboard/screens/deliveries_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/earnings_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/home_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/notifications_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/profile_screen.dart';
+import 'package:vendo_rider/features/dashboard/widgets/rider_notice_banner.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the Home, Deliveries, Earnings and Profile screens
@@ -36,10 +38,13 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   int _selectedTab = _Tab.home;
   final _homeKey = GlobalKey<HomeScreenState>();
+  final _parcelsKey = GlobalKey<DeliveriesScreenState>();
   final _notificationsKey = GlobalKey<NotificationsScreenState>();
+  final _notifications = RiderNotificationCenter.instance;
 
   late final List<Widget> _pages = [
     HomeScreen(
@@ -47,7 +52,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       onOpenParcels: () => _onTabSelected(_Tab.parcels),
       onOpenEarnings: () => _onTabSelected(_Tab.earnings),
     ),
-    const DeliveriesScreen(),
+    DeliveriesScreen(key: _parcelsKey),
     NotificationsScreen(key: _notificationsKey),
     const EarningsScreen(),
     const ProfileScreen(),
@@ -81,15 +86,47 @@ class _DashboardScreenState extends State<DashboardScreen> {
     ),
   ];
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _notifications.start();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _notifications.stop();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _notifications.poll();
+  }
+
+  void _openBannerNotice() {
+    // A parcel assignment or a closed delivery window is work the rider can
+    // act on in Parcels, so open that tab; everything else opens the list.
+    final assignment = const {
+      'rider_task_assigned',
+      'delivery_window_closed',
+    }.contains(_notifications.banner?.type);
+    _notifications.dismissBanner();
+    _onTabSelected(assignment ? _Tab.parcels : _Tab.notifications);
+  }
+
   void _onTabSelected(int index) {
     if (index == _selectedTab) {
       if (index == _Tab.home) _homeKey.currentState?.refreshAssignments();
+      if (index == _Tab.parcels) _parcelsKey.currentState?.refreshAssignments();
       if (index == _Tab.notifications) _notificationsKey.currentState?.refreshNotifications();
       return;
     }
     HapticFeedback.selectionClick();
     setState(() => _selectedTab = index);
     if (index == _Tab.home) _homeKey.currentState?.refreshAssignments();
+    if (index == _Tab.parcels) _parcelsKey.currentState?.refreshAssignments();
     if (index == _Tab.notifications) _notificationsKey.currentState?.refreshNotifications();
   }
 
@@ -102,13 +139,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) setState(() => _selectedTab = _Tab.home);
       },
-      child: Scaffold(
-        backgroundColor: _DashColors.background,
-        body: IndexedStack(index: _selectedTab, children: _pages),
-        bottomNavigationBar: _BottomNav(
-          selectedIndex: _selectedTab,
-          items: _navItems,
-          onTap: _onTabSelected,
+      child: ListenableBuilder(
+        listenable: _notifications,
+        builder: (context, _) => Scaffold(
+          backgroundColor: _DashColors.background,
+          body: Stack(
+            children: [
+              IndexedStack(index: _selectedTab, children: _pages),
+              // New notifications slide in over the top of every tab.
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: SafeArea(
+                  bottom: false,
+                  child: RiderNoticeBanner(
+                    notice: _notifications.banner,
+                    onTap: _openBannerNotice,
+                    onDismiss: _notifications.dismissBanner,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          bottomNavigationBar: _BottomNav(
+            selectedIndex: _selectedTab,
+            items: _navItems,
+            unreadCount: _notifications.unreadCount,
+            onTap: _onTabSelected,
+          ),
         ),
       ),
     );
@@ -124,11 +183,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 // ─────────────────────────────────────────────────────────────────────────────
 class _BottomNav extends StatefulWidget {
   final int selectedIndex;
+  final int unreadCount;
   final List<_NavItem> items;
   final ValueChanged<int> onTap;
 
   const _BottomNav({
     required this.selectedIndex,
+    required this.unreadCount,
     required this.items,
     required this.onTap,
   });
@@ -278,6 +339,9 @@ class _BottomNavState extends State<_BottomNav>
                               isActive: i == widget.selectedIndex,
                               iconColor: _iconColor(i, cell, pill),
                               iconAreaHeight: _pillHeight,
+                              badgeCount: i == _Tab.notifications
+                                  ? widget.unreadCount
+                                  : 0,
                               onTap: () => widget.onTap(i),
                             ),
                           );
@@ -311,6 +375,7 @@ class _NavButton extends StatelessWidget {
   final bool isActive;
   final Color iconColor;
   final double iconAreaHeight;
+  final int badgeCount;
   final VoidCallback onTap;
 
   const _NavButton({
@@ -318,6 +383,7 @@ class _NavButton extends StatelessWidget {
     required this.isActive,
     required this.iconColor,
     required this.iconAreaHeight,
+    this.badgeCount = 0,
     required this.onTap,
   });
 
@@ -336,16 +402,48 @@ class _NavButton extends StatelessWidget {
             SizedBox(
               height: iconAreaHeight,
               child: Center(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 200),
-                  transitionBuilder: (child, animation) =>
-                      ScaleTransition(scale: animation, child: child),
-                  child: Icon(
-                    isActive ? item.activeIcon : item.icon,
-                    key: ValueKey(isActive),
-                    size: 24,
-                    color: iconColor,
-                  ),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      transitionBuilder: (child, animation) =>
+                          ScaleTransition(scale: animation, child: child),
+                      child: Icon(
+                        isActive ? item.activeIcon : item.icon,
+                        key: ValueKey(isActive),
+                        size: 24,
+                        color: iconColor,
+                      ),
+                    ),
+                    if (badgeCount > 0)
+                      Positioned(
+                        right: -11,
+                        top: -5,
+                        child: Container(
+                          constraints: const BoxConstraints(minWidth: 16),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFBF5E40),
+                            borderRadius: BorderRadius.circular(9),
+                            border: Border.all(color: Colors.white, width: 1.4),
+                          ),
+                          child: Text(
+                            badgeCount > 99 ? '99+' : '$badgeCount',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 9,
+                              height: 1.2,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),

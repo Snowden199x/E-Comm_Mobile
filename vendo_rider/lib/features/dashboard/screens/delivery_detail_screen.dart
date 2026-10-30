@@ -6,9 +6,13 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
+import 'package:vendo_rider/features/dashboard/screens/map_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the rest of the dashboard
@@ -50,6 +54,7 @@ enum RiderStage {
   forDelivery,
   onTheWayToBuyer,
   linehaul,
+  deliveryFailed,
   other,
 }
 
@@ -69,6 +74,8 @@ RiderStage riderStageOf(Map<String, dynamic> order) {
       return RiderStage.forDelivery;
     case 'out_for_delivery':
       return RiderStage.onTheWayToBuyer;
+    case 'delivery_failed':
+      return RiderStage.deliveryFailed;
     default:
       return RiderStage.other;
   }
@@ -92,6 +99,7 @@ String riderStageBadge(RiderStage stage) => switch (stage) {
   RiderStage.forDelivery => 'For delivery',
   RiderStage.onTheWayToBuyer => 'On the way',
   RiderStage.linehaul => 'Linehaul',
+  RiderStage.deliveryFailed => 'Failed',
   RiderStage.other => 'Assigned',
 };
 
@@ -125,6 +133,8 @@ String riderStageTitle(Map<String, dynamic> order) {
     case RiderStage.linehaul:
       final target = _text(riderRouteTarget(order)['name']);
       return target.isEmpty ? 'Truck linehaul' : 'Next stop: $target';
+    case RiderStage.deliveryFailed:
+      return 'Delivery failed';
     case RiderStage.other:
       return 'Assigned parcel';
   }
@@ -135,6 +145,7 @@ String riderStageSubtitle(Map<String, dynamic> order) {
   final stop = _map(order['stop']);
   final address = _text(stop['address']);
   final hub = _text(order['pickup_center']);
+  final cutoff = _text(_map(order['delivery_window'])['cutoff_label']);
   switch (riderStageOf(order)) {
     case RiderStage.readyForPickup:
     case RiderStage.forDelivery:
@@ -160,6 +171,8 @@ String riderStageSubtitle(Map<String, dynamic> order) {
       return planned.isEmpty
           ? 'Waiting for the next route stop from Logistics.'
           : 'Next planned checkpoint: $planned.';
+    case RiderStage.deliveryFailed:
+      return 'The ${cutoff.isEmpty ? '5:00 PM' : cutoff} delivery window closed. Reschedule to try again.';
     case RiderStage.other:
       return _text(order['status']).replaceAll('_', ' ');
   }
@@ -211,10 +224,32 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   bool _busy = false;
   bool _finished = false;
 
+  // Inline proof of delivery: the rider fills this on the parcel page, not in
+  // a dialog, so the photo and recipient stay visible while they work.
+  final TextEditingController _recipient = TextEditingController();
+  final TextEditingController _cash = TextEditingController();
+  final GlobalKey _proofFormKey = GlobalKey();
+  XFile? _photo;
+  String _riderName = '';
+  String _logisticsName = '';
+
   @override
   void initState() {
     super.initState();
     _order = widget.order;
+    RiderApi.instance.riderName().then((name) {
+      if (mounted) setState(() => _riderName = name ?? '');
+    });
+    RiderApi.instance.centerName().then((name) {
+      if (mounted) setState(() => _logisticsName = name ?? '');
+    });
+  }
+
+  @override
+  void dispose() {
+    _recipient.dispose();
+    _cash.dispose();
+    super.dispose();
   }
 
   // ── Server state ─────────────────────────────────────────────────
@@ -248,6 +283,17 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   Future<void> _scan() async {
     final type = riderScanTypeFor(_order);
     if (type == null || _busy) return;
+    // Check the inline proof before opening the camera, so the rider never
+    // scans and then discovers a missing photo or recipient name.
+    final proofRequired =
+        type == 'delivered' && _order['delivery_proof_required'] == true;
+    if (proofRequired) {
+      final problem = _proofProblem();
+      if (problem != null) {
+        _showProofProblem(problem);
+        return;
+      }
+    }
     final tracking = _text(_order['tracking_number']);
     final scanned = await Navigator.push<String>(
       context,
@@ -257,12 +303,6 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     );
     if (!mounted || scanned == null) return;
 
-    Map<String, String>? deliveryProof;
-    if (type == 'delivered' && _order['delivery_proof_required'] == true) {
-      deliveryProof = await _collectDeliveryProof();
-      if (!mounted || deliveryProof == null) return;
-    }
-
     setState(() => _busy = true);
     final api = RiderApi.instance;
     try {
@@ -271,25 +311,28 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         key = _newUuid();
         await api.saveScanKey(tracking, type, key);
       }
-      final result = deliveryProof == null
-          ? await api.scan(tracking, type, key)
-          : await api.submitDeliveryProof(
+      final result = proofRequired
+          ? await api.submitDeliveryProof(
               trackingNumber: tracking,
               scanKey: key,
-              recipientName: deliveryProof['recipient']!,
-              photoPath: deliveryProof['photo']!,
-            );
+              recipientName: _recipient.text.trim(),
+              photoPath: _photo!.path,
+              cashCollected: _order['cash_collection_required'] == true
+                  ? double.tryParse(_cash.text.trim())
+                  : null,
+            )
+          : await api.scan(tracking, type, key);
       await api.clearScanKey(tracking, type);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            result['duplicate'] == true
-                ? 'Scan already recorded. Parcel status is up to date.'
-                : 'Scan saved. Seller and buyer tracking is updated.',
-          ),
-        ),
-      );
+      if (proofRequired) _clearProofForm();
+      final message = result['duplicate'] == true
+          ? 'Scan already recorded. Parcel status is up to date.'
+          : type == 'delivered'
+          ? 'Delivered. The buyer, the seller and the station hub now show this parcel as delivered.'
+          : 'Scan saved. Seller and buyer tracking is updated.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
       await _refreshOrder();
     } on RiderApiException catch (error) {
       if (!mounted) return;
@@ -310,6 +353,146 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  // ── Reschedule a failed attempt for tomorrow ────────────────────
+  Future<void> _reschedule() async {
+    if (_busy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Reschedule delivery?'),
+        content: const Text(
+          'This parcel will be booked for tomorrow\'s delivery run. The buyer and seller will be told the new date.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Reschedule'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final result = await RiderApi.instance.rescheduleDelivery(
+        _order['order_id'] as int,
+      );
+      if (!mounted) return;
+      final message = _text(result['message']);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message.isEmpty ? 'Delivery rescheduled.' : message),
+        ),
+      );
+      await _refreshOrder();
+    } on RiderApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+      if (error.statusCode == 409) await _refreshOrder();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Connection failed. Try rescheduling again.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  // ── Inline proof of delivery ─────────────────────────────────────
+  bool _showProofForm(RiderStage stage) =>
+      !_finished &&
+      _order['delivery_proof_required'] == true &&
+      (stage == RiderStage.forDelivery ||
+          stage == RiderStage.onTheWayToBuyer) &&
+      _map(_order['task'])['status'] != 'failed';
+
+  /// Everything the server needs in the proof is checked before the camera
+  /// opens, so the rider is not left holding a scan they cannot submit.
+  String? _proofProblem() {
+    if (_recipient.text.trim().length < 2) {
+      return 'Enter the recipient name in Proof of delivery.';
+    }
+    if (_photo == null) {
+      return 'Take or choose a delivery photo in Proof of delivery.';
+    }
+    if (_order['cash_collection_required'] == true) {
+      final cashDue = _text(_order['cash_to_collect']);
+      final due = double.tryParse(cashDue);
+      final entered = double.tryParse(_cash.text.trim());
+      if (due == null) {
+        return 'Enter the exact cash collected in Proof of delivery.';
+      }
+      if (entered == null || (entered - due).abs() >= 0.005) {
+        return 'Enter exactly ₱$cashDue cash collected.';
+      }
+    }
+    return null;
+  }
+
+  void _showProofProblem(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+    final formContext = _proofFormKey.currentContext;
+    if (formContext != null) {
+      Scrollable.ensureVisible(
+        formContext,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+        alignment: 0.1,
+      );
+    }
+  }
+
+  Future<void> _pickProofPhoto(ImageSource source) async {
+    try {
+      final captured = await ImagePicker().pickImage(
+        source: source,
+        imageQuality: 80,
+        maxWidth: 1600,
+        maxHeight: 1600,
+      );
+      if (captured == null || !mounted) return;
+      final bytes = await captured.length();
+      if (!mounted) return;
+      if (bytes > 5 * 1024 * 1024) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo must be 5 MB or smaller.')),
+        );
+        return;
+      }
+      setState(() => _photo = captured);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              source == ImageSource.camera
+                  ? 'Could not open the camera. Check camera permission and retry.'
+                  : 'Could not open the gallery. Check photo permission and retry.',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  void _clearProofForm() {
+    _recipient.clear();
+    _cash.clear();
+    setState(() => _photo = null);
   }
 
   Future<void> _scanFacility() async {
@@ -372,78 +555,11 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   }
 
   Future<void> _reportTaskIssue(Map<String, dynamic> task) async {
-    final detailsController = TextEditingController();
-    var reason = 'other';
     final issue = await showDialog<Map<String, String>>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Report a task issue'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField<String>(
-                initialValue: reason,
-                decoration: const InputDecoration(labelText: 'Issue type'),
-                items: const [
-                  DropdownMenuItem(
-                    value: 'damaged',
-                    child: Text('Parcel damaged'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'recipient_unavailable',
-                    child: Text('Recipient unavailable'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'unsafe_location',
-                    child: Text('Unsafe location'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'vehicle_issue',
-                    child: Text('Vehicle issue'),
-                  ),
-                  DropdownMenuItem(value: 'other', child: Text('Other')),
-                ],
-                onChanged: (value) {
-                  if (value != null) setDialogState(() => reason = value);
-                },
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: detailsController,
-                minLines: 3,
-                maxLines: 5,
-                maxLength: 1000,
-                onChanged: (_) => setDialogState(() {}),
-                decoration: const InputDecoration(
-                  labelText: 'What happened?',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: detailsController.text.trim().length < 5
-                  ? null
-                  : () => Navigator.pop(dialogContext, {
-                      'reason': reason,
-                      'details': detailsController.text.trim(),
-                    }),
-              child: const Text('Send to Logistics'),
-            ),
-          ],
-        ),
-      ),
+      builder: (_) => const _TaskIssueDialog(),
     );
-    if (issue == null || !mounted) {
-      detailsController.dispose();
-      return;
-    }
+    if (issue == null || !mounted) return;
     setState(() => _busy = true);
     try {
       final result = await RiderApi.instance.reportTaskException(
@@ -479,103 +595,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         );
       }
     } finally {
-      detailsController.dispose();
       if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<Map<String, String>?> _collectDeliveryProof() async {
-    final nameController = TextEditingController();
-    XFile? photo;
-    try {
-      return await showDialog<Map<String, String>>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) => StatefulBuilder(
-          builder: (context, setDialogState) => AlertDialog(
-            title: const Text('Confirm delivery'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Enter the recipient name and take a delivery photo.',
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: nameController,
-                  textCapitalization: TextCapitalization.words,
-                  onChanged: (_) => setDialogState(() {}),
-                  decoration: const InputDecoration(
-                    labelText: 'Recipient name',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    final captured = await ImagePicker().pickImage(
-                      source: ImageSource.camera,
-                      imageQuality: 80,
-                      maxWidth: 1600,
-                      maxHeight: 1600,
-                    );
-                    if (captured == null || !context.mounted) return;
-                    final bytes = await captured.length();
-                    if (!mounted) return;
-                    if (bytes > 5 * 1024 * 1024) {
-                      ScaffoldMessenger.of(this.context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Photo must be 5 MB or smaller.'),
-                        ),
-                      );
-                      return;
-                    }
-                    setDialogState(() => photo = captured);
-                  },
-                  icon: const Icon(Icons.camera_alt_outlined),
-                  label: Text(photo == null ? 'Take photo' : 'Retake photo'),
-                ),
-                if (photo != null)
-                  Text(
-                    photo!.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed:
-                    photo == null || nameController.text.trim().length < 2
-                    ? null
-                    : () => Navigator.pop(dialogContext, {
-                        'recipient': nameController.text.trim(),
-                        'photo': photo!.path,
-                      }),
-                child: const Text('Submit proof'),
-              ),
-            ],
-          ),
-        ),
-      );
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Could not open the camera. Check camera permission and retry.',
-            ),
-          ),
-        );
-      }
-      return null;
-    } finally {
-      nameController.dispose();
     }
   }
 
@@ -626,10 +646,31 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                       _buildOnTheWayBanner(stage),
                       const SizedBox(height: 20),
                     ],
+                    if (!_finished &&
+                        _order['cash_collection_required'] == true &&
+                        (stage == RiderStage.forDelivery ||
+                            stage == RiderStage.onTheWayToBuyer)) ...[
+                      _buildCashCard(),
+                      const SizedBox(height: 20),
+                    ],
+                    if (!_finished &&
+                        _order['assignment'] == 'delivery' &&
+                        _map(_order['delivery_window']).isNotEmpty) ...[
+                      _buildDeliveryWindowCard(),
+                      const SizedBox(height: 20),
+                    ],
                     _buildRouteSection(),
                     const SizedBox(height: 24),
                     _buildStopSection(),
                     const SizedBox(height: 24),
+                    if (!_finished && _order['assignment'] == 'delivery') ...[
+                      _buildMapSection(),
+                      const SizedBox(height: 24),
+                    ],
+                    if (_showProofForm(stage)) ...[
+                      _buildProofSection(),
+                      const SizedBox(height: 24),
+                    ],
                     _buildActionSection(scanType, scanTarget, taskFailed),
                     if (canReportIssue) ...[
                       const SizedBox(height: 8),
@@ -651,6 +692,145 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
           ),
         ),
         bottomNavigationBar: _buildBottomBar(scanType, scanTarget, taskFailed),
+      ),
+    );
+  }
+
+  // ── COD cash the Rider must collect at handover ─────────────────
+  Widget _buildCashCard() {
+    final amount = _text(_order['cash_to_collect']);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: _C.briqueSoft,
+        borderRadius: BorderRadius.circular(_radius),
+        border: Border.all(color: const Color(0xFFEFD3C9)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: const Icon(Icons.payments_outlined, color: _C.brique),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              amount.isEmpty ? 'Collect the exact cash' : 'Collect ₱$amount cash',
+              style: const TextStyle(
+                color: _C.prune,
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Ask the buyer for the exact amount. You will enter it when you submit the delivery proof.',
+              style: TextStyle(
+                color: Color(0xFF544956),
+                fontSize: 12.5,
+                height: 1.35,
+              ),
+            ),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  // ── Daily delivery window: the 5:00 PM cutoff ───────────────────
+  Widget _buildDeliveryWindowCard() {
+    final window = _map(_order['delivery_window']);
+    final cutoff = _text(window['cutoff_label']);
+    final time = cutoff.isEmpty ? '5:00 PM' : cutoff;
+    final deadline = _text(window['deadline_label']);
+    final scheduled = _text(window['scheduled_for_label']);
+    final closed = _order['status'] == 'delivery_failed';
+
+    final Color background;
+    final Color border;
+    final Color accent;
+    final IconData icon;
+    final String title;
+    final String body;
+    if (closed) {
+      background = _C.briqueSoft;
+      border = const Color(0xFFEFD3C9);
+      accent = _C.brique;
+      icon = Icons.timer_off_outlined;
+      title = 'Delivery window closed';
+      body =
+          'The $time deadline passed before this parcel was delivered. Reschedule it to book tomorrow\'s attempt.';
+    } else if (scheduled.isNotEmpty) {
+      background = _C.raisinSoft;
+      border = const Color(0xFFE2D6E4);
+      accent = _C.raisin;
+      icon = Icons.event_repeat_rounded;
+      title = 'Scheduled for $scheduled';
+      body =
+          'The next attempt is booked for $scheduled. Scan the parcel out for delivery that day, before $time.';
+    } else {
+      background = _C.goldSoft;
+      border = _C.lin;
+      accent = const Color(0xFF8A6D1A);
+      icon = Icons.schedule_rounded;
+      title = 'Deliver before $time';
+      body = deadline.isEmpty
+          ? 'Parcels still out for delivery after $time are marked failed and need rescheduling.'
+          : 'This parcel must reach the buyer by $deadline. After that it is marked failed and needs rescheduling.';
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(_radius),
+        border: Border.all(color: border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: accent),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: _C.prune,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  body,
+                  style: const TextStyle(
+                    color: Color(0xFF544956),
+                    fontSize: 12.5,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -957,6 +1137,456 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                   ],
                 ),
               ),
+              if (phone.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _ContactAction(
+                      icon: Icons.call_rounded,
+                      tooltip: isSeller ? 'Call seller' : 'Call buyer',
+                      onTap: _callContact,
+                    ),
+                    const SizedBox(height: 8),
+                    _ContactAction(
+                      icon: Icons.sms_outlined,
+                      tooltip: isSeller ? 'Text seller' : 'Text buyer',
+                      onTap: _textContact,
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Contact the recipient / seller directly ──────────────────────
+  String _contactNumber() {
+    final raw = _text(_map(_order['stop'])['phone']);
+    return raw.replaceAll(RegExp(r'[^0-9+]'), '');
+  }
+
+  Future<void> _callContact() async {
+    final number = _contactNumber();
+    if (number.isEmpty) return;
+    await _launch(
+      Uri(scheme: 'tel', path: number),
+      'No phone app is available on this device.',
+    );
+  }
+
+  Future<void> _textContact() async {
+    final number = _contactNumber();
+    if (number.isEmpty) return;
+    await _launch(
+      Uri.parse('sms:$number?body=${Uri.encodeComponent(_smsBody())}'),
+      'No messaging app is available on this device.',
+    );
+  }
+
+  /// Prefilled SMS for the buyer, matching the company template. Pickup
+  /// contacts get a short collection message instead of a COD reminder.
+  String _smsBody() {
+    final logistics = _logisticsName.isEmpty ? 'Vendo Xpress' : _logisticsName;
+    final rider = _riderName.isEmpty ? 'your Vendo rider' : _riderName;
+    final tracking = _text(_order['tracking_number']);
+    if (_order['assignment'] == 'pickup') {
+      return '$logistics  TN: $tracking, Rider: $rider.\n'
+          'I am your assigned rider and I am on my way to collect this parcel.\n\n'
+          'Thank you for choosing $logistics. Stay safe and have a great day ahead.';
+    }
+    final amount = _text(_order['cash_to_collect']);
+    final codLine = amount.isEmpty
+        ? 'Your COD amount is the parcel total. You can pay by cash when the rider arrives.'
+        : 'Your COD amount is ₱$amount. You can pay by cash when the rider arrives.';
+    return '$logistics  TN: $tracking, Rider: $rider.\n'
+        '$codLine\n\n'
+        'Please note that a photo proof of delivery is required.\n\n'
+        'Thank you for choosing $logistics. Stay safe and have a great day ahead.';
+  }
+
+  Future<void> _launch(Uri uri, String failureMessage) async {
+    try {
+      final opened = await launchUrl(uri);
+      if (!opened && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(failureMessage)));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(failureMessage)));
+      }
+    }
+  }
+
+  // ── Delivery map ─────────────────────────────────────────────────
+  Widget _buildMapSection() {
+    final stop = _map(_order['stop']);
+    final address = _text(stop['address']);
+    final latitude = double.tryParse(_text(stop['latitude']));
+    final longitude = double.tryParse(_text(stop['longitude']));
+    final point = latitude != null && longitude != null
+        ? LatLng(latitude, longitude)
+        : null;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _SectionTitle('Delivery location'),
+        const SizedBox(height: 12),
+        if (point == null)
+          _Card(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.location_off_outlined, color: _C.muted),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'The buyer did not share a map pin for this delivery. Use the address above and the call or message buttons to reach them.',
+                    style: TextStyle(color: _C.muted, height: 1.35),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          ClipRRect(
+            borderRadius: BorderRadius.circular(_radius),
+            child: SizedBox(
+              height: 190,
+              child: Stack(
+                children: [
+                  FlutterMap(
+                    options: MapOptions(
+                      initialCenter: point,
+                      initialZoom: 15.5,
+                      interactionOptions: const InteractionOptions(
+                        flags: InteractiveFlag.none,
+                      ),
+                    ),
+                    children: [
+                      TileLayer(
+                        urlTemplate:
+                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName: 'com.example.vendo_rider',
+                      ),
+                      MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: point,
+                            width: 40,
+                            height: 48,
+                            child: Column(
+                              children: [
+                                Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFE53935),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white,
+                                      width: 3,
+                                    ),
+                                    boxShadow: const [
+                                      BoxShadow(
+                                        color: Color(0x44000000),
+                                        blurRadius: 6,
+                                      ),
+                                    ],
+                                  ),
+                                  child: const Icon(
+                                    Icons.location_on_rounded,
+                                    color: Colors.white,
+                                    size: 20,
+                                  ),
+                                ),
+                                Container(
+                                  width: 2,
+                                  height: 10,
+                                  color: const Color(0xFFE53935),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  Positioned(
+                    left: 6,
+                    bottom: 4,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 2,
+                      ),
+                      color: const Color(0xCCFFFFFF),
+                      child: const Text(
+                        '© OpenStreetMap contributors',
+                        style: TextStyle(fontSize: 8, color: _C.muted),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Material(
+                      color: Colors.white,
+                      elevation: 2,
+                      borderRadius: BorderRadius.circular(20),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(20),
+                        onTap: () => _openFullMap(point, address),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 7,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.open_in_full_rounded,
+                                size: 14,
+                                color: _C.prune,
+                              ),
+                              SizedBox(width: 4),
+                              Text(
+                                'Open map',
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: _C.prune,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (address.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text(
+            address,
+            style: const TextStyle(
+              color: _C.muted,
+              fontSize: 12.5,
+              height: 1.35,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  void _openFullMap(LatLng point, String address) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => MapScreen(destination: point, destinationLabel: address),
+      ),
+    );
+  }
+
+  // ── Inline proof of delivery ─────────────────────────────────────
+  Widget _buildProofSection() {
+    final cashRequired = _order['cash_collection_required'] == true;
+    final cashDue = _text(_order['cash_to_collect']);
+    final due = double.tryParse(cashDue);
+    final entered = double.tryParse(_cash.text.trim());
+    final matches =
+        due != null && entered != null && (entered - due).abs() < 0.005;
+    final photo = _photo;
+
+    return Column(
+      key: _proofFormKey,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(child: _SectionTitle('Proof of delivery')),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: _C.briqueSoft,
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Text(
+                'Required',
+                style: TextStyle(
+                  color: _C.brique,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        _Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Enter the recipient name and attach a photo at handover. Both are sent when you scan the parcel as delivered.',
+                style: TextStyle(color: _C.muted, fontSize: 12.5, height: 1.4),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _recipient,
+                textCapitalization: TextCapitalization.words,
+                decoration: InputDecoration(
+                  labelText: 'Recipient name',
+                  hintText: 'Who received the parcel?',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              if (cashRequired) ...[
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _C.goldSoft,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _C.lin),
+                  ),
+                  child: Text(
+                    cashDue.isEmpty
+                        ? 'Collect the exact COD cash from the recipient and enter it below.'
+                        : 'Collect exactly ₱$cashDue cash from the recipient and enter it below.',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: _C.ink,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _cash,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                  decoration: InputDecoration(
+                    labelText: 'Cash collected',
+                    prefixText: '₱ ',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    errorText: _cash.text.trim().isEmpty || matches
+                        ? null
+                        : cashDue.isEmpty
+                        ? 'Enter the exact cash collected.'
+                        : 'Enter exactly ₱$cashDue.',
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              if (photo == null)
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _busy
+                            ? null
+                            : () => _pickProofPhoto(ImageSource.camera),
+                        icon: const Icon(Icons.photo_camera_outlined),
+                        label: const Text('Take photo'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _busy
+                            ? null
+                            : () => _pickProofPhoto(ImageSource.gallery),
+                        icon: const Icon(Icons.photo_library_outlined),
+                        label: const Text('Choose'),
+                      ),
+                    ),
+                  ],
+                )
+              else
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.file(
+                        File(photo.path),
+                        width: double.infinity,
+                        height: 170,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        TextButton.icon(
+                          onPressed: _busy
+                              ? null
+                              : () => _pickProofPhoto(ImageSource.camera),
+                          icon: const Icon(
+                            Icons.photo_camera_outlined,
+                            size: 18,
+                          ),
+                          label: const Text('Retake'),
+                        ),
+                        TextButton.icon(
+                          onPressed: _busy
+                              ? null
+                              : () => setState(() => _photo = null),
+                          icon: const Icon(Icons.delete_outline, size: 18),
+                          label: const Text('Remove'),
+                        ),
+                      ],
+                    ),
+                    const Row(
+                      children: [
+                        Icon(
+                          Icons.check_circle_rounded,
+                          color: Color(0xFF2E7D32),
+                          size: 16,
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          'Photo attached',
+                          style: TextStyle(
+                            color: Color(0xFF2E7D32),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              const SizedBox(height: 8),
+              const Text(
+                'The photo is uploaded only after the parcel label is scanned as delivered.',
+                style: TextStyle(
+                  color: _C.muted,
+                  fontSize: 11.5,
+                  height: 1.35,
+                ),
+              ),
             ],
           ),
         ),
@@ -972,10 +1602,19 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   ) {
     if (_finished) return const SizedBox.shrink();
     final hub = _text(_order['pickup_center']);
+    final window = _map(_order['delivery_window']);
+    final cutoff = _text(window['cutoff_label']);
+    final scheduled = _text(window['scheduled_for_label']);
     String message;
     if (taskFailed) {
       message =
           'Paused: Logistics needs to review this task before you can scan.';
+    } else if (_order['status'] == 'delivery_failed') {
+      message =
+          'The ${cutoff.isEmpty ? '5:00 PM' : cutoff} delivery window closed before this parcel was delivered. Reschedule it to try again tomorrow.';
+    } else if (scanType == 'out_for_delivery' && scheduled.isNotEmpty) {
+      message =
+          'This parcel is scheduled for $scheduled. Scan it out for delivery that day, before ${cutoff.isEmpty ? '5:00 PM' : cutoff}.';
     } else if (scanTarget['facility_id'] is num) {
       message =
           'Scan the parcel label at ${_text(scanTarget['name'])}. The server checks the route order before accepting it.';
@@ -1055,19 +1694,38 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         ),
         style: _buttonStyle,
       );
+    } else if (_order['status'] == 'delivery_failed') {
+      primary = FilledButton.icon(
+        onPressed: _busy ? null : _reschedule,
+        icon: const Icon(Icons.event_repeat_rounded, size: 20),
+        label: const Text('Reschedule for tomorrow'),
+        style: _buttonStyle,
+      );
     } else if (scanType != null && !taskFailed) {
       final needsProof =
           scanType == 'delivered' && _order['delivery_proof_required'] == true;
-      primary = FilledButton.icon(
-        onPressed: _busy ? null : _scan,
-        icon: const Icon(Icons.qr_code_scanner, size: 20),
-        label: Text(
-          needsProof
-              ? 'Scan and add delivery proof'
-              : riderScanLabelFor(scanType),
-        ),
-        style: _buttonStyle,
+      final scheduledFor = _text(
+        _map(_order['delivery_window'])['scheduled_for_label'],
       );
+      if (scanType == 'out_for_delivery' && scheduledFor.isNotEmpty) {
+        primary = FilledButton.icon(
+          onPressed: null,
+          icon: const Icon(Icons.event_repeat_rounded, size: 20),
+          label: Text('Scheduled for $scheduledFor'),
+          style: _buttonStyle,
+        );
+      } else {
+        primary = FilledButton.icon(
+          onPressed: _busy ? null : _scan,
+          icon: const Icon(Icons.qr_code_scanner, size: 20),
+          label: Text(
+            needsProof
+                ? 'Scan and add delivery proof'
+                : riderScanLabelFor(scanType),
+          ),
+          style: _buttonStyle,
+        );
+      }
     } else {
       primary = null;
     }
@@ -1241,6 +1899,11 @@ class _StageStyle {
       _C.raisinSoft,
       Icons.local_shipping_outlined,
     ),
+    RiderStage.deliveryFailed => const _StageStyle(
+      _C.brique,
+      _C.briqueSoft,
+      Icons.timer_off_outlined,
+    ),
     RiderStage.other => const _StageStyle(
       _C.muted,
       Color(0xFFF1EEF1),
@@ -1314,6 +1977,38 @@ class _RouteStop extends StatelessWidget {
   }
 }
 
+class _ContactAction extends StatelessWidget {
+  const _ContactAction({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: _C.raisinSoft,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: 42,
+            height: 42,
+            child: Icon(icon, color: _C.raisin, size: 20),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Card extends StatelessWidget {
   final Widget child;
   final Color borderColor;
@@ -1360,6 +2055,92 @@ class _SectionTitle extends StatelessWidget {
             fontSize: 16,
             fontWeight: FontWeight.w700,
           ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task issue dialog
+// ─────────────────────────────────────────────────────────────────────────────
+class _TaskIssueDialog extends StatefulWidget {
+  const _TaskIssueDialog();
+
+  @override
+  State<_TaskIssueDialog> createState() => _TaskIssueDialogState();
+}
+
+class _TaskIssueDialogState extends State<_TaskIssueDialog> {
+  final TextEditingController _details = TextEditingController();
+  String _reason = 'other';
+
+  @override
+  void dispose() {
+    _details.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Report a task issue'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          DropdownButtonFormField<String>(
+            initialValue: _reason,
+            decoration: const InputDecoration(labelText: 'Issue type'),
+            items: const [
+              DropdownMenuItem(
+                value: 'damaged',
+                child: Text('Parcel damaged'),
+              ),
+              DropdownMenuItem(
+                value: 'recipient_unavailable',
+                child: Text('Recipient unavailable'),
+              ),
+              DropdownMenuItem(
+                value: 'unsafe_location',
+                child: Text('Unsafe location'),
+              ),
+              DropdownMenuItem(
+                value: 'vehicle_issue',
+                child: Text('Vehicle issue'),
+              ),
+              DropdownMenuItem(value: 'other', child: Text('Other')),
+            ],
+            onChanged: (value) {
+              if (value != null) setState(() => _reason = value);
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _details,
+            minLines: 3,
+            maxLines: 5,
+            maxLength: 1000,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(
+              labelText: 'What happened?',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _details.text.trim().length < 5
+              ? null
+              : () => Navigator.pop(context, {
+                  'reason': _reason,
+                  'details': _details.text.trim(),
+                }),
+          child: const Text('Send to Logistics'),
         ),
       ],
     );
