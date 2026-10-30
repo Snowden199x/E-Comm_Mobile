@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
+import 'package:vendo_rider/core/notifications/rider_notification_center.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -33,10 +34,13 @@ class NotificationsScreenState extends State<NotificationsScreen> {
           .whereType<Map>()
           .map((item) => Map<String, dynamic>.from(item))
           .toList();
+      final unread =
+          int.tryParse(result['unread_count']?.toString() ?? '') ?? 0;
       if (mounted) setState(() {
         _items = rows;
-        _unreadCount = int.tryParse(result['unread_count']?.toString() ?? '') ?? 0;
+        _unreadCount = unread;
       });
+      RiderNotificationCenter.instance.adoptUnread(unread);
     } on RiderApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } catch (_) {
@@ -48,13 +52,15 @@ class NotificationsScreenState extends State<NotificationsScreen> {
 
   Future<void> _markRead(Map<String, dynamic> item) async {
     if (item['read_at'] != null) return;
+    final id = int.parse(item['id'].toString());
     try {
-      await RiderApi.instance.markRiderNotificationRead(int.parse(item['id'].toString()));
+      await RiderApi.instance.markRiderNotificationRead(id);
       if (!mounted) return;
       setState(() {
         item['read_at'] = DateTime.now().toIso8601String();
         _unreadCount = (_unreadCount - 1).clamp(0, 999999).toInt();
       });
+      RiderNotificationCenter.instance.noteRead(id);
     } on RiderApiException catch (error) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
     } catch (_) {
@@ -74,6 +80,7 @@ class NotificationsScreenState extends State<NotificationsScreen> {
           item['read_at'] ??= DateTime.now().toIso8601String();
         }
       });
+      RiderNotificationCenter.instance.noteAllRead();
     } on RiderApiException catch (error) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
     } finally {

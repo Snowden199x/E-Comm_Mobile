@@ -309,9 +309,12 @@ class RiderApi {
     return _body(response);
   }
 
-  Future<Map<String, dynamic>> riderNotifications() async {
+  Future<Map<String, dynamic>> riderNotifications({int? since}) async {
+    final uri = Uri.parse('$baseUrl/notifications').replace(
+      queryParameters: since != null && since > 0 ? {'since': '$since'} : null,
+    );
     final response = await http
-        .get(Uri.parse('$baseUrl/notifications'), headers: await _authHeaders())
+        .get(uri, headers: await _authHeaders())
         .timeout(const Duration(seconds: 20));
     return _body(response);
   }
@@ -330,6 +333,14 @@ class RiderApi {
             headers: await _authHeaders())
         .timeout(const Duration(seconds: 20));
     _body(response);
+  }
+
+  /// COD cash the rider collected and still holds, plus recent collections.
+  Future<Map<String, dynamic>> riderCash() async {
+    final response = await http
+        .get(Uri.parse('$baseUrl/cash'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 20));
+    return _body(response);
   }
 
   Future<Map<String, dynamic>> earnings({bool transportDriver = false}) async {
@@ -401,6 +412,7 @@ class RiderApi {
     required String scanKey,
     required String recipientName,
     required String photoPath,
+    double? cashCollected,
   }) async {
     final request = http.MultipartRequest(
       'POST',
@@ -413,10 +425,25 @@ class RiderApi {
       'tracking_number': trackingNumber,
       'scan_key': scanKey,
       'recipient_name': recipientName.trim(),
+      // COD cash handed over by the Buyer. The server requires it for orders
+      // whose cash is still uncollected, and rejects any other amount.
+      if (cashCollected != null)
+        'cash_collected': cashCollected.toStringAsFixed(2),
     });
     request.files.add(await http.MultipartFile.fromPath('photo', photoPath));
     final streamed = await request.send().timeout(const Duration(seconds: 60));
     return _body(await http.Response.fromStream(streamed));
+  }
+
+  /// Books the next delivery attempt after the daily window closed.
+  Future<Map<String, dynamic>> rescheduleDelivery(int orderId) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/deliveries/$orderId/reschedule'),
+          headers: await _authHeaders(),
+        )
+        .timeout(const Duration(seconds: 25));
+    return _body(response);
   }
 
   Future<String?> pendingScanKey(String trackingNumber, String scanType) =>
