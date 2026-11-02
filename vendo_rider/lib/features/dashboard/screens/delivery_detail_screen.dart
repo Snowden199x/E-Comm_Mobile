@@ -12,6 +12,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
+import 'package:vendo_rider/core/offline/offline_tiles.dart';
 import 'package:vendo_rider/features/dashboard/screens/map_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -341,11 +342,29 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       ).showSnackBar(SnackBar(content: Text(error.message)));
       if (error.statusCode == 409) await _refreshOrder();
     } catch (_) {
+      // No connection: keep the scan (or delivery proof) on the device. It uses
+      // the same scan key the server dedupes on, so it uploads exactly once.
+      final queuedKey = await api.pendingScanKey(tracking, type);
+      if (queuedKey != null) {
+        if (proofRequired) {
+          await api.queueDeliveryProofOffline(
+            trackingNumber: tracking,
+            scanKey: queuedKey,
+            recipientName: _recipient.text.trim(),
+            photoPath: _photo?.path ?? '',
+            cashCollected: _order['cash_collection_required'] == true
+                ? double.tryParse(_cash.text.trim())
+                : null,
+          );
+        } else {
+          await api.queueScanOffline(tracking, type, queuedKey);
+        }
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Connection failed. Scan this parcel again to retry the same event.',
+              'No connection. Saved on this device — it uploads automatically when you are back online.',
             ),
           ),
         );
@@ -540,11 +559,20 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       ).showSnackBar(SnackBar(content: Text(error.message)));
       if (error.statusCode == 409) await _refreshOrder();
     } catch (_) {
+      // No connection: queue the hub scan and upload it later.
+      final queuedKey = await api.pendingScanKey(tracking, scanType);
+      if (queuedKey != null) {
+        await api.queueFacilityScanOffline(
+          tracking,
+          facilityId.toInt(),
+          queuedKey,
+        );
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Connection failed. Scan this parcel again to retry the same event.',
+              'No connection. Saved on this device — it uploads automatically when you are back online.',
             ),
           ),
         );
@@ -1276,6 +1304,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                         urlTemplate:
                             'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                         userAgentPackageName: 'com.example.vendo_rider',
+                        tileProvider: OfflineTileProviders.create(),
                       ),
                       MarkerLayer(
                         markers: [
@@ -1360,7 +1389,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                               ),
                               SizedBox(width: 4),
                               Text(
-                                'Open map',
+                                'Directions',
                                 style: TextStyle(
                                   fontSize: 11.5,
                                   fontWeight: FontWeight.w700,

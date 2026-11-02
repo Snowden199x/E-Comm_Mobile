@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:vendo_buyer/core/offline/offline_sync_service.dart';
 import 'package:vendo_buyer/features/splash/splash_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Upload anything saved offline as soon as a connection returns.
+  OfflineSyncService.instance.start();
   runApp(const VendoBuyerApp());
 }
 

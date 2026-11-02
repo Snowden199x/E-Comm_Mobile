@@ -127,7 +127,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
             children: [
               _buildHeader(),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 24, 20, 28),
+                padding: EdgeInsets.fromLTRB(
+                  20,
+                  24,
+                  20,
+                  28 + MediaQuery.of(context).padding.bottom,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [

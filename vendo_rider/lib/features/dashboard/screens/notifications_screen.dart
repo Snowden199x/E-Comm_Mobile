@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/core/notifications/rider_notification_center.dart';
+import 'package:vendo_rider/features/dashboard/widgets/offline_banner.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -19,6 +20,9 @@ class NotificationsScreenState extends State<NotificationsScreen> {
   bool _loading = true;
   String? _error;
   bool _markingAll = false;
+
+  /// Set when the list shown came from the device instead of Vendo.
+  DateTime? _offlineSince;
 
   @override
   void initState() {
@@ -39,12 +43,30 @@ class NotificationsScreenState extends State<NotificationsScreen> {
       if (mounted) setState(() {
         _items = rows;
         _unreadCount = unread;
+        _offlineSince = null;
       });
       RiderNotificationCenter.instance.adoptUnread(unread);
     } on RiderApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Could not load notifications. Pull down to retry.');
+      // Offline: show the list saved on this device instead of an error page.
+      final cached = await RiderApi.instance.cachedNotifications();
+      if (!mounted) return;
+      if (cached == null) {
+        setState(() => _error = 'Could not load notifications. Pull down to retry.');
+      } else {
+        final rows = (cached.payload['data'] as List<dynamic>? ?? [])
+            .whereType<Map>()
+            .map((item) => Map<String, dynamic>.from(item))
+            .toList();
+        setState(() {
+          _items = rows;
+          _unreadCount =
+              int.tryParse('${cached.payload['unread_count'] ?? ''}') ?? 0;
+          _offlineSince = cached.cachedAt;
+          _error = null;
+        });
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -103,6 +125,18 @@ class NotificationsScreenState extends State<NotificationsScreen> {
               child: Text(_markingAll ? 'Saving…' : 'Mark all read'),
             ),
         ],
+        bottom: _offlineSince == null
+            ? null
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(68),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                  child: OfflineBanner(
+                    savedAt: _offlineSince,
+                    onRetry: refreshNotifications,
+                  ),
+                ),
+              ),
       ),
       body: RefreshIndicator(
         onRefresh: refreshNotifications,
@@ -132,7 +166,12 @@ class NotificationsScreenState extends State<NotificationsScreen> {
                         Center(child: Text('Parcel and delivery updates will appear here.', style: TextStyle(color: _muted))),
                       ])
                     : ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                        padding: EdgeInsets.fromLTRB(
+                          16,
+                          8,
+                          16,
+                          24 + MediaQuery.of(context).padding.bottom,
+                        ),
                         itemCount: _items.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
                         itemBuilder: (context, index) {

@@ -1,8 +1,10 @@
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/notifications/rider_notification_center.dart';
+import 'package:vendo_rider/core/offline/offline_sync_service.dart';
 import 'package:vendo_rider/features/dashboard/screens/deliveries_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/earnings_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/home_screen.dart';
@@ -19,6 +21,11 @@ class _DashColors {
   static const prune = Color(0xFF412143);
   static const inactive = Color(0xFF8C8290);
   static const shadow = Color(0x1A412143);
+  static const border = Color(0xFFECE6EA);
+
+  // See-through bar: white at about 70% so the page shows through
+  static const glass = Color(0xB3FFFFFF);
+  static const glassBorder = Color(0x33412143);
 }
 
 // Tab positions, so the code below reads clearly
@@ -51,6 +58,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       key: _homeKey,
       onOpenParcels: () => _onTabSelected(_Tab.parcels),
       onOpenEarnings: () => _onTabSelected(_Tab.earnings),
+      onOpenNotifications: () => _onTabSelected(_Tab.notifications),
     ),
     DeliveriesScreen(key: _parcelsKey),
     NotificationsScreen(key: _notificationsKey),
@@ -91,18 +99,26 @@ class _DashboardScreenState extends State<DashboardScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _notifications.start();
+    // Watch for the connection returning so queued scans upload immediately.
+    OfflineSyncService.instance.start();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _notifications.stop();
+    OfflineSyncService.instance.stop();
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _notifications.poll();
+    if (state == AppLifecycleState.resumed) {
+      _notifications.poll();
+      // Android stops reporting connectivity changes in the background, so
+      // retry the offline outbox whenever the Rider returns to the app.
+      OfflineSyncService.instance.syncNow();
+    }
   }
 
   void _openBannerNotice() {
@@ -142,6 +158,8 @@ class _DashboardScreenState extends State<DashboardScreen>
       child: ListenableBuilder(
         listenable: _notifications,
         builder: (context, _) => Scaffold(
+          // The page continues behind the see-through bar
+          extendBody: true,
           backgroundColor: _DashColors.background,
           body: Stack(
             children: [
@@ -205,6 +223,7 @@ class _BottomNavState extends State<_BottomNav>
   static const _pillHeight = 32.0;
   static const _duration = Duration(milliseconds: 650); // longer = slower
   static const _squash = 0.14; // how much the pill flattens while travelling
+  static const _vPad = 10.0; // space above and below the icons (also tap area)
   // ───────────────────────────────────────────────────────────────────────
 
   late final AnimationController _controller;
@@ -287,23 +306,38 @@ class _BottomNavState extends State<_BottomNav>
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        boxShadow: [
-          BoxShadow(
-            color: _DashColors.shadow,
-            blurRadius: 20,
-            offset: Offset(0, -4),
+    // Floating bar: rounded all around, lifted off the bottom edge, with a
+    // soft shadow. The jelly pill and icons inside are unchanged.
+    return SafeArea(
+      top: false,
+      minimum: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+        child: Container(
+          // Soft shadow around the bar
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(36),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x1F412143),
+                blurRadius: 24,
+                offset: Offset(0, 6),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
-          child: LayoutBuilder(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(36),
+            // Frosted glass: the content behind the bar is blurred, not hidden
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                decoration: BoxDecoration(
+                  color: _DashColors.glass,
+                  borderRadius: BorderRadius.circular(36),
+                  border: Border.all(color: _DashColors.glassBorder),
+                ),
+                child: LayoutBuilder(
             builder: (context, constraints) {
               final cell = constraints.maxWidth / widget.items.length;
 
@@ -318,7 +352,7 @@ class _BottomNavState extends State<_BottomNav>
                       // The jelly pill (behind the icons)
                       Positioned(
                         left: pill.left,
-                        top: pill.top,
+                        top: pill.top + _vPad,
                         width: math.max(pill.right - pill.left, 0),
                         height: pill.height,
                         child: DecoratedBox(
@@ -339,6 +373,7 @@ class _BottomNavState extends State<_BottomNav>
                               isActive: i == widget.selectedIndex,
                               iconColor: _iconColor(i, cell, pill),
                               iconAreaHeight: _pillHeight,
+                              verticalPadding: _vPad,
                               badgeCount: i == _Tab.notifications
                                   ? widget.unreadCount
                                   : 0,
@@ -352,6 +387,9 @@ class _BottomNavState extends State<_BottomNav>
                 },
               );
             },
+          ),
+              ),
+            ),
           ),
         ),
       ),
@@ -375,6 +413,7 @@ class _NavButton extends StatelessWidget {
   final bool isActive;
   final Color iconColor;
   final double iconAreaHeight;
+  final double verticalPadding;
   final int badgeCount;
   final VoidCallback onTap;
 
@@ -383,6 +422,7 @@ class _NavButton extends StatelessWidget {
     required this.isActive,
     required this.iconColor,
     required this.iconAreaHeight,
+    required this.verticalPadding,
     this.badgeCount = 0,
     required this.onTap,
   });
@@ -399,6 +439,7 @@ class _NavButton extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            SizedBox(height: verticalPadding),
             SizedBox(
               height: iconAreaHeight,
               child: Center(
@@ -447,16 +488,7 @@ class _NavButton extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 4),
-            AnimatedDefaultTextStyle(
-              duration: const Duration(milliseconds: 200),
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                color: isActive ? _DashColors.prune : _DashColors.inactive,
-              ),
-              child: Text(item.label, maxLines: 1),
-            ),
+            SizedBox(height: verticalPadding),
           ],
         ),
       ),

@@ -111,9 +111,8 @@ class DriverTripStatusScreen extends StatelessWidget {
                           onPressed: () {
                             Navigator.of(context).pushReplacement(
                               MaterialPageRoute<void>(
-                                builder: (_) => DriverDispatchScreen(
-                                  tripCode: trip.code,
-                                ),
+                                builder: (_) =>
+                                    DriverDispatchScreen(tripCode: trip.code),
                               ),
                             );
                           },
@@ -141,9 +140,10 @@ class DriverTripStatusScreen extends StatelessWidget {
                             _TimelineStep(
                               icon: Icons.near_me_outlined,
                               title: 'In transit',
-                              subtitle:
-                                  '${trip.distanceKm.toStringAsFixed(0)} km route to '
-                                  '${trip.destination}',
+                              subtitle: trip.distanceKm > 0
+                                  ? '${trip.distanceKm.toStringAsFixed(0)} km '
+                                        'route to ${trip.destination}'
+                                  : 'Route to ${trip.destination}',
                               state: _TimelineState.active,
                             ),
                             _TimelineConnector(done: false),
@@ -174,8 +174,9 @@ class DriverTripStatusScreen extends StatelessWidget {
                             ),
                             const _MetricDivider(),
                             _Metric(
-                              value:
-                                  '${trip.distanceKm.toStringAsFixed(0)} km',
+                              value: trip.distanceKm > 0
+                                  ? '${trip.distanceKm.toStringAsFixed(0)} km'
+                                  : '—',
                               label: 'Route',
                             ),
                           ],
@@ -284,10 +285,7 @@ class _TimelineStep extends StatelessWidget {
         Container(
           width: 36,
           height: 36,
-          decoration: BoxDecoration(
-            color: background,
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: background, shape: BoxShape.circle),
           child: Icon(icon, color: foreground, size: 18),
         ),
         const SizedBox(width: 12),

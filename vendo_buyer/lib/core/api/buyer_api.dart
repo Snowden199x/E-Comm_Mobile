@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:vendo_buyer/core/api/api_models.dart';
+import 'package:vendo_buyer/core/offline/offline_store.dart';
 
 class BuyerApiException implements Exception {
   const BuyerApiException(this.message, [this.statusCode]);
@@ -13,6 +14,45 @@ class BuyerApiException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// Orders from the cache, with the time they were saved on the device.
+class CachedOrders {
+  const CachedOrders({required this.items, required this.cachedAt});
+
+  final List<ApiOrder> items;
+  final DateTime cachedAt;
+}
+
+/// One order's detail page from the cache.
+class CachedOrderDetail {
+  const CachedOrderDetail({required this.detail, required this.cachedAt});
+
+  final ApiOrderDetail detail;
+  final DateTime cachedAt;
+}
+
+/// Notifications from the cache.
+class CachedNotifications {
+  const CachedNotifications({required this.items, required this.cachedAt});
+
+  final List<ApiNotification> items;
+  final DateTime cachedAt;
+}
+
+/// What happened when the offline outbox was flushed back to Vendo.
+class OfflineSyncReport {
+  const OfflineSyncReport({
+    required this.synced,
+    required this.failed,
+    required this.messages,
+  });
+
+  final int synced;
+  final int failed;
+  final List<String> messages;
+
+  bool get hasFailures => failed > 0;
 }
 
 class BuyerApi {
@@ -31,6 +71,21 @@ class BuyerApi {
   }
 
   static const _storage = FlutterSecureStorage();
+
+  /// Shared HTTP client. Tests swap it with [useClient].
+  http.Client _client = http.Client();
+
+  /// Test hook: supplies the bearer token without the platform keychain.
+  @visibleForTesting
+  String? debugToken;
+
+  @visibleForTesting
+  void useClient(http.Client client) => _client = client;
+
+  static String _ordersKey(String? status) =>
+      'offline:orders:${status == null || status.isEmpty ? 'all' : status}';
+  static String _orderKey(int id) => 'offline:order:$id';
+  static const String _notificationsKey = 'offline:notifications';
 
   // ── Token helpers ──────────────────────────────────────────────────────────
   Future<bool> hasToken() async =>
@@ -359,17 +414,41 @@ class BuyerApi {
         .get(uri, headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
     final data = _check(response);
-    return (data['data'] as List? ?? [])
-        .map((e) => ApiOrder.fromJson(Map<String, dynamic>.from(e as Map)))
-        .toList();
+    // Keep the newest list on the device so orders survive a bad signal.
+    await OfflineStore.instance.cacheJson(_ordersKey(status), data);
+    return _orders(data);
+  }
+
+  /// The last order list this device saw, when the API cannot be reached.
+  Future<CachedOrders?> cachedOrders({String? status}) async {
+    final cached = await OfflineStore.instance.readJson(_ordersKey(status));
+    if (cached == null) return null;
+    return CachedOrders(
+      items: _orders(cached.payload),
+      cachedAt: cached.cachedAt,
+    );
   }
 
   Future<ApiOrderDetail> order(int id) async {
     final response = await http
         .get(Uri.parse('$baseUrl/orders/$id'), headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
+    final data = _check(response);
+    await OfflineStore.instance.cacheJson(_orderKey(id), data);
     return ApiOrderDetail.fromJson(
-      Map<String, dynamic>.from(_check(response)['order'] as Map),
+      Map<String, dynamic>.from(data['order'] as Map),
+    );
+  }
+
+  /// The last copy of this order saved on the device, for tracking offline.
+  Future<CachedOrderDetail?> cachedOrder(int id) async {
+    final cached = await OfflineStore.instance.readJson(_orderKey(id));
+    if (cached == null) return null;
+    final order = cached.payload['order'];
+    if (order is! Map) return null;
+    return CachedOrderDetail(
+      detail: ApiOrderDetail.fromJson(Map<String, dynamic>.from(order)),
+      cachedAt: cached.cachedAt,
     );
   }
 
@@ -421,16 +500,84 @@ class BuyerApi {
         .get(Uri.parse('$baseUrl/notifications'), headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
     final data = _check(response);
-    return (data['data'] as List? ?? [])
-        .map((e) => ApiNotification.fromJson(Map<String, dynamic>.from(e as Map)))
-        .toList();
+    await OfflineStore.instance.cacheJson(_notificationsKey, data);
+    return _notifications(data);
+  }
+
+  /// The last notifications list saved on this device.
+  Future<CachedNotifications?> cachedNotifications() async {
+    final cached = await OfflineStore.instance.readJson(_notificationsKey);
+    if (cached == null) return null;
+    return CachedNotifications(
+      items: _notifications(cached.payload),
+      cachedAt: cached.cachedAt,
+    );
   }
 
   Future<void> markAllNotificationsRead() async {
-    final response = await http
-        .post(Uri.parse('$baseUrl/notifications/read-all'), headers: await _authHeaders())
+    final response = await _client
+        .post(
+          Uri.parse('$baseUrl/notifications/read-all'),
+          headers: await _authHeaders(),
+        )
         .timeout(const Duration(seconds: 25));
     _check(response);
+  }
+
+  /// Keeps "mark all read" on the device until Vendo can be reached.
+  Future<void> queueMarkAllNotificationsReadOffline() =>
+      OfflineStore.instance.enqueue(kind: 'notifications_read_all');
+
+  Future<int> pendingOfflineActions() => OfflineStore.instance.pendingCount();
+
+  /// Uploads everything the Buyer saved while offline.
+  ///
+  /// Stops early when the connection is still down, keeps the queue for the
+  /// next attempt, and drops entries the server can no longer accept so one
+  /// stale action never blocks the rest.
+  Future<OfflineSyncReport> syncOfflineActions() async {
+    final actions = await OfflineStore.instance.pendingActions();
+    var synced = 0;
+    var failed = 0;
+    final messages = <String>[];
+
+    for (final action in actions) {
+      final id = '${action['id'] ?? ''}';
+      final kind = '${action['kind'] ?? ''}';
+      try {
+        if (kind != 'notifications_read_all') {
+          await OfflineStore.instance.removeAction(id);
+          continue;
+        }
+        await markAllNotificationsRead();
+        await OfflineStore.instance.removeAction(id);
+        synced++;
+      } on BuyerApiException catch (error) {
+        final code = error.statusCode ?? 0;
+        if (code == 401 || code == 403) {
+          messages.add(error.message);
+          break;
+        }
+        if (code >= 400 && code < 500) {
+          await OfflineStore.instance.removeAction(id);
+          failed++;
+          messages.add(error.message);
+          continue;
+        }
+        failed++;
+        messages.add(error.message);
+      } catch (_) {
+        // Still offline: keep this and everything after it queued.
+        failed++;
+        break;
+      }
+    }
+
+    return OfflineSyncReport(
+      synced: synced,
+      failed: failed,
+      messages: messages,
+    );
   }
 
   Future<ApiBuyer> account() async {
@@ -447,6 +594,18 @@ class BuyerApi {
           .map((e) => ApiProduct.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList();
 
+  List<ApiOrder> _orders(Map<String, dynamic> data) =>
+      (data['data'] as List? ?? [])
+          .map((e) => ApiOrder.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+
+  List<ApiNotification> _notifications(Map<String, dynamic> data) =>
+      (data['data'] as List? ?? [])
+          .map(
+            (e) => ApiNotification.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
+          .toList();
+
   // ── Internal ───────────────────────────────────────────────────────────────
   Future<void> _saveLogin(Map<String, dynamic> data) async {
     await _storage.write(key: 'buyer_token', value: data['token'] as String);
@@ -461,7 +620,7 @@ class BuyerApi {
   };
 
   Future<Map<String, String>> _authHeaders() async {
-    final token = await _storage.read(key: 'buyer_token');
+    final token = debugToken ?? await _storage.read(key: 'buyer_token');
     if (token == null)
       throw const BuyerApiException('Please sign in again.', 401);
     return {

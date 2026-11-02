@@ -17,7 +17,10 @@ class DriverDispatchScreen extends StatefulWidget {
 class _DriverDispatchScreenState extends State<DriverDispatchScreen> {
   bool _busy = false;
 
-  Future<void> _showBlocked(String reason) {
+  /// [blocked] is false when the server refused the departure for another
+  /// reason (a connection drop, an open exception, an expired token), so the
+  /// sheet does not blame unscanned parcels for it.
+  Future<void> _showBlocked(String reason, {bool blocked = true}) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -52,17 +55,19 @@ class _DriverDispatchScreenState extends State<DriverDispatchScreen> {
                     color: VColors.redSoft,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(
-                    Icons.pause_circle_outline_rounded,
+                  child: Icon(
+                    blocked
+                        ? Icons.pause_circle_outline_rounded
+                        : Icons.cloud_off_rounded,
                     color: VColors.red,
                     size: 24,
                   ),
                 ),
                 const SizedBox(width: 12),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Departure blocked',
-                    style: TextStyle(
+                    blocked ? 'Departure blocked' : 'Trip not departed',
+                    style: const TextStyle(
                       color: VColors.ink,
                       fontSize: 17,
                       fontWeight: FontWeight.w800,
@@ -81,10 +86,13 @@ class _DriverDispatchScreenState extends State<DriverDispatchScreen> {
               ),
             ),
             const SizedBox(height: 10),
-            const Text(
-              'Ask the hub staff to scan the missing parcels. The trip cannot '
-              'leave while a parcel is unscanned.',
-              style: TextStyle(
+            Text(
+              blocked
+                  ? 'Ask the hub staff to scan the missing parcels. The trip '
+                        'cannot leave while a parcel is unscanned.'
+                  : 'Nothing has changed on this trip. Check the connection and '
+                        'try again.',
+              style: const TextStyle(
                 color: VColors.muted,
                 fontSize: 11.5,
                 height: 1.5,
@@ -110,7 +118,7 @@ class _DriverDispatchScreenState extends State<DriverDispatchScreen> {
     final store = DriverStore.instance;
 
     if (!trip.readyToDepart) {
-      await _showBlocked(store.depart(trip));
+      await _showBlocked(await store.depart(trip));
       return;
     }
 
@@ -145,11 +153,11 @@ class _DriverDispatchScreenState extends State<DriverDispatchScreen> {
     if (confirmed != true || !mounted) return;
 
     setState(() => _busy = true);
-    final reason = store.depart(trip);
+    final reason = await store.depart(trip);
     if (!mounted) return;
     setState(() => _busy = false);
     if (reason.isNotEmpty) {
-      await _showBlocked(reason);
+      await _showBlocked(reason, blocked: false);
       return;
     }
 

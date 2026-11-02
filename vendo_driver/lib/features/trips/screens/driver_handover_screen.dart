@@ -16,11 +16,15 @@ class DriverHandoverScreen extends StatefulWidget {
 class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
   bool _busy = false;
 
-  Future<void> _showBlocked(DriverTrip trip) {
+  /// [reason] overrides the scan count when the server refused the close for
+  /// another reason, so the sheet does not blame missing scans for a dropped
+  /// connection or an expired token.
+  Future<void> _showBlocked(DriverTrip trip, {String? reason}) {
     final missing = trip.missingDestinationScans;
-    final reason =
+    final shownReason =
+        reason ??
         '$missing ${missing == 1 ? 'parcel is' : 'parcels are'} still waiting '
-        'for a destination scan at ${trip.destination}.';
+            'for a destination scan at ${trip.destination}.';
 
     return showModalBottomSheet<void>(
       context: context,
@@ -63,10 +67,12 @@ class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
                   ),
                 ),
                 const SizedBox(width: 12),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Receiving not complete',
-                    style: TextStyle(
+                    reason == null
+                        ? 'Receiving not complete'
+                        : 'Trip still open',
+                    style: const TextStyle(
                       color: VColors.ink,
                       fontSize: 17,
                       fontWeight: FontWeight.w800,
@@ -77,7 +83,7 @@ class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              reason,
+              shownReason,
               style: const TextStyle(
                 color: Color(0xFF544956),
                 fontSize: 13,
@@ -85,29 +91,36 @@ class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
               ),
             ),
             const SizedBox(height: 10),
-            const Text(
-              'Station staff scan every parcel. The trip closes only when the '
-              'last one is received — this build has no station scanner yet.',
-              style: TextStyle(
+            Text(
+              trip.isLive
+                  ? 'Station staff scan every parcel at the destination. Pull '
+                        'to refresh and the count follows their scans; the trip '
+                        'closes only when the last one is received.'
+                  : 'Station staff scan every parcel. The trip closes only when '
+                        'the last one is received — this build has no station '
+                        'scanner yet.',
+              style: const TextStyle(
                 color: VColors.muted,
                 fontSize: 11.5,
                 height: 1.5,
               ),
             ),
             const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  DriverStore.instance.simulateDestinationScans(trip);
-                  Navigator.of(sheetContext).pop();
-                },
-                icon: const Icon(Icons.auto_fix_high_rounded, size: 18),
-                label: const Text('Demo: simulate station scans'),
+            if (!trip.isLive) ...[
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    DriverStore.instance.simulateDestinationScans(trip);
+                    Navigator.of(sheetContext).pop();
+                  },
+                  icon: const Icon(Icons.auto_fix_high_rounded, size: 18),
+                  label: const Text('Demo: simulate station scans'),
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
+              const SizedBox(height: 8),
+            ],
             SizedBox(
               width: double.infinity,
               height: 50,
@@ -160,11 +173,11 @@ class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
     if (confirmed != true || !mounted) return;
 
     setState(() => _busy = true);
-    final reason = DriverStore.instance.arrive(trip);
+    final reason = await DriverStore.instance.arrive(trip);
     if (!mounted) return;
     setState(() => _busy = false);
     if (reason.isNotEmpty) {
-      await _showBlocked(trip);
+      await _showBlocked(trip, reason: reason);
       return;
     }
     ScaffoldMessenger.of(context).showSnackBar(
@@ -251,7 +264,8 @@ class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
                           InfoRow(
                             icon: Icons.inventory_2_outlined,
                             label: 'Parcels expected',
-                            value: '${trip.parcelCount} parcels from ${trip.origin}',
+                            value:
+                                '${trip.parcelCount} parcels from ${trip.origin}',
                           ),
                         ],
                       ),
@@ -384,14 +398,19 @@ class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
                             '${trip.missingDestinationScans == 1 ? 'parcel is' : 'parcels are'} '
                             'still waiting for a destination scan at '
                             '${trip.destination}. The trip cannot close yet.',
-                        action: TextButton.icon(
-                          onPressed: () => store.simulateDestinationScans(trip),
-                          icon: const Icon(
-                            Icons.auto_fix_high_rounded,
-                            size: 16,
-                          ),
-                          label: const Text('Demo: simulate station scans'),
-                        ),
+                        action: trip.isLive
+                            ? null
+                            : TextButton.icon(
+                                onPressed: () =>
+                                    store.simulateDestinationScans(trip),
+                                icon: const Icon(
+                                  Icons.auto_fix_high_rounded,
+                                  size: 16,
+                                ),
+                                label: const Text(
+                                  'Demo: simulate station scans',
+                                ),
+                              ),
                       ),
                     const SizedBox(height: 14),
                     const NoticeCard(
@@ -519,9 +538,9 @@ class _CompletedView extends StatelessWidget {
                         width: double.infinity,
                         height: 50,
                         child: FilledButton(
-                          onPressed: () => Navigator.of(
-                            context,
-                          ).popUntil((route) => route.isFirst),
+                          onPressed: () =>
+                              Navigator.of(context)
+                                  .popUntil((route) => route.isFirst),
                           child: const Text('Back to home'),
                         ),
                       ),

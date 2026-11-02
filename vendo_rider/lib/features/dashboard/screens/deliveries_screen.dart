@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/auth/screens/login_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/delivery_detail_screen.dart';
+import 'package:vendo_rider/features/dashboard/widgets/offline_banner.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the rest of the dashboard
@@ -46,6 +47,12 @@ class DeliveriesScreenState extends State<DeliveriesScreen> {
   String? _vehicleType;
   String _activeFilter = 'All';
 
+  // Offline mode: when the API cannot be reached the list falls back to the
+  // last saved work on this device, and scans queue until the signal returns.
+  DateTime? _offlineSince;
+  int _pendingCount = 0;
+  bool _syncingOffline = false;
+
   @override
   void initState() {
     super.initState();
@@ -70,8 +77,12 @@ class DeliveriesScreenState extends State<DeliveriesScreen> {
           _name = name;
           _center = center;
           _vehicleType = vehicleType;
+          _offlineSince = null;
         });
       }
+      // We just reached Vendo, so send anything saved while offline.
+      await _refreshPendingCount();
+      await _syncOffline();
     } on RiderApiException catch (error) {
       if (mounted && (error.statusCode == 401 || error.statusCode == 403)) {
         await RiderApi.instance.clearSession();
@@ -85,13 +96,67 @@ class DeliveriesScreenState extends State<DeliveriesScreen> {
       }
       if (mounted) setState(() => _error = error.message);
     } catch (_) {
-      if (mounted) {
-        setState(
-          () => _error = 'Cannot reach Vendo. Check your connection and retry.',
-        );
+      // No connection: show the work saved on this device instead of an error.
+      final cached = await RiderApi.instance.cachedWork();
+      final name = await RiderApi.instance.riderName();
+      final center = await RiderApi.instance.centerName();
+      final vehicleType = await RiderApi.instance.riderVehicleType();
+      if (!mounted) return;
+      if (cached == null) {
+        setState(() {
+          _error = 'Cannot reach Vendo and no saved work is on this device yet.';
+        });
+        return;
       }
+      final work = (cached.payload['assignments'] as List<dynamic>? ?? [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+      setState(() {
+        _assignments = work;
+        _name = name;
+        _center = center;
+        _vehicleType = vehicleType;
+        _offlineSince = cached.cachedAt;
+        _error = null;
+      });
+      await _refreshPendingCount();
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _refreshPendingCount() async {
+    final count = await RiderApi.instance.pendingOfflineActions();
+    if (mounted) setState(() => _pendingCount = count);
+  }
+
+  /// Uploads scans and delivery proofs taken without a connection.
+  Future<void> _syncOffline() async {
+    if (_syncingOffline) return;
+    _syncingOffline = true;
+    try {
+      final report = await RiderApi.instance.syncOfflineActions();
+      await _refreshPendingCount();
+      if (!mounted) return;
+      if (report.synced > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${report.synced} offline update${report.synced == 1 ? '' : 's'} uploaded.',
+            ),
+          ),
+        );
+        await _refresh();
+      } else if (report.hasFailures && report.messages.isNotEmpty) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(report.messages.first)));
+      }
+    } catch (_) {
+      // Still offline; the queue waits for the next refresh.
+    } finally {
+      _syncingOffline = false;
     }
   }
 
@@ -177,6 +242,19 @@ class DeliveriesScreenState extends State<DeliveriesScreen> {
                   : _countStage(orders, {RiderStage.forDelivery}),
               deliverLabel: isTruck ? 'Linehaul' : 'Delivery',
             ),
+            if (_offlineSince != null) ...[
+              const SizedBox(height: 14),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: OfflineBanner(
+                  savedAt: _offlineSince,
+                  pending: _pendingCount,
+                  onRetry: _loading
+                      ? null
+                      : () => _refresh(showSpinner: true),
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             if (filters.length > 1)
               _buildFilters(filters, orders, activeFilter),
@@ -367,7 +445,12 @@ class DeliveriesScreenState extends State<DeliveriesScreen> {
       onRefresh: _refresh,
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+        padding: EdgeInsets.fromLTRB(
+          20,
+          4,
+          20,
+          24 + MediaQuery.of(context).padding.bottom,
+        ),
         itemCount: items.isEmpty ? 1 : items.length + (_error == null ? 0 : 1),
         separatorBuilder: (_, _) => const SizedBox(height: 12),
         itemBuilder: (_, index) {

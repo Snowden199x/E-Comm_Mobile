@@ -104,10 +104,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _middleInitialCtrl = TextEditingController();
   String? _selectedSex;
   final _emailCtrl = TextEditingController();
-  final _emailOtpCtrl = TextEditingController();
   String? _emailVerificationToken;
-  bool _sendingEmailOtp = false;
-  bool _verifyingEmailOtp = false;
   final _birthdayCtrl = TextEditingController();
   final _ageCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
@@ -277,7 +274,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _firstNameCtrl.dispose();
     _middleInitialCtrl.dispose();
     _emailCtrl.dispose();
-    _emailOtpCtrl.dispose();
     _birthdayCtrl.dispose();
     _ageCtrl.dispose();
     _passwordCtrl.dispose();
@@ -319,44 +315,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _sendEmailOtp() async {
+  /// Opens the 6-digit email verification sheet, the same design the Buyer
+  /// registration uses. The code is sent as soon as the sheet opens.
+  void _showVerifyEmailModal(BuildContext context) {
     final email = _emailCtrl.text.trim();
     if (!email.contains('@')) {
       _showError('Enter a valid email address first.');
       return;
     }
-    setState(() => _sendingEmailOtp = true);
-    try {
-      await RiderApi.instance.sendRegistrationCode(email);
-      if (mounted) _showError('Verification code sent. Check your email.');
-    } on RiderApiException catch (error) {
-      if (mounted) _showError(error.message);
-    } catch (_) {
-      if (mounted) {
-        _showError(
-          'Could not send the code. Check your connection and email setup.',
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _sendingEmailOtp = false);
-    }
-  }
-
-  Future<void> _verifyEmailOtp() async {
-    setState(() => _verifyingEmailOtp = true);
-    try {
-      _emailVerificationToken = await RiderApi.instance.verifyRegistrationCode(
-        _emailCtrl.text.trim(),
-        _emailOtpCtrl.text,
-      );
-      if (mounted) setState(() {});
-    } on RiderApiException catch (error) {
-      if (mounted) _showError(error.message);
-    } catch (_) {
-      if (mounted) _showError('Could not verify the code. Try again.');
-    } finally {
-      if (mounted) setState(() => _verifyingEmailOtp = false);
-    }
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _VerifyEmailModal(
+        email: email,
+        onVerified: (token) {
+          setState(() => _emailVerificationToken = token);
+        },
+      ),
+    );
   }
 
   Future<void> _nextStep() async {
@@ -364,6 +341,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (_currentStep < _totalSteps - 1) {
       final invalid = _invalidIds(_currentStep);
       if (invalid.isNotEmpty) {
+        // An unverified email has no red field of its own, so open the code
+        // sheet instead of marking fields the Rider cannot see.
+        if (invalid.length == 1 && invalid.first == 'emailVerify') {
+          _showError('Please verify your email before continuing.');
+          _showVerifyEmailModal(context);
+          return;
+        }
         // Snapshot taken NOW: only these fields turn red
         setState(() => _flagged = invalid.toSet());
         _showError('Please complete the fields marked in red.');
@@ -742,13 +726,24 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final Map<String, GlobalKey> _keys = {};
   GlobalKey _k(String id) => _keys.putIfAbsent(id, () => GlobalKey());
 
-  Widget _col(String id, String label, Widget child, {bool required = false}) {
+  Widget _col(
+    String id,
+    String label,
+    Widget child, {
+    bool required = false,
+    Widget? trailing,
+  }) {
     return KeyedSubtree(
       key: _k(id),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _label(label, required: required),
+          Row(
+            children: [
+              Expanded(child: _label(label, required: required)),
+              ?trailing,
+            ],
+          ),
           const SizedBox(height: 8),
           // Tells the field below it which id it has, so it can check if it is flagged
           _FieldScope(id: id, flagged: _flagged, child: child),
@@ -896,6 +891,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   },
           ),
           required: true,
+          trailing: widget.googleRegistrationToken != null ||
+                  _emailVerificationToken != null
+              ? null
+              : TextButton(
+                  style: _linkStyle,
+                  onPressed: () => _showVerifyEmailModal(context),
+                  child: const Text('Verify'),
+                ),
         ),
         const SizedBox(height: 10),
         if (widget.googleRegistrationToken != null)
@@ -913,38 +916,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               SizedBox(width: 6),
               Text('Email verified', style: TextStyle(color: _C.success)),
             ],
-          )
-        else ...[
-          Row(
-            children: [
-              Expanded(
-                child: _Field(
-                  controller: _emailOtpCtrl,
-                  hint: '6-digit email code',
-                  forceError: _flagged.contains('emailVerify'),
-                  errorText: 'Verify your email to continue.',
-                  icon: Icons.pin_outlined,
-                  keyboard: TextInputType.number,
-                ),
-              ),
-              const SizedBox(width: 8),
-              TextButton(
-                style: _linkStyle,
-                onPressed: _sendingEmailOtp ? null : _sendEmailOtp,
-                child: Text(_sendingEmailOtp ? 'Sending…' : 'Send code'),
-              ),
-            ],
           ),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton.icon(
-              style: _linkStyle,
-              onPressed: _verifyingEmailOtp ? null : _verifyEmailOtp,
-              icon: const Icon(Icons.verified_user_outlined, size: 18),
-              label: Text(_verifyingEmailOtp ? 'Checking…' : 'Verify email'),
-            ),
-          ),
-        ],
         _gap,
 
         _row2(
@@ -3275,4 +3247,317 @@ class _RiderPainter extends CustomPainter {
       old.speed != speed ||
       old.brake != brake ||
       old.phase != phase;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Email verification sheet — same design as the Buyer registration
+// ─────────────────────────────────────────────────────────────────────────────
+class _VerifyEmailModal extends StatefulWidget {
+  const _VerifyEmailModal({required this.email, required this.onVerified});
+
+  final String email;
+  final ValueChanged<String> onVerified;
+
+  @override
+  State<_VerifyEmailModal> createState() => _VerifyEmailModalState();
+}
+
+class _VerifyEmailModalState extends State<_VerifyEmailModal> {
+  final List<TextEditingController> _otpControllers = List.generate(
+    6,
+    (_) => TextEditingController(),
+  );
+  final List<FocusNode> _focusNodes = List.generate(6, (_) => FocusNode());
+
+  bool _sending = false;
+  bool _verifying = false;
+  bool _codeSent = false;
+  String? _errorMsg;
+
+  @override
+  void initState() {
+    super.initState();
+    _sendCode();
+  }
+
+  @override
+  void dispose() {
+    for (final c in _otpControllers) {
+      c.dispose();
+    }
+    for (final f in _focusNodes) {
+      f.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _sendCode() async {
+    setState(() {
+      _sending = true;
+      _errorMsg = null;
+    });
+    try {
+      await RiderApi.instance.sendRegistrationCode(widget.email);
+      if (!mounted) return;
+      setState(() {
+        _codeSent = true;
+        _sending = false;
+      });
+    } on RiderApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMsg = e.message;
+        _sending = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMsg = 'Could not send the code. Check your connection.';
+        _sending = false;
+      });
+    }
+  }
+
+  Future<void> _verify() async {
+    final code = _otpControllers.map((c) => c.text).join();
+    if (code.length < 6) {
+      setState(() => _errorMsg = 'Enter the full 6-digit code.');
+      return;
+    }
+    setState(() {
+      _verifying = true;
+      _errorMsg = null;
+    });
+    try {
+      final token = await RiderApi.instance.verifyRegistrationCode(
+        widget.email,
+        code,
+      );
+      if (!mounted) return;
+      widget.onVerified(token);
+      Navigator.pop(context);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Email verified.')));
+    } on RiderApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorMsg = e.message;
+        _verifying = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMsg = 'Verification failed. Check your connection.';
+        _verifying = false;
+      });
+    }
+  }
+
+  void _onOtpChanged(String value, int index) {
+    if (value.length == 1 && index < 5) {
+      _focusNodes[index + 1].requestFocus();
+    } else if (value.isEmpty && index > 0) {
+      _focusNodes[index - 1].requestFocus();
+    }
+    // Auto-submit when all 6 digits entered
+    if (_otpControllers.every((c) => c.text.length == 1)) {
+      _verify();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      padding: EdgeInsets.fromLTRB(24, 14, 24, 28 + bottomInset),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: _C.border,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 28),
+
+          // Icon
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: 80,
+                height: 80,
+                decoration: const BoxDecoration(
+                  color: _C.raisinSoft,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.mail_outline_rounded,
+                  color: _C.prune,
+                  size: 38,
+                ),
+              ),
+              Positioned(
+                bottom: 6,
+                right: 6,
+                child: Container(
+                  width: 24,
+                  height: 24,
+                  decoration: const BoxDecoration(
+                    color: _C.prune,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.check, color: _C.lin, size: 14),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 22),
+
+          const Text(
+            'Verify Your Email',
+            style: TextStyle(
+              color: _C.ink,
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _sending
+                ? 'Sending code to ${widget.email}…'
+                : 'We sent a 6-digit code to ${widget.email}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: _C.muted, fontSize: 14, height: 1.4),
+          ),
+          const SizedBox(height: 28),
+
+          // OTP boxes
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: List.generate(6, (i) {
+              return SizedBox(
+                width: 46,
+                height: 56,
+                child: TextField(
+                  controller: _otpControllers[i],
+                  focusNode: _focusNodes[i],
+                  textAlign: TextAlign.center,
+                  keyboardType: TextInputType.number,
+                  maxLength: 1,
+                  enabled: _codeSent && !_verifying,
+                  cursorColor: _C.prune,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: _C.ink,
+                  ),
+                  decoration: InputDecoration(
+                    counterText: '',
+                    filled: true,
+                    fillColor: _C.background,
+                    contentPadding: EdgeInsets.zero,
+                    enabledBorder: _border(_C.border, 1.2),
+                    focusedBorder: _border(_C.prune, 1.8),
+                    disabledBorder: _border(_C.border, 1.2),
+                  ),
+                  onChanged: (v) => _onOtpChanged(v, i),
+                ),
+              );
+            }),
+          ),
+
+          if (_errorMsg != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _errorMsg!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: _C.error, fontSize: 13),
+            ),
+          ],
+
+          const SizedBox(height: 20),
+
+          // Resend
+          GestureDetector(
+            onTap: _sending ? null : _sendCode,
+            behavior: HitTestBehavior.opaque,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (_sending)
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.8,
+                      color: _C.raisin,
+                    ),
+                  )
+                else
+                  const Icon(Icons.refresh_rounded, color: _C.raisin, size: 18),
+                const SizedBox(width: 6),
+                const Text(
+                  'Resend Code',
+                  style: TextStyle(
+                    color: _C.raisin,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          SizedBox(
+            width: double.infinity,
+            height: 54,
+            child: ElevatedButton(
+              onPressed: (_codeSent && !_verifying && !_sending)
+                  ? _verify
+                  : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _C.prune,
+                disabledBackgroundColor: _C.prune,
+                foregroundColor: Colors.white,
+                disabledForegroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(_radius),
+                ),
+              ),
+              child: _verifying
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: _C.lin,
+                      ),
+                    )
+                  : const Text(
+                      'Verify Email',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
