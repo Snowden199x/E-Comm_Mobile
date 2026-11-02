@@ -94,8 +94,6 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
   String? _emailVerificationToken;
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
-  String? _validIdName;
-  String? _validIdPath;
 
   // Step 2 — address and contact.
   final _phone = TextEditingController();
@@ -371,7 +369,6 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
           'confirm',
           _confirm.text.isEmpty || _confirm.text != _password.text,
         ),
-        ('validId', _validIdPath == null),
       ]);
     } else if (step == 1) {
       checks.addAll([
@@ -628,7 +625,6 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
         },
         {
           'drivers_license': _licenseFilePath!,
-          'valid_id': _validIdPath!,
         },
       );
       await DriverApi.instance.saveApplicationEmail(_email.text);
@@ -945,25 +941,6 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
           ],
         ),
         _gap(),
-        _keyed(
-          'validId',
-          RegUpload(
-            id: 'validId',
-            label: 'Valid ID',
-            fileName: _validIdName,
-            hint: 'Upload your valid ID',
-            required: true,
-            helper: 'Any government ID with your photo and name.',
-            onTap: () => _pickDocument(
-              title: 'Upload Valid ID',
-              onPicked: (file) => setState(() {
-                _validIdName = file.name;
-                _validIdPath = file.path;
-                _flagged.remove('validId');
-              }),
-            ),
-          ),
-        ),
         const SizedBox(height: 26),
         const RegisterSectionHeader(
           title: 'Account Security',

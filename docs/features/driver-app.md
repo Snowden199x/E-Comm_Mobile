@@ -1,7 +1,7 @@
 # Vendo Driver app
 
-**Status:** Registration, application status, sign-in, session restore, password reset and the trip board (`GET /trips`, depart, arrive) are connected to the web API. Earnings still use demo data.
-**Updated:** 2 November 2026
+**Status:** Registration, application status, sign-in, session restore, password reset and the trip board (`GET /trips`, load scan, depart, arrive) are connected to the web API. Earnings still use demo data.
+**Updated:** 3 November 2026
 
 `vendo_driver/` is the Flutter app for the Transport Driver — the person in charge of the trucks and vans that move parcels between Stations and Province Hubs. It uses the same Vendo palette and Material 3 language as the Rider app, but it has its own screens and a separate bottom navigation widget.
 
@@ -9,7 +9,7 @@
 
 - The driver never collects or carries COD cash. A COD parcel is just a parcel. The manifest shows tracking numbers and statuses only: no addresses, buyer details, prices or COD amounts.
 - Opening a manifest does not prove that every parcel arrived. Station scans are the proof of receipt. Dispatch requires every origin scan; closing the trip requires every destination scan.
-- Container scanning, per-parcel scan status, incident/discrepancy reports, trip history, notifications and salary are later. They are labelled **Later** in the UI and are not functional.
+- Container scanning, incident/discrepancy reports, trip history, notifications and salary are later. They are labelled **Later** in the UI and are not functional.
 
 ## Registration and approval
 
@@ -27,7 +27,7 @@ The app sends `apply_to`, the chosen hub and the PSGC province / city / barangay
 
 When the address changes, the Apply step re-reads the selected province and city, so the preview follows the address the driver actually entered.
 
-Documents: the licence and a valid ID are photographed or picked from the gallery and uploaded privately as `drivers_license` and `valid_id`.
+Documents: the licence is photographed or picked from the gallery and uploaded privately as `drivers_license`. The licence is the driver's identity document, so no separate Valid ID is asked for; older installs may still send `valid_id` and the API accepts it as optional.
 
 Email verification uses the same sheet as the Rider and Buyer registrations: the Email label has a **Verify** link that opens a bottom sheet with six digit boxes and sends the code straight away (`POST /email/otp/send`). The boxes move on their own, the code is checked as soon as all six digits are in (`POST /email/otp/verify`), and **Resend Code** is available. On success the email field shows a green *Verified* mark and the returned `verification_token` is sent with the application. Changing the email clears it, and Step 1 does not advance until the email is verified.
 
@@ -79,8 +79,9 @@ The profile the API returns is what the Profile tab shows: name, email, mobile, 
 | Home | [`driver_home_screen.dart`](../../vendo_driver/lib/features/dashboard/screens/driver_home_screen.dart) | Greeting with today's date and the vehicle/plate, tappable avatar that opens Profile, licence-expiry warning from 30 days out, sync strip, active trips and parcels onboard, quick actions (Manifest, Dispatch, Trip status), current trip card with scan progress, upcoming trips. Pull down to refresh from the API. |
 | Trips | [`driver_trips_screen.dart`](../../vendo_driver/lib/features/dashboard/screens/driver_trips_screen.dart) | All/Scheduled/In transit/Completed filters and trip cards. |
 | Manifest | [`driver_manifest_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_manifest_screen.dart) | Parcel list with tracking numbers and statuses, search, origin/received counts, trip selector when embedded. |
-| Trip details | [`driver_trip_details_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_trip_details_screen.dart) | Route rail, schedule, vehicle, distance, scan progress, manifest shortcut. |
-| Dispatch confirmation | [`driver_dispatch_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_dispatch_screen.dart) | Readiness checklist (vehicle, license, origin scans) and a Depart action that shows the server-style reason when blocked. |
+| Trip details | [`driver_trip_details_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_trip_details_screen.dart) | Route rail, schedule, vehicle, distance, scan progress, manifest shortcut, and a **Scan parcels** action instead of a dispatch button. |
+| Load scan | [`driver_scan_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_scan_screen.dart) | Camera reader plus a typed tracking number, single parcel or container labels that load several at once, the scanned count, a tick per parcel, and a **Confirm dispatch** that stays locked until the last parcel is scanned. |
+| Dispatch confirmation | [`driver_dispatch_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_dispatch_screen.dart) | The last step after the load scan: readiness checklist (vehicle, license, origin scans) and a Depart action that shows the server-style reason when blocked. |
 | Trip status | [`driver_trip_status_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_trip_status_screen.dart) | In-transit timeline, ETA, parcels onboard, receiving count, handover action. |
 | Destination handover | [`driver_handover_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_handover_screen.dart) | Receiving progress, pending tracking numbers, blocked reason, close-trip confirmation and a completed state that releases the vehicle. |
 | Legacy earnings | [`driver_earnings_screen.dart`](../../vendo_driver/lib/features/earnings/screens/driver_earnings_screen.dart) | Old per-stop credits only, with a plain statement that this is not salary or payout. |
@@ -92,7 +93,7 @@ Shared pieces live in [`vendo_theme.dart`](../../vendo_driver/lib/core/theme/ven
 
 The five tabs are Home, Trips, Manifest, Earnings and Profile. Manifest doubles as a tab and as a pushed screen: opened from a trip it shows that trip's manifest with a back button; opened from the tab it shows the current trip and lets the driver switch between non-completed trips.
 
-Trip details, dispatch confirmation, trip status and destination handover are pushed on top of the shell in that order. Closing a trip returns to the root shell, where the completed trip is gone from the current card and the next scheduled trip becomes current.
+Trip details, the load scan, dispatch confirmation, trip status and destination handover are pushed on top of the shell in that order. Closing a trip returns to the root shell, where the completed trip is gone from the current card and the next scheduled trip becomes current.
 
 ## Trips from the web
 
@@ -105,12 +106,27 @@ Trip details, dispatch confirmation, trip status and destination handover are pu
 | `origin`, `destination` | Hub names with the municipality and province joined as the area line. |
 | `scheduled_departure_at`, `expected_arrival_at`, `departed_at`, `arrived_at` | The schedule, ETA and timeline. A trip with no schedule falls back to when it actually left, then to now. |
 | `vehicle` | Type and plate, falling back to the profile when the trip has no vehicle row. |
-| `manifest` | Tracking numbers only: no addresses, buyer details, prices or COD amounts. |
+| `manifest` | Tracking numbers only, plus an `origin_scanned` / `destination_scanned` flag per parcel: no addresses, buyer details, prices or COD amounts. The flag is what ticks one parcel on the scan screen. |
 | `origin_scanned`, `destination_scanned` | How many manifest parcels carry the origin departure scan and the destination arrival scan. These are the same scans the workflow checks before it lets a trip depart or close, so the progress bars show real counts. |
 
 The board refreshes on three occasions: when the shell opens, when the driver pulls the Home list down, and when **Refresh** is tapped. The strip under the greeting says where the data came from — *Updated 2 min ago from Vendo*, *Loading the trips your hub assigned…*, or *These are sample trips* — and a failure shows a red notice with **Retry**. When the server answers `401` the stored session is cleared and the notice offers **Sign in**, which drops the token and opens the sign-in screen.
 
 **Departing and arriving** call `POST /trips/{id}/depart` and `POST /trips/{id}/arrive` on live trips and keep the answer the server returns in place of the local trip, so the status, scans and ETA follow the web. A refusal (an unscanned parcel, an open exception, a dropped connection) is shown in the blocked sheet with the server's own reason. Local rules stay for the sample trips, which are only used before the first successful load and are kept on screen when the network is down.
+
+### Scanning the load before dispatch
+
+A scheduled trip no longer opens on a dispatch button. The trip details action and the Home quick action both open the **Load scan** screen, where the driver scans every parcel onto the truck:
+
+1. The camera reads a parcel label (QR, Code 128, Code 39 or EAN-13) or a container label; a driver whose camera does not work types the tracking numbers and taps **Scan**.
+2. Each scan sends every tracking number the label carries to `POST /api/v1/transport-drivers/trips/{id}/scan` with a fresh UUID `scan_key`. The server checks each parcel is on that trip's manifest and routed through the trip's origin hub, records them as the origin departure scans the depart check counts, and answers with the whole trip plus `recorded`, `duplicates`, `unknown` and `not_routed`, so the app takes the server's own count and per-parcel flags.
+3. A repeated label is ignored for three seconds; a parcel that already carries the scan comes back as *already scanned*; a number that is not on the manifest, a parcel not routed through the origin hub, or a trip that already left are reported in the red answer under the field without failing the rest of the label.
+4. **Confirm dispatch** stays disabled until every parcel is scanned. When the last one lands, the button opens the dispatch confirmation screen.
+
+### Container labels
+
+One scan can load several parcels, which is what a container label is for: the QR carries a list of tracking numbers instead of one. The app accepts the list separated by commas, semicolons, pipes, spaces or line breaks, optionally behind a scheme prefix (`VENDO-CONTAINER:` and similar), as a JSON list or as `{"tracking_numbers": [...]}`, and treats the trip's own QR code (`TRP-00042`) as the whole manifest. Codes shorter than five characters or containing anything other than letters, digits and dashes are ignored, duplicates are dropped, and at most 100 parcels travel in one request. Every parcel on the label is ticked at once, and the counter and progress bar jump by the number of parcels the label carried.
+
+The server still enforces the same gate, so a trip cannot leave from another device or the web while a parcel is unscanned. Scans are also written as a `facility_scan_events` row attributed to the driver and a status note on the order, so the hub's parcel timeline shows who confirmed the load.
 
 ### Sample trips
 
@@ -143,6 +159,9 @@ Same palette as the Rider app: Prune `#412143`, Brique `#BF5E40`, Lin `#DBC583`,
 - The board shows the trips the API returns (scheduled and in transit); completed trips drop off on the next refresh, and the app keeps no trip history.
 - Password recovery depends on the web sending the reset email; a failure there is only visible in the server log, and the app shows the same neutral message either way.
 - No push notification when the hub approves or rejects; the applicant sees it on the next sign-in or status check.
-- No scanning, container labels, incident/discrepancy forms, trip history, notifications or salary.
+- Load scanning covers the origin only. The destination hub still scans each parcel with its own station scanner before the trip can close.
+- The scan screen holds the camera open while it is on screen; there is no background or headless scanning.
+- There is no container record in the database: a container label is just a QR that lists tracking numbers, so nothing groups those parcels after they are loaded and no container can be searched by its own code.
+- Incident/discrepancy forms, trip history, notifications and salary are still missing.
 - No map or turn-by-turn navigation. The trip status screen shows the planned route and ETA, not live GPS.
 - No automated tests are kept in the repository; the owner performs device testing.

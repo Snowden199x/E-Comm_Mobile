@@ -8,8 +8,8 @@ import 'package:vendo_driver/core/theme/vendo_theme.dart';
 import 'package:vendo_driver/core/utils/date_labels.dart';
 import 'package:vendo_driver/features/auth/screens/driver_login_screen.dart';
 import 'package:vendo_driver/features/shared/widgets/driver_ui.dart';
-import 'package:vendo_driver/features/trips/screens/driver_dispatch_screen.dart';
 import 'package:vendo_driver/features/trips/screens/driver_manifest_screen.dart';
+import 'package:vendo_driver/features/trips/screens/driver_scan_screen.dart';
 import 'package:vendo_driver/features/trips/screens/driver_trip_status_screen.dart';
 
 /// Slightly lighter prune for the header gradient.
@@ -663,18 +663,18 @@ class _QuickActions extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: _QuickAction(
-              icon: Icons.local_shipping_outlined,
-              label: 'Dispatch',
+              icon: Icons.qr_code_scanner_rounded,
+              label: 'Scan load',
               hint: trip == null
                   ? 'No active trip'
                   : scheduled == null
                   ? 'Already departed'
                   : scheduled.readyToDepart
-                  ? 'Ready to depart'
-                  : '${scheduled.missingOriginScans} to scan',
+                  ? 'All scanned'
+                  : '${scheduled.originScanned} of ${scheduled.parcelCount}',
               onTap: scheduled == null
                   ? null
-                  : () => open(DriverDispatchScreen(tripCode: scheduled.code)),
+                  : () => open(DriverScanScreen(tripCode: scheduled.code)),
             ),
           ),
           const SizedBox(width: 10),
@@ -1033,11 +1033,11 @@ class _CurrentTripCard extends StatelessWidget {
                   MaterialPageRoute<void>(
                     builder: (_) => inTransit
                         ? DriverTripStatusScreen(tripCode: trip.code)
-                        : DriverDispatchScreen(tripCode: trip.code),
+                        : DriverScanScreen(tripCode: trip.code),
                   ),
                 );
               },
-              child: Text(inTransit ? 'Trip status' : 'Confirm dispatch'),
+              child: Text(inTransit ? 'Trip status' : 'Scan parcels'),
             ),
           ),
           const SizedBox(height: 4),

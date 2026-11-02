@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- The app talks to the Vendo Transport Driver API. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- The driver scans parcel barcodes before dispatch. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
     <application
         android:label="Vendo Driver"
         android:name="${applicationName}"
