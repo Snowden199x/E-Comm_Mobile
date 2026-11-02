@@ -211,8 +211,8 @@ class _DriverManifestScreenState extends State<DriverManifestScreen> {
                       const SizedBox(width: 8),
                       const Expanded(
                         child: Text(
-                          'Container scanning, per-parcel scan status and '
-                          'discrepancy reports are planned for a later version.',
+                          'Container scanning and discrepancy reports are '
+                          'planned for a later version.',
                           style: TextStyle(
                             color: VColors.muted,
                             fontSize: 11,
@@ -379,7 +379,7 @@ class _ParcelList extends StatelessWidget {
                     index: matches[i].key,
                     total: trip.parcelCount,
                     tracking: matches[i].value,
-                    stage: trip.stageFor(matches[i].key),
+                    stage: trip.stageFor(matches[i].value),
                   ),
                 ],
               ],

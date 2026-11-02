@@ -66,9 +66,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<!-- The driver photographs the licence and valid ID in the registration form. -->
+	<!-- The driver photographs the licence in the registration form and scans
+	     parcel barcodes before dispatch. -->
 	<key>NSCameraUsageDescription</key>
-	<string>Vendo Driver uses the camera to photograph your driver's licence and valid ID.</string>
+	<string>Vendo Driver uses the camera to photograph your driver's licence and to scan parcel barcodes before dispatch.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Vendo Driver reads a photo of your driver's licence and valid ID from your library.</string>
 </dict>

@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:vendo_driver/core/api/driver_api.dart';
 
@@ -24,11 +26,18 @@ class DriverTrip {
     required this.plate,
     required this.trackingNumbers,
     required this.originScanned,
+    Set<String>? originScans,
+    Set<String>? destinationScans,
     this.destinationScanned = 0,
     this.status = TripStatus.scheduled,
     this.departedAt,
     this.arrivedAt,
-  });
+  }) {
+    // The fields start empty, so a trip built from a count alone never exposes
+    // a null set to the screens that read them.
+    if (originScans != null) originScannedTrackings = originScans;
+    if (destinationScans != null) destinationScannedTrackings = destinationScans;
+  }
 
   /// The trip id on the web. Demo trips have none, which is how the app tells
   /// a trip the hub assigned from a sample one.
@@ -55,6 +64,11 @@ class DriverTrip {
   /// Parcels the destination station has scanned as received.
   int destinationScanned;
 
+  /// The tracking numbers behind [originScanned] and [destinationScanned], so a
+  /// scan screen can tick the exact parcel instead of guessing from an index.
+  Set<String> originScannedTrackings = <String>{};
+  Set<String> destinationScannedTrackings = <String>{};
+
   TripStatus status;
   DateTime? departedAt;
   DateTime? arrivedAt;
@@ -69,12 +83,32 @@ class DriverTrip {
   int get missingOriginScans => parcelCount - originScanned;
   int get missingDestinationScans => parcelCount - destinationScanned;
 
-  ParcelStage stageFor(int index) {
-    if (status == TripStatus.completed || index < destinationScanned) {
+  /// True when the origin hub has a departure scan for this parcel. Sample
+  /// trips only carry a count, so the first [originScanned] parcels stand in
+  /// for it until the driver scans them.
+  bool originScanRecorded(String tracking) {
+    if (originScannedTrackings.isNotEmpty) {
+      return originScannedTrackings.contains(tracking);
+    }
+    final index = trackingNumbers.indexOf(tracking);
+    return index >= 0 && index < originScanned;
+  }
+
+  /// True when the destination hub has an arrival scan for this parcel.
+  bool destinationScanRecorded(String tracking) {
+    if (destinationScannedTrackings.isNotEmpty) {
+      return destinationScannedTrackings.contains(tracking);
+    }
+    final index = trackingNumbers.indexOf(tracking);
+    return index >= 0 && index < destinationScanned;
+  }
+
+  ParcelStage stageFor(String tracking) {
+    if (status == TripStatus.completed || destinationScanRecorded(tracking)) {
       return ParcelStage.received;
     }
     if (status == TripStatus.inTransit) return ParcelStage.inTransit;
-    if (index < originScanned) return ParcelStage.departed;
+    if (originScanRecorded(tracking)) return ParcelStage.departed;
     return ParcelStage.awaitingOriginScan;
   }
 
@@ -83,6 +117,25 @@ class DriverTrip {
     TripStatus.inTransit => 'In transit',
     TripStatus.completed => 'Completed',
   };
+}
+
+/// What one load scan did, so the scan screen can say it plainly.
+class LoadScanResult {
+  const LoadScanResult({
+    required this.ok,
+    this.duplicate = false,
+    this.scanned = 0,
+    this.message = '',
+  });
+
+  final bool ok;
+
+  /// The parcel already carried the scan, so nothing changed on the server.
+  final bool duplicate;
+
+  /// How many parcels this scan actually loaded.
+  final int scanned;
+  final String message;
 }
 
 class DriverProfile {
@@ -296,6 +349,18 @@ class DriverStore extends ChangeNotifier {
         .map((order) => text(order['tracking_number']))
         .where((tracking) => tracking.isNotEmpty)
         .toList(growable: false);
+    // The API marks each parcel, so a partially scanned load shows the parcels
+    // that are really on the truck rather than the first N of them.
+    final originScannedTrackings = <String>{};
+    final destinationScannedTrackings = <String>{};
+    for (final order in manifest) {
+      final tracking = text(order['tracking_number']);
+      if (tracking.isEmpty) continue;
+      if (order['origin_scanned'] == true) originScannedTrackings.add(tracking);
+      if (order['destination_scanned'] == true) {
+        destinationScannedTrackings.add(tracking);
+      }
+    }
 
     // A trip without a schedule still needs a label, so the departure falls
     // back to when it actually left and then to now.
@@ -324,6 +389,8 @@ class DriverStore extends ChangeNotifier {
           ? profile.plate
           : text(vehicle?['plate_number']),
       trackingNumbers: trackingNumbers,
+      originScans: originScannedTrackings,
+      destinationScans: destinationScannedTrackings,
       originScanned: number(data['origin_scanned']),
       destinationScanned: number(data['destination_scanned']),
       status: switch (text(data['status'])) {
@@ -437,6 +504,154 @@ class DriverStore extends ChangeNotifier {
     trip.originScanned = trip.parcelCount;
     notifyListeners();
     return '';
+  }
+
+  /// Scans one manifest parcel onto the truck.
+  Future<LoadScanResult> scanLoadParcel(
+    DriverTrip trip,
+    String trackingNumber,
+  ) => scanLoadParcels(trip, <String>[trackingNumber]);
+
+  /// Scans everything one label names — a parcel label holds one tracking
+  /// number, a container label holds several — in a single request. A live trip
+  /// records the scans on the server and takes back the trip it returns, so the
+  /// origin count is the server's own count; a sample trip keeps them on the
+  /// device.
+  Future<LoadScanResult> scanLoadParcels(
+    DriverTrip trip,
+    List<String> trackingNumbers,
+  ) async {
+    final codes = <String>[];
+    for (final raw in trackingNumbers) {
+      final code = raw.trim();
+      if (code.isNotEmpty && !codes.contains(code)) codes.add(code);
+    }
+    if (codes.isEmpty) {
+      return const LoadScanResult(
+        ok: false,
+        message: 'Scan or type a tracking number.',
+      );
+    }
+    if (trip.status != TripStatus.scheduled) {
+      return const LoadScanResult(
+        ok: false,
+        message: 'This trip has already left the origin hub.',
+      );
+    }
+
+    final onManifest = codes
+        .where(trip.trackingNumbers.contains)
+        .toList(growable: false);
+    final unknown = codes.length - onManifest.length;
+    if (onManifest.isEmpty) {
+      return LoadScanResult(
+        ok: false,
+        message: codes.length == 1
+            ? '${codes.first} is not on this trip manifest.'
+            : 'None of those ${codes.length} tracking numbers is on this trip '
+                  'manifest.',
+      );
+    }
+
+    final pending = onManifest
+        .where((code) => !trip.originScanRecorded(code))
+        .toList(growable: false);
+    final already = onManifest.length - pending.length;
+
+    if (!trip.isLive) {
+      // A sample trip was seeded with a count, so turn that count into tracking
+      // numbers before adding the new ones, or the earlier ticks disappear.
+      if (trip.originScannedTrackings.isEmpty) {
+        trip.originScannedTrackings.addAll(
+          trip.trackingNumbers.take(trip.originScanned),
+        );
+      }
+      trip.originScannedTrackings.addAll(pending);
+      trip.originScanned = trip.originScannedTrackings.length;
+      notifyListeners();
+      return LoadScanResult(
+        ok: true,
+        duplicate: pending.isEmpty,
+        scanned: pending.length,
+        message: _scanMessage(trip, pending.length, already, unknown),
+      );
+    }
+
+    if (pending.isEmpty) {
+      return LoadScanResult(
+        ok: true,
+        duplicate: true,
+        message: _scanMessage(trip, 0, already, unknown),
+      );
+    }
+
+    try {
+      final data = await DriverApi.instance.scanParcels(
+        trip.id!,
+        pending,
+        _scanKey(),
+      );
+      _replaceWithApiTrip(Map<String, dynamic>.from(data['trip'] as Map));
+      final serverMessage = data['message']?.toString() ?? '';
+      final scanned = (data['scanned'] as num?)?.toInt() ?? pending.length;
+      final unknownNote = unknown == 0
+          ? ''
+          : ' $unknown '
+                '${unknown == 1 ? 'tracking number is' : 'tracking numbers are'}';
+      return LoadScanResult(
+        ok: true,
+        duplicate: data['duplicate'] == true,
+        scanned: scanned,
+        message: serverMessage.isEmpty
+            ? _scanMessage(trip, scanned, already, unknown)
+            : '$serverMessage$unknownNote',
+      );
+    } on DriverApiException catch (error) {
+      sessionExpired = error.isUnauthenticated;
+      return LoadScanResult(ok: false, message: error.message);
+    } catch (_) {
+      return const LoadScanResult(
+        ok: false,
+        message: 'Could not reach Vendo. The scan was not saved; try again.',
+      );
+    }
+  }
+
+  /// One sentence a driver can act on after a label is scanned.
+  String _scanMessage(DriverTrip trip, int scanned, int already, int unknown) {
+    final parts = <String>[];
+    if (scanned > 0) {
+      parts.add(
+        '$scanned ${scanned == 1 ? 'parcel' : 'parcels'} scanned. '
+        '${trip.originScanned} of ${trip.parcelCount} on board.',
+      );
+    }
+    if (scanned == 0 && already > 0) {
+      parts.add(
+        already == 1
+            ? 'That parcel was already scanned.'
+            : 'Those parcels were already scanned.',
+      );
+    }
+    if (unknown > 0) {
+      parts.add(
+        '$unknown not on this manifest.',
+      );
+    }
+    return parts.isEmpty ? 'Nothing was scanned.' : parts.join(' ');
+  }
+
+  /// A v4 UUID, so a repeated tap or a retried request is not recorded twice.
+  String _scanKey() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    String hex(int start, int end) => bytes
+        .sublist(start, end)
+        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+        .join();
+    return '${hex(0, 4)}-${hex(4, 6)}-${hex(6, 8)}-${hex(8, 10)}-${hex(10, 16)}';
   }
 
   /// Returns an empty string when the trip can close, otherwise the reason.

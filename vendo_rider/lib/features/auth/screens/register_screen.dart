@@ -111,8 +111,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _confirmPassCtrl = TextEditingController();
   bool _obscurePass = true;
   bool _obscureConfirm = true;
-  String? _validIdFileName;
-  String? _validIdPath;
 
   // ── Step 2: Vehicle Details ────────────────────────────────────
   String? _vehicleType;
@@ -397,7 +395,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
           'plate_number': _plateNumberCtrl.text.trim(),
         },
         {
-          'valid_id': _validIdPath!,
           'drivers_license': _driversLicensePath!,
           'or_cr': _orCrPath!,
         },
@@ -680,7 +677,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
           _confirmPassCtrl.text.isEmpty ||
               _passwordCtrl.text != _confirmPassCtrl.text,
         ),
-        ('validId', _validIdPath == null),
       ]);
     } else if (step == 1) {
       checks.addAll([
@@ -956,21 +952,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
         _gap,
 
-        _col(
-          'validId',
-          'Valid ID',
-          _UploadField(
-            fileName: _validIdFileName,
-            hint: 'Upload Valid ID here',
-            onTap: () => _showImageSourceSheet((file) {
-              setState(() {
-                _validIdFileName = file.name;
-                _validIdPath = file.path;
-              });
-            }),
-          ),
-          required: true,
-        ),
         const SizedBox(height: 28),
 
         const _SectionHeader(
@@ -1638,11 +1619,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
               item1: _RC(label: 'Email', value: v(_emailCtrl.text)),
               item2: _RC(label: 'Age', value: v(_ageCtrl.text)),
               item3: _RC(label: 'Barangay', value: v(_barangayCtrl.text)),
-              item4: _RC(
-                label: 'Valid ID',
-                value: _validIdFileName ?? '—',
-                isFile: _validIdFileName != null,
-              ),
             ),
             _ReviewRow4(
               item1: _RC(label: 'Vehicle Type', value: _vehicleType ?? '—'),
@@ -2559,13 +2535,14 @@ class _ReviewCard extends StatelessWidget {
 }
 
 class _ReviewRow4 extends StatelessWidget {
-  final _RC item1, item2, item3, item4;
+  final _RC item1, item2, item3;
+  final _RC? item4;
 
   const _ReviewRow4({
     required this.item1,
     required this.item2,
     required this.item3,
-    required this.item4,
+    this.item4,
   });
 
   @override
@@ -2578,8 +2555,10 @@ class _ReviewRow4 extends StatelessWidget {
         Expanded(child: _cell(item2)),
         const SizedBox(width: 8),
         Expanded(child: _cell(item3)),
-        const SizedBox(width: 8),
-        Expanded(child: _cell(item4)),
+        if (item4 != null) ...[
+          const SizedBox(width: 8),
+          Expanded(child: _cell(item4!)),
+        ],
       ],
     );
   }

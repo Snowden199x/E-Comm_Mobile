@@ -39,6 +39,8 @@ dependencies:
   http: ^1.6.0
   flutter_secure_storage: ^10.3.4
   image_picker: ^1.1.2
+  # Camera reader for the load scan before dispatch.
+  mobile_scanner: ^7.4.2
 
 dev_dependencies:
   flutter_test:

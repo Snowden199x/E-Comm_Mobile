@@ -88,8 +88,8 @@ class _DriverDispatchScreenState extends State<DriverDispatchScreen> {
             const SizedBox(height: 10),
             Text(
               blocked
-                  ? 'Ask the hub staff to scan the missing parcels. The trip '
-                        'cannot leave while a parcel is unscanned.'
+                  ? 'Go back to Scan parcels and scan the missing parcels. '
+                        'The trip cannot leave while a parcel is unscanned.'
                   : 'Nothing has changed on this trip. Check the connection and '
                         'try again.',
               style: const TextStyle(
@@ -340,12 +340,11 @@ class _DriverDispatchScreenState extends State<DriverDispatchScreen> {
                   ),
                 const SizedBox(height: 14),
                 const NoticeCard(
-                  icon: Icons.info_outline_rounded,
-                  title: 'Station scans are the proof',
-                  message:
-                      'Departing does not prove physical custody. The station '
-                      'scans at both ends are the record, and the app never '
-                      'invents them.',
+                  icon: Icons.info_outline_rounded,                    title: 'The load scans are the proof',
+                    message:
+                        'Departing does not prove physical custody on its own. '
+                        'The scans on each parcel at the origin are the record, '
+                        'and the destination hub scans again on arrival.',
                 ),
               ],
             ),

@@ -3,8 +3,8 @@ import 'package:vendo_driver/core/data/driver_store.dart';
 import 'package:vendo_driver/core/theme/vendo_theme.dart';
 import 'package:vendo_driver/core/utils/date_labels.dart';
 import 'package:vendo_driver/features/shared/widgets/driver_ui.dart';
-import 'package:vendo_driver/features/trips/screens/driver_dispatch_screen.dart';
 import 'package:vendo_driver/features/trips/screens/driver_manifest_screen.dart';
+import 'package:vendo_driver/features/trips/screens/driver_scan_screen.dart';
 import 'package:vendo_driver/features/trips/screens/driver_trip_status_screen.dart';
 
 class DriverTripDetailsScreen extends StatelessWidget {
@@ -157,12 +157,25 @@ class DriverTripDetailsScreen extends StatelessWidget {
                       ),
                     ],
                     const SizedBox(height: 16),
+                    if (trip.status == TripStatus.scheduled) ...[
+                      const NoticeCard(
+                        icon: Icons.qr_code_scanner_rounded,
+                        tone: NoticeTone.warning,
+                        title: 'Dispatch opens after the last scan',
+                        message:
+                            'Scan every parcel onto the truck first. Confirm '
+                            'dispatch stays locked until the last parcel is '
+                            'scanned, so a short load is never sent out.',
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                     const NoticeCard(
                       icon: Icons.shield_outlined,
-                      title: 'Receipt is proven by station scans',
+                      title: 'Your scans are the record',
                       message:
-                          'This screen shows the plan and the scans on record. '
-                          'It never replaces a station scan.',
+                          'Each scan is saved to Vendo against this trip. The '
+                          'destination hub still scans every parcel on arrival '
+                          'before the trip can close.',
                     ),
                   ],
                 ),
@@ -174,7 +187,7 @@ class DriverTripDetailsScreen extends StatelessWidget {
               onPressed: () {
                 final route = switch (trip.status) {
                   TripStatus.scheduled => MaterialPageRoute<void>(
-                    builder: (_) => DriverDispatchScreen(tripCode: trip.code),
+                    builder: (_) => DriverScanScreen(tripCode: trip.code),
                   ),
                   TripStatus.inTransit => MaterialPageRoute<void>(
                     builder: (_) => DriverTripStatusScreen(tripCode: trip.code),
@@ -188,7 +201,8 @@ class DriverTripDetailsScreen extends StatelessWidget {
                 }
               },
               child: Text(switch (trip.status) {
-                TripStatus.scheduled => 'Confirm dispatch',
+                TripStatus.scheduled =>
+                  'Scan parcels · ${trip.originScanned} of ${trip.parcelCount}',
                 TripStatus.inTransit => 'Open trip status',
                 TripStatus.completed => 'Back to trips',
               }),

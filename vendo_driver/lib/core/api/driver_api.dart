@@ -289,6 +289,39 @@ class DriverApi {
     return Map<String, dynamic>.from(data['trip'] as Map);
   }
 
+  /// Records the driver's load scan for one parcel or for a whole container
+  /// label. The answer carries the trip as the server now sees it, so the
+  /// screens follow the real origin scan counts instead of guessing.
+  Future<Map<String, dynamic>> scanParcels(
+    int tripId,
+    List<String> trackingNumbers,
+    String scanKey,
+  ) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/trips/$tripId/scan'),
+          headers: await _authHeaders(),
+          body: jsonEncode({
+            'tracking_numbers': trackingNumbers
+                .map((tracking) => tracking.trim())
+                .where((tracking) => tracking.isNotEmpty)
+                .toList(),
+            'scan_key': scanKey,
+          }),
+        )
+        .timeout(const Duration(seconds: 25));
+    final data = await _authorizedBody(
+      response,
+      fallbackMessage: 'Could not record this scan.',
+    );
+    return {
+      'trip': Map<String, dynamic>.from(data['trip'] as Map),
+      'duplicate': data['duplicate'] == true,
+      'message': data['message']?.toString() ?? '',
+      'scanned': (data['recorded'] as List? ?? const []).length,
+    };
+  }
+
   /// Completes the trip. The server refuses with a 409 and a readable reason
   /// when a parcel has not been received at the destination yet.
   Future<Map<String, dynamic>> arriveTrip(int tripId) async {
