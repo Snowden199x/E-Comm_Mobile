@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:vendo_rider/core/offline/offline_store.dart';
 
 class RiderApiException implements Exception {
   const RiderApiException(this.message, [this.statusCode]);
@@ -12,6 +14,21 @@ class RiderApiException implements Exception {
 
   @override
   String toString() => message;
+}
+
+/// What happened when the offline outbox was flushed back to Vendo.
+class OfflineSyncReport {
+  const OfflineSyncReport({
+    required this.synced,
+    required this.failed,
+    required this.messages,
+  });
+
+  final int synced;
+  final int failed;
+  final List<String> messages;
+
+  bool get hasFailures => failed > 0;
 }
 
 class RiderApi {
@@ -35,6 +52,16 @@ class RiderApi {
       baseUrl.replaceFirst(RegExp(r'/rider/?$'), '/transport-drivers');
 
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
+
+  /// Shared HTTP client. Tests swap it with [useClient].
+  http.Client _client = http.Client();
+
+  /// Test hook: supplies the bearer token without the platform keychain.
+  @visibleForTesting
+  String? debugToken;
+
+  @visibleForTesting
+  void useClient(http.Client client) => _client = client;
 
   Future<bool> hasToken() async =>
       (await _storage.read(key: 'rider_token')) != null;
@@ -306,7 +333,155 @@ class RiderApi {
     final response = await http
         .get(Uri.parse('$baseUrl/assignments'), headers: await _authHeaders())
         .timeout(const Duration(seconds: 20));
-    return _body(response);
+    final data = _body(response);
+    // Keep the newest work on the device so the next launch works offline.
+    await OfflineStore.instance.cacheAssignments(data);
+    return data;
+  }
+
+  /// The last assigned-parcel list this device saw, when the API cannot be
+  /// reached.
+  Future<CachedPayload?> cachedWork() =>
+      OfflineStore.instance.cachedAssignments();
+
+  /// The last earnings payload saved on this device.
+  Future<CachedPayload?> cachedEarnings({bool transportDriver = false}) =>
+      OfflineStore.instance.readJson(
+        transportDriver
+            ? OfflineStore.transportDriverEarningsKey
+            : OfflineStore.earningsKey,
+      );
+
+  /// The last notifications list saved on this device.
+  Future<CachedPayload?> cachedNotifications() =>
+      OfflineStore.instance.readJson(OfflineStore.notificationsKey);
+
+  Future<int> pendingOfflineActions() => OfflineStore.instance.pendingCount();
+
+  Future<void> queueScanOffline(
+    String trackingNumber,
+    String scanType,
+    String scanKey,
+  ) => OfflineStore.instance.enqueue(
+    kind: 'scan',
+    fields: {
+      'tracking_number': trackingNumber,
+      'scan_type': scanType,
+      'scan_key': scanKey,
+    },
+  );
+
+  Future<void> queueFacilityScanOffline(
+    String trackingNumber,
+    int facilityId,
+    String scanKey,
+  ) => OfflineStore.instance.enqueue(
+    kind: 'facility_scan',
+    fields: {
+      'tracking_number': trackingNumber,
+      'facility_id': facilityId,
+      'scan_key': scanKey,
+    },
+  );
+
+  Future<void> queueDeliveryProofOffline({
+    required String trackingNumber,
+    required String scanKey,
+    required String recipientName,
+    required String photoPath,
+    double? cashCollected,
+  }) => OfflineStore.instance.enqueue(
+    kind: 'delivery_proof',
+    fields: {
+      'tracking_number': trackingNumber,
+      'scan_key': scanKey,
+      'recipient_name': recipientName,
+      'photo_path': photoPath,
+      if (cashCollected != null)
+        'cash_collected': cashCollected.toStringAsFixed(2),
+    },
+  );
+
+  /// Uploads everything the Rider saved while offline.
+  ///
+  /// Stops early when the connection is still down, keeps the queue for the
+  /// next attempt, and drops entries the server has already recorded or can no
+  /// longer accept so one stale parcel never blocks the rest.
+  Future<OfflineSyncReport> syncOfflineActions() async {
+    final actions = await OfflineStore.instance.pendingActions();
+    var synced = 0;
+    var failed = 0;
+    final messages = <String>[];
+
+    for (final action in actions) {
+      final id = '${action['id'] ?? ''}';
+      final tracking = '${action['tracking_number'] ?? ''}';
+      final kind = '${action['kind'] ?? ''}';
+      final scanKey = '${action['scan_key'] ?? ''}';
+
+      try {
+        if (tracking.isEmpty || scanKey.isEmpty) {
+          await OfflineStore.instance.removeAction(id);
+          continue;
+        }
+        if (kind == 'scan') {
+          await scan(tracking, '${action['scan_type'] ?? ''}', scanKey);
+        } else if (kind == 'facility_scan') {
+          final facilityId = int.tryParse('${action['facility_id']}') ?? 0;
+          if (facilityId == 0) {
+            await OfflineStore.instance.removeAction(id);
+            continue;
+          }
+          await scanFacility(tracking, facilityId, scanKey);
+        } else if (kind == 'delivery_proof') {
+          final photoPath = '${action['photo_path'] ?? ''}';
+          if (photoPath.isEmpty || !File(photoPath).existsSync()) {
+            await OfflineStore.instance.removeAction(id);
+            failed++;
+            messages.add(
+              '$tracking: the saved delivery photo is no longer on this device.',
+            );
+            continue;
+          }
+          await submitDeliveryProof(
+            trackingNumber: tracking,
+            scanKey: scanKey,
+            recipientName: '${action['recipient_name'] ?? ''}',
+            photoPath: photoPath,
+            cashCollected: double.tryParse(
+              '${action['cash_collected'] ?? ''}',
+            ),
+          );
+        } else {
+          await OfflineStore.instance.removeAction(id);
+          continue;
+        }
+        await OfflineStore.instance.removeAction(id);
+        synced++;
+      } on RiderApiException catch (error) {
+        final code = error.statusCode ?? 0;
+        if (code == 401 || code == 403) {
+          messages.add(error.message);
+          break;
+        }
+        if (code >= 400 && code < 500) {
+          // The server rejected this one (already recorded, or the parcel moved
+          // on). Retrying forever would block the queue.
+          await OfflineStore.instance.removeAction(id);
+          failed++;
+          messages.add('$tracking: ${error.message}');
+          continue;
+        }
+        failed++;
+        messages.add('$tracking: ${error.message}');
+      } catch (_) {
+        // Still offline: keep this and everything after it queued.
+        failed++;
+        break;
+      }
+    }
+
+    return OfflineSyncReport(synced: synced, failed: failed, messages: messages);
   }
 
   Future<Map<String, dynamic>> riderNotifications({int? since}) async {
@@ -316,7 +491,15 @@ class RiderApi {
     final response = await http
         .get(uri, headers: await _authHeaders())
         .timeout(const Duration(seconds: 20));
-    return _body(response);
+    final data = _body(response);
+    // Only the full list is cached; a `since` page would cache a partial list.
+    if (since == null || since <= 0) {
+      await OfflineStore.instance.cacheJson(
+        OfflineStore.notificationsKey,
+        data,
+      );
+    }
+    return data;
   }
 
   Future<void> markRiderNotificationRead(int notificationId) async {
@@ -351,7 +534,14 @@ class RiderApi {
     final response = await http
         .get(Uri.parse('$base/earnings'), headers: headers)
         .timeout(const Duration(seconds: 20));
-    return _body(response);
+    final data = _body(response);
+    await OfflineStore.instance.cacheJson(
+      transportDriver
+          ? OfflineStore.transportDriverEarningsKey
+          : OfflineStore.earningsKey,
+      data,
+    );
+    return data;
   }
 
   Future<Map<String, dynamic>> scan(
@@ -359,7 +549,8 @@ class RiderApi {
     String scanType,
     String scanKey,
   ) async {
-    final response = await http
+    // Uses [_client] so the offline outbox can be tested without a server.
+    final response = await _client
         .post(
           Uri.parse('$baseUrl/scans'),
           headers: await _authHeaders(),
@@ -469,7 +660,7 @@ class RiderApi {
   }
 
   Future<Map<String, String>> _authHeaders() async {
-    final token = await _storage.read(key: 'rider_token');
+    final token = debugToken ?? await _storage.read(key: 'rider_token');
     if (token == null) {
       throw const RiderApiException('Please sign in again.', 401);
     }

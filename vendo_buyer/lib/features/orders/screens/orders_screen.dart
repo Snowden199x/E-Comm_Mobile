@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:vendo_buyer/core/api/api_models.dart';
 import 'package:vendo_buyer/core/api/buyer_api.dart';
+import 'package:vendo_buyer/features/shared/offline_banner.dart';
 
 /// The signed-in Buyer's orders, from `GET /api/v1/buyer/orders`.
 class OrdersScreen extends StatefulWidget {
@@ -23,6 +24,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
   String? _error;
   String? _status;
 
+  /// Set when the list came from the device instead of Vendo.
+  DateTime? _offlineSince;
+
   @override
   void initState() {
     super.initState();
@@ -39,6 +43,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       if (!mounted) return;
       setState(() {
         _orders = orders;
+        _offlineSince = null;
         _loading = false;
       });
     } on BuyerApiException catch (e) {
@@ -48,9 +53,20 @@ class _OrdersScreenState extends State<OrdersScreen> {
         _loading = false;
       });
     } catch (_) {
+      // Offline: show the orders saved on this device instead of an error.
+      final cached = await BuyerApi.instance.cachedOrders(status: _status);
       if (!mounted) return;
+      if (cached == null) {
+        setState(() {
+          _error = 'Could not reach Vendo and no saved orders are on this device yet.';
+          _loading = false;
+        });
+        return;
+      }
       setState(() {
-        _error = 'Could not reach Vendo. Check your connection and retry.';
+        _orders = cached.items;
+        _offlineSince = cached.cachedAt;
+        _error = null;
         _loading = false;
       });
     }
@@ -89,6 +105,14 @@ class _OrdersScreenState extends State<OrdersScreen> {
               ),
             ),
           ),
+          if (_offlineSince != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: OfflineBanner(
+                savedAt: _offlineSince,
+                onRetry: _loading ? null : _load,
+              ),
+            ),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -305,6 +329,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   bool _working = false;
   String? _error;
 
+  /// Set when the tracking page came from the device instead of Vendo.
+  DateTime? _offlineSince;
+
   @override
   void initState() {
     super.initState();
@@ -321,6 +348,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       if (!mounted) return;
       setState(() {
         _detail = detail;
+        _offlineSince = null;
         _loading = false;
       });
     } on BuyerApiException catch (e) {
@@ -330,9 +358,20 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         _loading = false;
       });
     } catch (_) {
+      // Offline: keep showing the last tracking state saved on this device.
+      final cached = await BuyerApi.instance.cachedOrder(widget.orderId);
       if (!mounted) return;
+      if (cached == null) {
+        setState(() {
+          _error = 'Could not reach Vendo and this order is not saved on this device yet.';
+          _loading = false;
+        });
+        return;
+      }
       setState(() {
-        _error = 'Could not reach Vendo. Check your connection and retry.';
+        _detail = cached.detail;
+        _offlineSince = cached.cachedAt;
+        _error = null;
         _loading = false;
       });
     }
@@ -487,6 +526,10 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
+        if (_offlineSince != null) ...[
+          OfflineBanner(savedAt: _offlineSince, onRetry: _load),
+          const SizedBox(height: 10),
+        ],
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(

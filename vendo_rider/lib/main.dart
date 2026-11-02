@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:vendo_rider/core/offline/offline_tiles.dart';
 import 'package:vendo_rider/features/splash/splash_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Prepare the on-device map tile cache; the app runs without it.
+  await OfflineTileProviders.initialise();
   runApp(const VendoRiderApp());
 }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:vendo_buyer/core/api/api_models.dart';
 import 'package:vendo_buyer/core/api/buyer_api.dart';
+import 'package:vendo_buyer/features/shared/offline_banner.dart';
 
 /// Buyer notifications from `GET /api/v1/buyer/notifications`, scoped to the signed-in Buyer.
 class NotificationsScreen extends StatefulWidget {
@@ -22,6 +23,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   bool _loading = true;
   String? _error;
 
+  /// Set when the list came from the device instead of Vendo.
+  DateTime? _offlineSince;
+
+  /// True when "mark all read" is queued on the device but not uploaded yet.
+  bool _pendingReadAll = false;
+
   @override
   void initState() {
     super.initState();
@@ -38,6 +45,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       if (!mounted) return;
       setState(() {
         _items = items;
+        _offlineSince = null;
         _loading = false;
       });
     } on BuyerApiException catch (e) {
@@ -47,9 +55,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         _loading = false;
       });
     } catch (_) {
+      // Offline: show the notifications saved on this device.
+      final cached = await BuyerApi.instance.cachedNotifications();
       if (!mounted) return;
+      if (cached == null) {
+        setState(() {
+          _error = 'Could not reach Vendo and no saved notifications are on this device yet.';
+          _loading = false;
+        });
+        return;
+      }
       setState(() {
-        _error = 'Could not reach Vendo. Check your connection and retry.';
+        _items = cached.items;
+        _offlineSince = cached.cachedAt;
+        _error = null;
         _loading = false;
       });
     }
@@ -59,14 +78,28 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     try {
       await BuyerApi.instance.markAllNotificationsRead();
       if (mounted) _load();
+    } on BuyerApiException catch (e) {
+      if (mounted) _toast(e.message);
     } catch (_) {
-      // Ignore; the list keeps its current read state.
+      // No connection: keep it on the device and show the list as read here.
+      await BuyerApi.instance.queueMarkAllNotificationsReadOffline();
+      if (!mounted) return;
+      setState(() => _pendingReadAll = true);
+      _toast('Saved on this device — it uploads when you are back online.');
     }
+  }
+
+  void _toast(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
-    final unread = _items.where((item) => !item.read).length;
+    final unread = _pendingReadAll
+        ? 0
+        : _items.where((item) => !item.read).length;
     return Scaffold(
       backgroundColor: _bg,
       appBar: AppBar(
@@ -87,6 +120,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               ),
             ),
         ],
+        bottom: _offlineSince == null
+            ? null
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(68),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                  child: OfflineBanner(savedAt: _offlineSince, onRetry: _load),
+                ),
+              ),
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -120,10 +162,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         separatorBuilder: (_, __) => const SizedBox(height: 8),
                         itemBuilder: (_, index) {
                           final item = _items[index];
+                          final read = item.read || _pendingReadAll;
                           return Container(
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: item.read ? Colors.white : const Color(0xFFF6EFFA),
+                              color: read ? Colors.white : const Color(0xFFF6EFFA),
                               borderRadius: BorderRadius.circular(10),
                               border: Border.all(color: _border),
                             ),
@@ -142,7 +185,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                         ),
                                       ),
                                     ),
-                                    if (!item.read)
+                                    if (!read)
                                       Container(
                                         width: 8,
                                         height: 8,

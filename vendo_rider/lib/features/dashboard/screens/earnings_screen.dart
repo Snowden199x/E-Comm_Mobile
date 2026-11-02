@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
+import 'package:vendo_rider/features/dashboard/widgets/offline_banner.dart';
 
 class EarningsScreen extends StatefulWidget {
   final bool transportDriver;
@@ -19,6 +20,9 @@ class _EarningsScreenState extends State<EarningsScreen> {
   String? _error;
   String? _cashError;
   bool _loading = true;
+
+  /// Set when the amounts shown came from the device instead of Vendo.
+  DateTime? _offlineSince;
 
   static const _purple = Color(0xFF412143);
   static const _background = Color(0xFFFAF7F5);
@@ -56,13 +60,33 @@ class _EarningsScreenState extends State<EarningsScreen> {
         setState(() {
           _summary = summary;
           _earnings = rows;
+          _offlineSince = null;
         });
       }
     } on RiderApiException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } catch (_) {
-      if (mounted) {
+      // Offline: show the last amounts saved on this device.
+      final cached = await RiderApi.instance.cachedEarnings(
+        transportDriver: widget.transportDriver,
+      );
+      if (!mounted) return;
+      if (cached == null) {
         setState(() => _error = 'Could not load earnings. Pull to refresh.');
+      } else {
+        setState(() {
+          _summary = cached.payload['summary'] is Map
+              ? Map<String, dynamic>.from(cached.payload['summary'] as Map)
+              : <String, dynamic>{};
+          _earnings = cached.payload['earnings'] is List
+              ? (cached.payload['earnings'] as List)
+                    .whereType<Map>()
+                    .map((row) => Map<String, dynamic>.from(row))
+                    .toList()
+              : <Map<String, dynamic>>[];
+          _offlineSince = cached.cachedAt;
+          _error = null;
+        });
       }
     }
 
@@ -155,6 +179,15 @@ class _EarningsScreenState extends State<EarningsScreen> {
           foregroundColor: Colors.white,
           elevation: 0,
           title: const Text('My Earnings'),
+          bottom: _offlineSince == null
+              ? null
+              : PreferredSize(
+                  preferredSize: const Size.fromHeight(68),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                    child: OfflineBanner(savedAt: _offlineSince, onRetry: _load),
+                  ),
+                ),
         ),
         body: _loading
             ? const Center(child: CircularProgressIndicator(color: _purple))
@@ -162,7 +195,12 @@ class _EarningsScreenState extends State<EarningsScreen> {
                 onRefresh: _load,
                 child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
-                  padding: const EdgeInsets.all(20),
+                  padding: EdgeInsets.fromLTRB(
+                    20,
+                    20,
+                    20,
+                    20 + MediaQuery.of(context).padding.bottom,
+                  ),
                   children: [
                     if (_error != null)
                       _card(Column(children: [

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:vendo_driver/core/api/driver_api.dart';
 import 'package:vendo_driver/core/data/driver_store.dart';
 import 'package:vendo_driver/core/theme/vendo_theme.dart';
 import 'package:vendo_driver/core/utils/date_labels.dart';
@@ -17,8 +18,7 @@ class DriverProfileScreen extends StatelessWidget {
           style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
         ),
         content: const Text(
-          'You will need your approved account to sign in again. Demo data on '
-          'this device is not affected.',
+          'You will need your approved account to sign in again.',
           style: TextStyle(color: VColors.muted, fontSize: 13, height: 1.5),
         ),
         actions: [
@@ -34,8 +34,13 @@ class DriverProfileScreen extends StatelessWidget {
       ),
     );
     if (confirmed != true || !context.mounted) return;
+    await DriverApi.instance.logout();
+    if (!context.mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(builder: (_) => const DriverLoginScreen()),
+      MaterialPageRoute<void>(
+        // No glide-in after signing out: the header is already settled.
+        builder: (_) => const DriverLoginScreen(animateEntrance: false),
+      ),
       (route) => false,
     );
   }
@@ -129,20 +134,24 @@ class DriverProfileScreen extends StatelessWidget {
                       label: 'Province Hub',
                       value: profile.hub,
                     ),
-                    const SizedBox(height: 4),
-                    Padding(
-                      padding: const EdgeInsets.only(left: 48),
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          profile.hubArea,
-                          style: const TextStyle(
-                            color: VColors.muted,
-                            fontSize: 11,
-                          ),
-                        ),
+                    _AreaLine(area: profile.hubArea),
+                    if (profile.stationHub != null) ...[
+                      const SizedBox(height: 14),
+                      InfoRow(
+                        icon: Icons.storefront_outlined,
+                        label: 'Station Hub',
+                        value: profile.stationHub!,
                       ),
-                    ),
+                      _AreaLine(area: profile.stationHubArea ?? ''),
+                    ],
+                    if (profile.applyLabel != null) ...[
+                      const SizedBox(height: 14),
+                      InfoRow(
+                        icon: Icons.assignment_ind_outlined,
+                        label: 'Applied to',
+                        value: profile.applyLabel!,
+                      ),
+                    ],
                     const SizedBox(height: 14),
                     InfoRow(
                       icon: Icons.business_outlined,
@@ -215,15 +224,43 @@ class DriverProfileScreen extends StatelessWidget {
               const SizedBox(height: 14),
               const Center(
                 child: Text(
-                  'Vendo Driver · Build 1.0.0 · Demo build, no server connection',
+                  'Vendo Driver · Build 1.0.0\nYour account, hub decision and sign-in come from the Vendo web. '
+                  'Trips and earnings on this build are sample data.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: VColors.muted, fontSize: 10.5),
+                  style: TextStyle(
+                    color: VColors.muted,
+                    fontSize: 10.5,
+                    height: 1.5,
+                  ),
                 ),
               ),
             ],
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The municipality and province under a hub name, or nothing when the web
+/// did not send an address for that hub.
+class _AreaLine extends StatelessWidget {
+  const _AreaLine({required this.area});
+
+  final String area;
+
+  @override
+  Widget build(BuildContext context) {
+    if (area.trim().isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, left: 48),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Text(
+          area,
+          style: const TextStyle(color: VColors.muted, fontSize: 11),
+        ),
+      ),
     );
   }
 }

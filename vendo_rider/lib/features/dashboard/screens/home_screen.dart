@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/dashboard/screens/delivery_detail_screen.dart';
+import 'package:vendo_rider/features/dashboard/widgets/offline_banner.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vendo brand palette (from the logo)
@@ -37,7 +38,15 @@ class HomeScreen extends StatefulWidget {
   final VoidCallback? onOpenParcels;
   final VoidCallback? onOpenEarnings;
 
-  const HomeScreen({super.key, this.onOpenParcels, this.onOpenEarnings});
+  /// Opens the notifications tab.
+  final VoidCallback? onOpenNotifications;
+
+  const HomeScreen({
+    super.key,
+    this.onOpenParcels,
+    this.onOpenEarnings,
+    this.onOpenNotifications,
+  });
 
   @override
   State<HomeScreen> createState() => HomeScreenState();
@@ -51,6 +60,12 @@ class HomeScreenState extends State<HomeScreen>
   Map<String, dynamic> _assignmentSummary = {};
   bool _loadingAssignments = true;
   String? _assignmentError;
+
+  // Offline mode: the home totals come from the last saved work when the API
+  // cannot be reached, and queued scans upload as soon as it can.
+  DateTime? _offlineSince;
+  int _pendingCount = 0;
+  bool _syncingOffline = false;
 
   // Drives the header animation (loops forever, 0.0 → 1.0)
   late final AnimationController _bgController;
@@ -91,19 +106,70 @@ class HomeScreenState extends State<HomeScreen>
     if (mounted) setState(() { _loadingAssignments = true; _assignmentError = null; });
     try {
       final data = await RiderApi.instance.assignmentDashboard();
-      final items = (data['assignments'] as List<dynamic>)
-          .map((item) => Map<String, dynamic>.from(item as Map))
-          .toList();
-      final summary = data['summary'] is Map
-          ? Map<String, dynamic>.from(data['summary'] as Map)
-          : <String, dynamic>{};
-      if (mounted) setState(() { _assignments = items; _assignmentSummary = summary; });
+      _applyWork(data);
+      if (mounted) setState(() => _offlineSince = null);
+      // We just reached Vendo, so send anything saved while offline.
+      await _refreshPendingCount();
+      await _syncOffline();
     } on RiderApiException catch (error) {
       if (mounted) setState(() => _assignmentError = error.message);
     } catch (_) {
-      if (mounted) setState(() => _assignmentError = 'Could not load assigned work. Pull to refresh.');
+      final cached = await RiderApi.instance.cachedWork();
+      if (cached != null) {
+        _applyWork(cached.payload);
+        if (mounted) setState(() => _offlineSince = cached.cachedAt);
+        await _refreshPendingCount();
+      } else if (mounted) {
+        setState(() => _assignmentError = 'Could not load assigned work. Check your connection and retry.');
+      }
     } finally {
       if (mounted) setState(() => _loadingAssignments = false);
+    }
+  }
+
+  void _applyWork(Map<String, dynamic> data) {
+    if (!mounted) return;
+    final items = (data['assignments'] as List<dynamic>? ?? [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+    final summary = data['summary'] is Map
+        ? Map<String, dynamic>.from(data['summary'] as Map)
+        : <String, dynamic>{};
+    setState(() { _assignments = items; _assignmentSummary = summary; });
+  }
+
+  Future<void> _refreshPendingCount() async {
+    final count = await RiderApi.instance.pendingOfflineActions();
+    if (mounted) setState(() => _pendingCount = count);
+  }
+
+  /// Uploads scans and delivery proofs taken without a connection.
+  Future<void> _syncOffline() async {
+    if (_syncingOffline) return;
+    _syncingOffline = true;
+    try {
+      final report = await RiderApi.instance.syncOfflineActions();
+      await _refreshPendingCount();
+      if (!mounted) return;
+      if (report.synced > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${report.synced} offline update${report.synced == 1 ? '' : 's'} uploaded.',
+            ),
+          ),
+        );
+        await _refreshAssignments();
+      } else if (report.hasFailures && report.messages.isNotEmpty) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(report.messages.first)));
+      }
+    } catch (_) {
+      // Still offline; the queue waits for the next refresh.
+    } finally {
+      _syncingOffline = false;
     }
   }
 
@@ -140,10 +206,27 @@ class HomeScreenState extends State<HomeScreen>
             children: [
               _buildHeaderPanel(),
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 24, 20, 28),
+                // The bottom space includes the floating nav bar's height, so
+                // the last card can scroll up clear of the bar.
+                padding: EdgeInsets.fromLTRB(
+                  20,
+                  24,
+                  20,
+                  28 + MediaQuery.of(context).padding.bottom,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    if (_offlineSince != null) ...[
+                      OfflineBanner(
+                        savedAt: _offlineSince,
+                        pending: _pendingCount,
+                        onRetry: _loadingAssignments
+                            ? null
+                            : _refreshAssignments,
+                      ),
+                      const SizedBox(height: 20),
+                    ],
                     _buildAssignParcelButton(),
                     const SizedBox(height: 24),
                     _buildSectionTitle('Parcel Overview'),
@@ -340,24 +423,28 @@ class HomeScreenState extends State<HomeScreen>
           ),
         ),
         const SizedBox(width: 16),
-        Container(
-          width: 56,
-          height: 56,
-          padding: const EdgeInsets.all(2),
-          decoration: const BoxDecoration(
-            color: _C.lin,
-            shape: BoxShape.circle,
-          ),
-          child: Container(
-            decoration: const BoxDecoration(
-              color: _C.raisin,
-              shape: BoxShape.circle,
-            ),
-            // Swap this Icon for an Image / NetworkImage when you have photos
-            child: const Icon(
-              Icons.person_rounded,
-              color: Colors.white,
-              size: 28,
+        Semantics(
+          button: true,
+          label: 'Notifications',
+          child: Material(
+            color: const Color(0x1AFFFFFF),
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: widget.onOpenNotifications,
+              child: Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0x26FFFFFF)),
+                ),
+                child: const Icon(
+                  Icons.notifications_none_rounded,
+                  color: Colors.white,
+                  size: 26,
+                ),
+              ),
             ),
           ),
         ),

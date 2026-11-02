@@ -75,9 +75,7 @@ class DriverTripDetailsScreen extends StatelessWidget {
                               Expanded(
                                 child: _ScheduleBlock(
                                   label: 'Scheduled departure',
-                                  value: dateTimeLabel(
-                                    trip.scheduledDeparture,
-                                  ),
+                                  value: dateTimeLabel(trip.scheduledDeparture),
                                 ),
                               ),
                               Expanded(
@@ -119,7 +117,11 @@ class DriverTripDetailsScreen extends StatelessWidget {
                           InfoRow(
                             icon: Icons.straighten_rounded,
                             label: 'Route distance',
-                            value: '${trip.distanceKm.toStringAsFixed(0)} km',
+                            // The trip API does not carry a route length yet, so
+                            // an unknown distance is said plainly.
+                            value: trip.distanceKm > 0
+                                ? '${trip.distanceKm.toStringAsFixed(0)} km'
+                                : 'Not shared by the hub',
                           ),
                           const SizedBox(height: 14),
                           InfoRow(
@@ -131,9 +133,8 @@ class DriverTripDetailsScreen extends StatelessWidget {
                             trailing: TextButton(
                               onPressed: () => Navigator.of(context).push(
                                 MaterialPageRoute<void>(
-                                  builder: (_) => DriverManifestScreen(
-                                    tripCode: trip.code,
-                                  ),
+                                  builder: (_) =>
+                                      DriverManifestScreen(tripCode: trip.code),
                                 ),
                               ),
                               child: const Text('Open'),
@@ -176,8 +177,7 @@ class DriverTripDetailsScreen extends StatelessWidget {
                     builder: (_) => DriverDispatchScreen(tripCode: trip.code),
                   ),
                   TripStatus.inTransit => MaterialPageRoute<void>(
-                    builder: (_) =>
-                        DriverTripStatusScreen(tripCode: trip.code),
+                    builder: (_) => DriverTripStatusScreen(tripCode: trip.code),
                   ),
                   TripStatus.completed => null,
                 };
@@ -187,13 +187,11 @@ class DriverTripDetailsScreen extends StatelessWidget {
                   Navigator.of(context).push(route);
                 }
               },
-              child: Text(
-                switch (trip.status) {
-                  TripStatus.scheduled => 'Confirm dispatch',
-                  TripStatus.inTransit => 'Open trip status',
-                  TripStatus.completed => 'Back to trips',
-                },
-              ),
+              child: Text(switch (trip.status) {
+                TripStatus.scheduled => 'Confirm dispatch',
+                TripStatus.inTransit => 'Open trip status',
+                TripStatus.completed => 'Back to trips',
+              }),
             ),
           ),
         );
@@ -220,10 +218,7 @@ class _ScheduleBlock extends StatelessWidget {
           ? CrossAxisAlignment.end
           : CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: const TextStyle(color: VColors.muted, fontSize: 11),
-        ),
+        Text(label, style: const TextStyle(color: VColors.muted, fontSize: 11)),
         const SizedBox(height: 3),
         Text(
           value,

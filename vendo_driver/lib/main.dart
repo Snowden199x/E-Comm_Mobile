@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_driver/core/theme/vendo_theme.dart';
-import 'package:vendo_driver/features/auth/screens/driver_login_screen.dart';
+import 'package:vendo_driver/features/auth/screens/driver_start_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,7 +26,7 @@ class VendoDriverApp extends StatelessWidget {
       title: 'Vendo Driver',
       debugShowCheckedModeBanner: false,
       theme: VendoTheme.light(),
-      home: const DriverLoginScreen(),
+      home: const DriverStartScreen(),
     );
   }
 }

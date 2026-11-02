@@ -19,6 +19,14 @@ class DriverShell extends StatefulWidget {
 class _DriverShellState extends State<DriverShell> {
   int _tab = 0;
 
+  @override
+  void initState() {
+    super.initState();
+    // The profile is already loaded by the start screen; the trips come next so
+    // the first Home render is not the sample board.
+    DriverStore.instance.refreshTrips();
+  }
+
   void _selectTab(int index) {
     if (index == _tab) return;
     setState(() => _tab = index);
