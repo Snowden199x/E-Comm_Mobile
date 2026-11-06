@@ -322,18 +322,24 @@ class _EarningsScreenState extends State<EarningsScreen> {
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(row['order_number']?.toString() ?? 'COD collection', style: const TextStyle(fontWeight: FontWeight.w700, color: _purple)),
               const SizedBox(height: 4),
-              Row(children: [
-                Text(_date(row['collected_at']), style: const TextStyle(fontSize: 12, color: _muted)),
-                const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: status.background,
-                    borderRadius: BorderRadius.circular(20),
+              // Wrap so a long status label moves to its own line instead of
+              // being clipped at the right edge on narrow cards.
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(_date(row['collected_at']), style: const TextStyle(fontSize: 12, color: _muted)),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: status.background,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(status.label, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: status.color)),
                   ),
-                  child: Text(status.label, style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: status.color)),
-                ),
-              ]),
+                ],
+              ),
             ])),
             const SizedBox(width: 8),
             Text(_money(row['amount']), style: const TextStyle(fontWeight: FontWeight.w800, color: _purple)),

@@ -166,6 +166,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         checkoutRevision: preview.revision,
       );
       if (!mounted) return;
+      // The ordered lines left the cart; refresh the shared count so badges
+      // (like the home header) drop the items that were just paid for.
+      BuyerApi.instance.cart().ignore();
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(builder: (_) => const OrdersScreen()),

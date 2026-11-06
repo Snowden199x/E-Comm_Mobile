@@ -18,7 +18,7 @@ class VendoRiderApp extends StatelessWidget {
       title: 'Vendo Rider',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        fontFamily: 'Roboto',
+        fontFamily: 'Poppins',
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF3B1F52)),
       ),
       home: const SplashScreen(),

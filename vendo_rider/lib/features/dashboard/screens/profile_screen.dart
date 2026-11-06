@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/auth/screens/login_screen.dart';
+import 'package:vendo_rider/features/dashboard/screens/change_password_screen.dart';
+import 'package:vendo_rider/features/dashboard/screens/personal_information_screen.dart';
+import 'package:vendo_rider/features/dashboard/screens/vehicle_details_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the Home, Deliveries and Earnings screens
@@ -39,11 +42,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String _riderName = '';
   String _centerName = '';
   String _vehicleType = '';
+  String? _avatarUrl;
   bool _loggingOut = false;
 
   @override
   void initState() {
     super.initState();
+    _loadHeader();
+    RiderApi.instance.profileRevision.addListener(_loadHeader);
+  }
+
+  @override
+  void dispose() {
+    RiderApi.instance.profileRevision.removeListener(_loadHeader);
+    super.dispose();
+  }
+
+  // Name, hub, vehicle, and photo. Re-read after a profile edit so the header
+  // never keeps showing details the rider has already changed.
+  void _loadHeader() {
     RiderApi.instance.riderName().then((name) {
       if (mounted) setState(() => _riderName = name ?? 'Rider');
     });
@@ -53,6 +70,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
     RiderApi.instance.riderVehicleType().then((type) {
       if (mounted) setState(() => _vehicleType = type ?? '');
     });
+    _loadAvatar();
+  }
+
+  // The photo is optional: with no photo, or a failed request, the header
+  // keeps the neutral rider icon.
+  Future<void> _loadAvatar() async {
+    try {
+      final rider = await RiderApi.instance.riderProfile();
+      final url = rider['profile_picture']?.toString().trim() ?? '';
+      if (mounted) setState(() => _avatarUrl = url.isEmpty ? null : url);
+    } catch (_) {
+      // The header must never break because the photo is unavailable.
+    }
   }
 
   // Ask first, so the rider can't log out by accident
@@ -136,20 +166,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const _ProfileSection(
+                    _ProfileSection(
                       title: 'Account',
                       items: [
                         _MenuItem(
                           icon: Icons.person_outline_rounded,
                           label: 'Personal Information',
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const PersonalInformationScreen(),
+                            ),
+                          ),
                         ),
                         _MenuItem(
                           icon: Icons.two_wheeler_outlined,
                           label: 'Vehicle Details',
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const VehicleDetailsScreen(),
+                            ),
+                          ),
                         ),
                         _MenuItem(
                           icon: Icons.lock_outline_rounded,
                           label: 'Change Password',
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => const ChangePasswordScreen(),
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -229,16 +274,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   shape: BoxShape.circle,
                 ),
                 child: Container(
+                  clipBehavior: Clip.antiAlias,
                   decoration: const BoxDecoration(
                     color: _C.raisin,
                     shape: BoxShape.circle,
                   ),
-                  // Swap this Icon for an Image / NetworkImage when you have photos
-                  child: const Icon(
-                    Icons.person_rounded,
-                    color: Colors.white,
-                    size: 50,
-                  ),
+                  // The account photo when there is one; otherwise the rider
+                  // icon, which is also the fallback when the image fails.
+                  child: _avatarUrl == null
+                      ? const Icon(
+                          Icons.person_rounded,
+                          color: Colors.white,
+                          size: 50,
+                        )
+                      : Image.network(
+                          _avatarUrl!,
+                          width: 86,
+                          height: 86,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) =>
+                              const Icon(
+                                Icons.person_rounded,
+                                color: Colors.white,
+                                size: 50,
+                              ),
+                        ),
                 ),
               ),
               Positioned(
@@ -463,13 +523,14 @@ class _ProfileSection extends StatelessWidget {
 class _MenuItem extends StatelessWidget {
   final IconData icon;
   final String label;
+  final VoidCallback? onTap;
 
-  const _MenuItem({required this.icon, required this.label});
+  const _MenuItem({required this.icon, required this.label, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: null,
+      onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(

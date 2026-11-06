@@ -642,8 +642,7 @@ class MapScreenState extends State<MapScreen> {
                   children: [
                     // Road map tiles (roads, streets, landmarks)
                     TileLayer(
-                      urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      urlTemplate: kMapTileUrl,
                       userAgentPackageName: 'com.example.vendo_rider',
                       // Tiles viewed once stay on the device for offline routing.
                       tileProvider: OfflineTileProviders.create(),
