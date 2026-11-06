@@ -1,19 +1,17 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/core/offline/offline_tiles.dart';
 import 'package:vendo_rider/features/dashboard/screens/map_screen.dart';
+import 'package:vendo_rider/features/scanner/screens/parcel_scanner_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the rest of the dashboard
@@ -55,6 +53,7 @@ enum RiderStage {
   forDelivery,
   onTheWayToBuyer,
   linehaul,
+  delivered,
   deliveryFailed,
   other,
 }
@@ -75,6 +74,9 @@ RiderStage riderStageOf(Map<String, dynamic> order) {
       return RiderStage.forDelivery;
     case 'out_for_delivery':
       return RiderStage.onTheWayToBuyer;
+    case 'delivered':
+    case 'completed':
+      return RiderStage.delivered;
     case 'delivery_failed':
       return RiderStage.deliveryFailed;
     default:
@@ -100,6 +102,7 @@ String riderStageBadge(RiderStage stage) => switch (stage) {
   RiderStage.forDelivery => 'For delivery',
   RiderStage.onTheWayToBuyer => 'On the way',
   RiderStage.linehaul => 'Linehaul',
+  RiderStage.delivered => 'Delivered',
   RiderStage.deliveryFailed => 'Failed',
   RiderStage.other => 'Assigned',
 };
@@ -134,6 +137,8 @@ String riderStageTitle(Map<String, dynamic> order) {
     case RiderStage.linehaul:
       final target = _text(riderRouteTarget(order)['name']);
       return target.isEmpty ? 'Truck linehaul' : 'Next stop: $target';
+    case RiderStage.delivered:
+      return stopName.isEmpty ? 'Delivered' : 'Delivered to $stopName';
     case RiderStage.deliveryFailed:
       return 'Delivery failed';
     case RiderStage.other:
@@ -172,6 +177,8 @@ String riderStageSubtitle(Map<String, dynamic> order) {
       return planned.isEmpty
           ? 'Waiting for the next route stop from Logistics.'
           : 'Next planned checkpoint: $planned.';
+    case RiderStage.delivered:
+      return 'Handed over to the buyer and scanned as delivered.';
     case RiderStage.deliveryFailed:
       return 'The ${cutoff.isEmpty ? '5:00 PM' : cutoff} delivery window closed. Reschedule to try again.';
     case RiderStage.other:
@@ -201,6 +208,14 @@ String riderScanLabelFor(String type) => switch (type) {
   _ => 'Scan out for delivery',
 };
 
+/// The station hub that receives and scans the parcel on arrival. The scan at
+/// the origin hub belongs to that hub's staff, not to the Rider, so the app
+/// only waits for it.
+String riderOriginHubName(Map<String, dynamic> order) {
+  final hub = _text(order['pickup_center']);
+  return hub.isEmpty ? 'the station hub' : hub;
+}
+
 bool riderSupportsAssignment(Map<String, dynamic> order, String? vehicleType) {
   final assignment = order['assignment'];
   if (vehicleType == 'Truck') return assignment != 'delivery';
@@ -224,6 +239,11 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   late Map<String, dynamic> _order;
   bool _busy = false;
   bool _finished = false;
+
+  // Map tiles can fail (no signal, or the tile server refusing the request).
+  // The card then says so instead of showing the server's error image.
+  bool _mapTilesFailed = false;
+  int _mapReloads = 0;
 
   // Inline proof of delivery: the rider fills this on the parcel page, not in
   // a dialog, so the photo and recipient stay visible while they work.
@@ -299,7 +319,9 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     final scanned = await Navigator.push<String>(
       context,
       MaterialPageRoute(
-        builder: (_) => _ParcelScanner(trackingNumber: tracking),
+        builder: (_) => ParcelScannerScreen(
+          expectedCode: tracking.isEmpty ? null : tracking,
+        ),
       ),
     );
     if (!mounted || scanned == null) return;
@@ -326,6 +348,11 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       await api.clearScanKey(tracking, type);
       if (!mounted) return;
       if (proofRequired) _clearProofForm();
+      // The parcel leaves the assignment list once it is delivered, so keep the
+      // confirmed status locally or the header would keep saying "On the way".
+      if (type == 'delivered') {
+        setState(() => _order = {..._order, 'status': 'delivered'});
+      }
       final message = result['duplicate'] == true
           ? 'Scan already recorded. Parcel status is up to date.'
           : type == 'delivered'
@@ -375,6 +402,108 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   }
 
   // ── Reschedule a failed attempt for tomorrow ────────────────────
+  /// The day the server booked, formatted for the confirmation modal.
+  String _deliveryDateLabel(Map<String, dynamic> result) {
+    final label = _text(result['delivery_scheduled_for_label']);
+    if (label.isNotEmpty) return label;
+    final date = DateTime.tryParse(_text(result['delivery_scheduled_for']));
+    if (date == null) return 'Tomorrow';
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${date.day} ${months[date.month - 1]} ${date.year}';
+  }
+
+  /// States when the parcel will next be delivered, so the rider does not have
+  /// to remember the date from a snackbar that slides away.
+  Future<void> _showRescheduled(
+    Map<String, dynamic> result,
+    String scheduledFor,
+  ) {
+    final cutoff = _text(_map(_order['delivery_window'])['cutoff_label']);
+    final message = _text(result['message']);
+    return showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delivery rescheduled'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Column(
+                children: [
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: const BoxDecoration(
+                      color: _C.briqueSoft,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.event_available_rounded,
+                      color: _C.brique,
+                      size: 26,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Next delivery attempt',
+                    style: TextStyle(
+                      color: _C.muted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    scheduledFor,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: _C.prune,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              message.isEmpty
+                  ? 'Scan this parcel out for delivery that day, before ${cutoff.isEmpty ? '5:00 PM' : cutoff}.'
+                  : message,
+              style: const TextStyle(color: _C.ink, fontSize: 13, height: 1.4),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'The buyer, the seller and the hub have been notified.',
+              style: TextStyle(color: _C.muted, fontSize: 12, height: 1.4),
+            ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _reschedule() async {
     if (_busy) return;
     final confirmed = await showDialog<bool>(
@@ -403,13 +532,10 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         _order['order_id'] as int,
       );
       if (!mounted) return;
-      final message = _text(result['message']);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(message.isEmpty ? 'Delivery rescheduled.' : message),
-        ),
-      );
+      final scheduledFor = _deliveryDateLabel(result);
       await _refreshOrder();
+      if (!mounted) return;
+      await _showRescheduled(result, scheduledFor);
     } on RiderApiException catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -523,7 +649,9 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     final scanned = await Navigator.push<String>(
       context,
       MaterialPageRoute(
-        builder: (_) => _ParcelScanner(trackingNumber: tracking),
+        builder: (_) => ParcelScannerScreen(
+          expectedCode: tracking.isEmpty ? null : tracking,
+        ),
       ),
     );
     if (!mounted || scanned == null) return;
@@ -1292,6 +1420,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
               child: Stack(
                 children: [
                   FlutterMap(
+                    key: ValueKey('delivery-map-$_mapReloads'),
                     options: MapOptions(
                       initialCenter: point,
                       initialZoom: 15.5,
@@ -1301,10 +1430,16 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                     ),
                     children: [
                       TileLayer(
-                        urlTemplate:
-                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.example.vendo_rider',
+                        urlTemplate: kMapTileUrl,
                         tileProvider: OfflineTileProviders.create(),
+                        errorTileCallback: (tile, error, stackTrace) {
+                          if (_mapTilesFailed) return;
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (mounted && !_mapTilesFailed) {
+                              setState(() => _mapTilesFailed = true);
+                            }
+                          });
+                        },
                       ),
                       MarkerLayer(
                         markers: [
@@ -1349,6 +1484,51 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                       ),
                     ],
                   ),
+                  // Shown only when tiles fail, so a refused tile request
+                  // never fills the card with the server's error image.
+                  if (_mapTilesFailed)
+                    Positioned.fill(
+                      child: Container(
+                        color: const Color(0xE6FAF7F5),
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        alignment: Alignment.center,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.map_outlined,
+                              color: _C.muted,
+                              size: 26,
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'The map could not load. Check your connection, or open Directions to see the pin on the full map.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: _C.ink,
+                                fontSize: 12.5,
+                                height: 1.35,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            TextButton.icon(
+                              onPressed: () => setState(() {
+                                _mapTilesFailed = false;
+                                _mapReloads++;
+                              }),
+                              icon: const Icon(
+                                Icons.refresh_rounded,
+                                size: 16,
+                              ),
+                              label: const Text(
+                                'Retry map',
+                                style: TextStyle(fontSize: 12.5),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   Positioned(
                     left: 6,
                     bottom: 4,
@@ -1638,13 +1818,17 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     if (taskFailed) {
       message =
           'Paused: Logistics needs to review this task before you can scan.';
+    } else if (_order['status'] == 'delivered' ||
+        _order['status'] == 'completed') {
+      message =
+          'Delivered. The buyer, the seller and the station hub now show this parcel as delivered.';
     } else if (_order['status'] == 'delivery_failed') {
       message =
           'The ${cutoff.isEmpty ? '5:00 PM' : cutoff} delivery window closed before this parcel was delivered. Reschedule it to try again tomorrow.';
     } else if (scanType == 'out_for_delivery' && scheduled.isNotEmpty) {
       message =
           'This parcel is scheduled for $scheduled. Scan it out for delivery that day, before ${cutoff.isEmpty ? '5:00 PM' : cutoff}.';
-    } else if (scanTarget['facility_id'] is num) {
+    } else if (scanTarget['facility_id'] is num && scanType != 'origin_arrival') {
       message =
           'Scan the parcel label at ${_text(scanTarget['name'])}. The server checks the route order before accepting it.';
     } else if (scanType != null) {
@@ -1652,7 +1836,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         'pickup' =>
           'Scan the label when the seller hands you the parcel. The next step is $hub.',
         'origin_arrival' =>
-          'You are carrying this parcel. Scan it at ${hub.isEmpty ? 'the origin hub' : hub} on arrival.',
+          'The station hub scans this parcel when it arrives. This step completes automatically once ${riderOriginHubName(_order)} scans the parcel label — you will get a notification when the hub receives the parcel.',
         'out_for_delivery' =>
           'Scan the label when you leave for this delivery.',
         _ => 'Scan the label after handing the parcel to the recipient.',
@@ -1677,6 +1861,8 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
               Icon(
                 taskFailed
                     ? Icons.error_outline_rounded
+                    : scanType == 'origin_arrival'
+                    ? Icons.hourglass_top_rounded
                     : Icons.qr_code_scanner_rounded,
                 color: taskFailed ? _C.brique : _C.raisin,
                 size: 22,
@@ -1712,6 +1898,20 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         icon: const Icon(Icons.arrow_back_rounded, size: 20),
         label: const Text('Back to deliveries'),
         style: _buttonStyle,
+      );
+    } else if (scanType == 'origin_arrival' && !taskFailed) {
+      // The origin station hub scans the parcel when it arrives; the Rider only
+      // waits, so the action stays hollow and disabled until it is scanned.
+      primary = OutlinedButton.icon(
+        onPressed: null,
+        icon: const Icon(Icons.hourglass_top_rounded, size: 20),
+        label: Text(
+          'Waiting for ${riderOriginHubName(_order)} to scan this parcel',
+          maxLines: 2,
+          textAlign: TextAlign.center,
+          overflow: TextOverflow.ellipsis,
+        ),
+        style: _waitingButtonStyle,
       );
     } else if (scanTarget['facility_id'] is num) {
       final facility = _text(scanTarget['name']);
@@ -1772,11 +1972,32 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
-          child: SizedBox(width: double.infinity, height: 54, child: primary),
+          // minHeight keeps the usual 54px button; the waiting state is allowed
+          // to grow so a long hub name can wrap onto a second line.
+          child: SizedBox(
+            width: double.infinity,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 54),
+              child: primary,
+            ),
+          ),
         ),
       ),
     );
   }
+
+  /// Hollow, non-interactive button used while another party (the station hub)
+  /// has the next scan.
+  ButtonStyle get _waitingButtonStyle => OutlinedButton.styleFrom(
+    foregroundColor: _C.muted,
+    disabledForegroundColor: _C.muted,
+    backgroundColor: Colors.transparent,
+    disabledBackgroundColor: Colors.transparent,
+    side: const BorderSide(color: _C.disabled, width: 1.5),
+    elevation: 0,
+    textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(_radius)),
+  );
 
   ButtonStyle get _buttonStyle => FilledButton.styleFrom(
     backgroundColor: _C.prune,
@@ -1927,6 +2148,11 @@ class _StageStyle {
       _C.prune,
       _C.raisinSoft,
       Icons.local_shipping_outlined,
+    ),
+    RiderStage.delivered => const _StageStyle(
+      Color(0xFF1A9B5A),
+      Color(0xFFE8F5E9),
+      Icons.check_circle_rounded,
     ),
     RiderStage.deliveryFailed => const _StageStyle(
       _C.brique,
@@ -2174,130 +2400,4 @@ class _TaskIssueDialogState extends State<_TaskIssueDialog> {
       ],
     );
   }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Parcel label scanner (Android/iOS camera, Linux zbarcam)
-// ─────────────────────────────────────────────────────────────────────────────
-class _ParcelScanner extends StatefulWidget {
-  const _ParcelScanner({required this.trackingNumber});
-  final String trackingNumber;
-
-  @override
-  State<_ParcelScanner> createState() => _ParcelScannerState();
-}
-
-class _ParcelScannerState extends State<_ParcelScanner> {
-  final MobileScannerController? _mobileCamera =
-      defaultTargetPlatform == TargetPlatform.linux
-      ? null
-      : MobileScannerController(
-          formats: const [BarcodeFormat.qrCode, BarcodeFormat.code128],
-        );
-  bool _found = false;
-  Process? _linuxCamera;
-  StreamSubscription<String>? _linuxCodes;
-  String _cameraMessage = 'Opening laptop camera…';
-
-  @override
-  void initState() {
-    super.initState();
-    if (defaultTargetPlatform == TargetPlatform.linux) _startLinuxCamera();
-  }
-
-  Future<void> _startLinuxCamera() async {
-    try {
-      final camera = await Process.start('zbarcam', [
-        '--raw',
-        '--set',
-        'qrcode.enable=1',
-        '--set',
-        'code128.enable=1',
-      ]);
-      if (!mounted) {
-        camera.kill();
-        return;
-      }
-      _linuxCamera = camera;
-      setState(
-        () => _cameraMessage =
-            'Point the laptop camera at the printed QR or barcode. The camera preview opens in a separate window.',
-      );
-      _linuxCodes = camera.stdout
-          .transform(utf8.decoder)
-          .transform(const LineSplitter())
-          .listen((code) {
-            if (_found || !mounted) return;
-            if (code.trim() == widget.trackingNumber) {
-              _found = true;
-              Navigator.pop(context, widget.trackingNumber);
-            } else if (code.trim().isNotEmpty) {
-              setState(
-                () => _cameraMessage =
-                    'That code belongs to a different parcel. Scan the assigned label.',
-              );
-            }
-          });
-      final exitCode = await camera.exitCode;
-      if (mounted && !_found) {
-        setState(
-          () => _cameraMessage =
-              'Camera reader closed (exit $exitCode). Check webcam access and retry.',
-        );
-      }
-    } on ProcessException {
-      if (mounted) {
-        setState(
-          () => _cameraMessage =
-              'Linux camera reader is missing. Install Fedora package zbar, then reopen this scan.',
-        );
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _linuxCodes?.cancel();
-    _linuxCamera?.kill();
-    if (_mobileCamera != null) unawaited(_mobileCamera.dispose());
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Scan shipping label')),
-    body: Column(
-      children: [
-        Expanded(
-          child: defaultTargetPlatform == TargetPlatform.linux
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(_cameraMessage, textAlign: TextAlign.center),
-                  ),
-                )
-              : MobileScanner(
-                  controller: _mobileCamera!,
-                  onDetect: (capture) {
-                    if (_found) return;
-                    for (final barcode in capture.barcodes) {
-                      if (barcode.rawValue == widget.trackingNumber) {
-                        _found = true;
-                        Navigator.pop(context, widget.trackingNumber);
-                        return;
-                      }
-                    }
-                  },
-                ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(20),
-          child: Text(
-            'Scan the barcode or QR on ${widget.trackingNumber}. Only this assigned parcel will be accepted.',
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ],
-    ),
-  );
 }

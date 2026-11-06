@@ -44,7 +44,7 @@ class VendoTheme {
     final base = ThemeData(
       colorScheme: scheme,
       useMaterial3: true,
-      fontFamily: 'Roboto',
+      fontFamily: 'Poppins',
     );
 
     OutlineInputBorder inputBorder(Color color, double width) =>
@@ -68,6 +68,7 @@ class VendoTheme {
         foregroundColor: VColors.ink,
         titleTextStyle: TextStyle(
           color: VColors.ink,
+          fontFamily: 'Poppins',
           fontSize: 18,
           fontWeight: FontWeight.w800,
         ),
@@ -75,8 +76,16 @@ class VendoTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: Colors.white,
-        hintStyle: const TextStyle(color: VColors.muted, fontSize: 14.5),
-        labelStyle: const TextStyle(color: VColors.muted, fontSize: 14),
+        hintStyle: const TextStyle(
+          color: VColors.muted,
+          fontFamily: 'Poppins',
+          fontSize: 14.5,
+        ),
+        labelStyle: const TextStyle(
+          color: VColors.muted,
+          fontFamily: 'Poppins',
+          fontSize: 14,
+        ),
         prefixIconColor: VColors.raisin,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 16,
@@ -97,6 +106,7 @@ class VendoTheme {
           elevation: 0,
           minimumSize: const Size(0, 52),
           textStyle: const TextStyle(
+            fontFamily: 'Poppins',
             fontSize: 15.5,
             fontWeight: FontWeight.w700,
           ),
@@ -111,6 +121,7 @@ class VendoTheme {
           side: const BorderSide(color: VColors.border, width: 1.4),
           minimumSize: const Size(0, 50),
           textStyle: const TextStyle(
+            fontFamily: 'Poppins',
             fontSize: 14.5,
             fontWeight: FontWeight.w700,
           ),
@@ -122,12 +133,19 @@ class VendoTheme {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: VColors.raisin,
-          textStyle: const TextStyle(fontWeight: FontWeight.w700),
+          textStyle: const TextStyle(
+            fontFamily: 'Poppins',
+            fontWeight: FontWeight.w700,
+          ),
         ),
       ),
       snackBarTheme: SnackBarThemeData(
         backgroundColor: VColors.prune,
-        contentTextStyle: const TextStyle(color: Colors.white, fontSize: 13.5),
+        contentTextStyle: const TextStyle(
+          color: Colors.white,
+          fontFamily: 'Poppins',
+          fontSize: 13.5,
+        ),
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),

@@ -127,6 +127,8 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
   String? _hubsError;
   String? _provinceHubId;
   String? _stationHubId;
+  List<Map<String, dynamic>> _companies = const [];
+  String? _companyId;
   bool _agreed = false;
   bool _termsError = false;
 
@@ -245,6 +247,13 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
         _stationHubs = (data['station_hubs'] as List<dynamic>? ?? [])
             .map((hub) => Map<String, dynamic>.from(hub as Map))
             .toList();
+        _companies = (data['companies'] as List<dynamic>? ?? [])
+            .map((company) => Map<String, dynamic>.from(company as Map))
+            .toList();
+        if (_companyId != null &&
+            !_companies.any((c) => c['id']?.toString() == _companyId)) {
+          _companyId = null;
+        }
         if (_provinceHubs.isEmpty) {
           _hubsError = 'No Province Hub is accepting applications right now.';
         }
@@ -305,6 +314,10 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
   /// that municipality. The server makes the final match.
   Map<String, dynamic>? get _stationInMyCity {
     for (final hub in _stationHubs) {
+      if (_companyId != null &&
+          hub['logistics_company_id']?.toString() != _companyId) {
+        continue;
+      }
       if (_cityCode != null && hub['municipality_code']?.toString() == _cityCode) {
         return hub;
       }
@@ -390,6 +403,7 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
       ]);
     } else {
       checks.addAll([
+        ('company', _companyId == null),
         ('applyTo', _applyTo == null),
         (
           'hub',
@@ -606,6 +620,7 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
           'password_confirmation': _confirm.text,
           'phone_number': _phone.text.trim().replaceAll(' ', ''),
           'apply_to': _applyTo!,
+          'logistics_company_id': ?_companyId,
           if (_applyTo == 'station')
             'station_hub_id': _stationHubId!
           else
@@ -1295,7 +1310,20 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
   // Step 4 ────────────────────────────────────────────────────────────────
 
   Widget _stepApply() {
+    final companies = _companies
+        .map(
+          (company) => RegDropdownItem(
+            company['id'].toString(),
+            company['name']?.toString() ?? '',
+          ),
+        )
+        .toList();
     final stationItems = _stationHubs
+        .where(
+          (hub) =>
+              _companyId == null ||
+              hub['logistics_company_id']?.toString() == _companyId,
+        )
         .map(
           (hub) => RegDropdownItem(
             hub['id'].toString(),
@@ -1304,6 +1332,11 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
         )
         .toList();
     final provinceItems = _provinceHubs
+        .where(
+          (hub) =>
+              _companyId == null ||
+              hub['logistics_company_id']?.toString() == _companyId,
+        )
         .map(
           (hub) => RegDropdownItem(
             hub['id'].toString(),
@@ -1325,9 +1358,31 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
       children: [
         const RegisterSectionHeader(
           title: 'Where do you want to apply?',
-          subtitle: 'This decides which hub reviews and approves you',
+          subtitle: 'The company and hub that review your application',
         ),
         const SizedBox(height: 14),
+        _keyed(
+          'company',
+          RegDropdown(
+            id: 'company',
+            label: 'Logistics company',
+            hint: _loadingHubs ? 'Loading…' : 'Select logistics company',
+            value: _companyId,
+            required: true,
+            items: companies,
+            emptyNote: companies.isEmpty && !_loadingHubs
+                ? 'No logistics company is accepting applications yet.'
+                : null,
+            onChanged: (value) => setState(() {
+              _companyId = value;
+              _provinceHubId = null;
+              _stationHubId = null;
+              _flagged.remove('company');
+              _flagged.remove('hub');
+            }),
+          ),
+        ),
+        const SizedBox(height: 16),
         if (_hubsError != null) ...[
           RegErrorNote(message: _hubsError!),
           const SizedBox(height: 10),

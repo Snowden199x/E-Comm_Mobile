@@ -7,6 +7,24 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+/// Identity sent with every tile request.
+///
+/// The OpenStreetMap tile policy requires a User-Agent that names the app; a
+/// bare package id, a placeholder, or a library default (such as
+/// `Dart/3.x (dart:io)`) is treated as anonymous traffic and blocked with
+/// HTTP 403 — which is what renders a "403 blocked" card in place of the map.
+const String kMapUserAgent = 'VendoRider/1.0.0 (com.example.vendo_rider)';
+
+/// Tile source used by every map in the app.
+///
+/// Kept overridable at build time
+/// (`flutter build apk --dart-define=MAP_TILE_URL=...`) so the app can be
+/// pointed at another raster tile service without a code change.
+const String kMapTileUrl = String.fromEnvironment(
+  'MAP_TILE_URL',
+  defaultValue: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+);
+
 /// Disk-cached map tiles for the Rider's route map.
 ///
 /// A tile is written to the app cache the first time it loads, so a road the
@@ -28,7 +46,7 @@ class OfflineTileProviders {
     }
   }
 
-  static TileProvider create({String userAgent = 'com.example.vendo_rider'}) =>
+  static TileProvider create({String userAgent = kMapUserAgent}) =>
       _CachedTileProvider(userAgent: userAgent, directory: _directory);
 }
 

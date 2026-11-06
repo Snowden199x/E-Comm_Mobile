@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:vendo_buyer/core/api/api_models.dart';
 import 'package:vendo_buyer/core/api/buyer_api.dart';
+import 'package:vendo_buyer/features/home/widgets/buyer_nav_bar.dart';
 import 'package:vendo_buyer/features/product/screens/api_product_screen.dart';
 
 /// Saved items from `GET /api/v1/buyer/saved-items` (the same list the web heart buttons use).
@@ -78,6 +79,13 @@ class _SavedScreenState extends State<SavedScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // As a bottom-nav tab this screen sits under the floating bar, so its grid
+    // leaves room at the bottom; the pushed copy has no bar over it.
+    final bottomClearance = Navigator.of(context).canPop()
+        ? 24.0
+        : 24.0 +
+              kBuyerNavBarClearance +
+              MediaQuery.of(context).padding.bottom;
     return Scaffold(
       backgroundColor: _bg,
       body: Column(
@@ -93,7 +101,12 @@ class _SavedScreenState extends State<SavedScreen> {
                         : RefreshIndicator(
                             onRefresh: _load,
                             child: GridView.builder(
-                              padding: const EdgeInsets.fromLTRB(12, 14, 12, 24),
+                              padding: EdgeInsets.fromLTRB(
+                                12,
+                                14,
+                                12,
+                                bottomClearance,
+                              ),
                               gridDelegate:
                                   const SliverGridDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: 2,
@@ -250,13 +263,33 @@ class _SavedScreenState extends State<SavedScreen> {
                     style: const TextStyle(fontSize: 12, height: 1.3, color: _ink),
                   ),
                   const SizedBox(height: 4),
-                  Text(
-                    product.price,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF52245B),
+                  // Current price with the original price crossed out beside it
+                  // when the product is discounted (same idea as the web card).
+                  Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: product.price,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF52245B),
+                          ),
+                        ),
+                        if (product.compareAtPrice != null)
+                          TextSpan(
+                            text: '  ${product.compareAtPrice}',
+                            style: const TextStyle(
+                              fontSize: 10,
+                              color: Color(0xFF9A8A9D),
+                              decoration: TextDecoration.lineThrough,
+                              decorationColor: Color(0xFF9A8A9D),
+                            ),
+                          ),
+                      ],
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 3),
                   Text(

@@ -158,13 +158,37 @@ class _CategoryProductsScreenState extends State<CategoryProductsScreen> {
                                         ),
                                       ),
                                       const SizedBox(height: 4),
-                                      Text(
-                                        product.price,
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w700,
-                                          color: Color(0xFF52245B),
+                                      // Current price with the original price
+                                      // crossed out beside it when discounted.
+                                      Text.rich(
+                                        TextSpan(
+                                          children: [
+                                            TextSpan(
+                                              text: product.price,
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w700,
+                                                color: Color(0xFF52245B),
+                                              ),
+                                            ),
+                                            if (product.compareAtPrice != null)
+                                              TextSpan(
+                                                text:
+                                                    '  ${product.compareAtPrice}',
+                                                style: const TextStyle(
+                                                  fontSize: 10,
+                                                  color: Color(0xFF9A8A9D),
+                                                  decoration:
+                                                      TextDecoration.lineThrough,
+                                                  decorationColor: Color(
+                                                    0xFF9A8A9D,
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
                                         ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                       ),
                                     ],
                                   ),

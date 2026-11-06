@@ -60,6 +60,10 @@ class BuyerApi {
 
   static final BuyerApi instance = BuyerApi._();
 
+  /// Units currently in the buyer's cart, kept up to date by every cart call so
+  /// badges (like the home header) never have to guess.
+  static final ValueNotifier<int> cartItemCount = ValueNotifier<int>(0);
+
   static String get baseUrl {
     const configured = String.fromEnvironment('VENDO_BUYER_API_BASE_URL');
     if (configured.isNotEmpty)
@@ -93,7 +97,10 @@ class BuyerApi {
   Future<String?> buyerName() => _storage.read(key: 'buyer_name');
   Future<String?> buyerEmail() => _storage.read(key: 'buyer_email');
 
-  Future<void> clearSession() => _storage.deleteAll();
+  Future<void> clearSession() async {
+    await _storage.deleteAll();
+    cartItemCount.value = 0;
+  }
 
   // ── OTP ────────────────────────────────────────────────────────────────────
   Future<void> sendOtp(String email) async {
@@ -261,7 +268,13 @@ class BuyerApi {
     final response = await http
         .get(Uri.parse('$baseUrl/cart'), headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
-    return ApiCart.fromJson(_check(response));
+    return _trackCart(ApiCart.fromJson(_check(response)));
+  }
+
+  /// Publishes the cart's unit count before handing the payload back.
+  ApiCart _trackCart(ApiCart cart) {
+    cartItemCount.value = cart.itemCount;
+    return cart;
   }
 
   Future<ApiCart> addToCart({
@@ -284,7 +297,7 @@ class BuyerApi {
           }),
         )
         .timeout(const Duration(seconds: 25));
-    return ApiCart.fromJson(_check(response));
+    return _trackCart(ApiCart.fromJson(_check(response)));
   }
 
   Future<ApiCart> updateCartLine(int itemId, int quantity) async {
@@ -295,14 +308,14 @@ class BuyerApi {
           body: jsonEncode({'quantity': quantity}),
         )
         .timeout(const Duration(seconds: 25));
-    return ApiCart.fromJson(_check(response));
+    return _trackCart(ApiCart.fromJson(_check(response)));
   }
 
   Future<ApiCart> removeCartLine(int itemId) async {
     final response = await http
         .delete(Uri.parse('$baseUrl/cart/$itemId'), headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
-    return ApiCart.fromJson(_check(response));
+    return _trackCart(ApiCart.fromJson(_check(response)));
   }
 
   // ── Checkout ───────────────────────────────────────────────────────────────

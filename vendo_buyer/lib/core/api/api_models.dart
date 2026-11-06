@@ -21,6 +21,8 @@ class ApiProduct {
   final String image;
   final String shop;
   final int shopId;
+  final String province;
+  final String municipality;
   final double? rating;
   final int sold;
   final int stock;
@@ -38,6 +40,8 @@ class ApiProduct {
     required this.shop,
     required this.shopId,
     required this.stock,
+    this.province = '',
+    this.municipality = '',
     this.compareAtPrice,
     this.discountPercent = 0,
     this.rating,
@@ -58,6 +62,8 @@ class ApiProduct {
     image: json['image']?.toString() ?? '',
     shop: json['shop']?.toString() ?? '',
     shopId: _int(json['shop_id']),
+    province: json['province']?.toString() ?? '',
+    municipality: json['municipality']?.toString() ?? '',
     rating: json['rating'] == null ? null : _num(json['rating']),
     sold: _int(json['sold']),
     stock: _int(json['stock']),

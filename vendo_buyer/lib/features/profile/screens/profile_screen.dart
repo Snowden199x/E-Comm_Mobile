@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_buyer/core/api/buyer_api.dart';
 import 'package:vendo_buyer/features/auth/screens/login_screen.dart';
+import 'package:vendo_buyer/features/home/widgets/buyer_nav_bar.dart';
 import 'package:vendo_buyer/features/notifications/screens/notifications_screen.dart';
 import 'package:vendo_buyer/features/orders/screens/orders_screen.dart';
 import 'package:vendo_buyer/features/saved/screens/saved_screen.dart';
@@ -138,7 +139,15 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
             children: [
               _buildHeader(context),
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
+                // Extra bottom room so the last card clears the floating nav bar.
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  20,
+                  16,
+                  32 +
+                      kBuyerNavBarClearance +
+                      MediaQuery.of(context).padding.bottom,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [

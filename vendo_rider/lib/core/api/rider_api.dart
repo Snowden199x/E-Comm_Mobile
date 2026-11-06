@@ -70,6 +70,15 @@ class RiderApi {
   Future<String?> riderVehicleType() =>
       _storage.read(key: 'rider_vehicle_type');
 
+  /// Keeps the cached header name in step after a profile edit.
+  Future<void> saveRiderName(String name) =>
+      _storage.write(key: 'rider_name', value: name);
+
+  /// Bumped after a profile edit so open screens can refresh the header.
+  final ValueNotifier<int> profileRevision = ValueNotifier<int>(0);
+
+  void notifyProfileChanged() => profileRevision.value++;
+
   Future<String?> transportDriverName() =>
       _storage.read(key: 'transport_driver_name');
 
@@ -92,6 +101,23 @@ class RiderApi {
           Uri.parse('$baseUrl/locations/$cityCode/barangays'),
           headers: {'Accept': 'application/json'},
         )
+        .timeout(const Duration(seconds: 20));
+    return _body(response);
+  }
+
+  /// Logistics companies whose Station Hub network covers this municipality.
+  Future<Map<String, dynamic>> logisticsCompanies({
+    required String provinceCode,
+    required String cityCode,
+  }) async {
+    final uri = Uri.parse('$baseUrl/logistics-companies').replace(
+      queryParameters: {
+        'province_code': provinceCode,
+        'city_code': cityCode,
+      },
+    );
+    final response = await http
+        .get(uri, headers: {'Accept': 'application/json'})
         .timeout(const Duration(seconds: 20));
     return _body(response);
   }
@@ -339,6 +365,17 @@ class RiderApi {
     return data;
   }
 
+  /// Parcels this Rider completed on [date] (`Y-m-d`); today when omitted.
+  Future<Map<String, dynamic>> deliveryHistory({String? date}) async {
+    final uri = Uri.parse('$baseUrl/deliveries/history').replace(
+      queryParameters: date != null && date.isNotEmpty ? {'date': date} : null,
+    );
+    final response = await http
+        .get(uri, headers: await _authHeaders())
+        .timeout(const Duration(seconds: 20));
+    return _body(response);
+  }
+
   /// The last assigned-parcel list this device saw, when the API cannot be
   /// reached.
   Future<CachedPayload?> cachedWork() =>
@@ -519,6 +556,76 @@ class RiderApi {
   }
 
   /// COD cash the rider collected and still holds, plus recent collections.
+  /// The signed-in Rider's own profile: personal details, home address,
+  /// vehicle, Station Hub, and which private documents are on file.
+  Future<Map<String, dynamic>> riderProfile() async {
+    final response = await http
+        .get(Uri.parse('$baseUrl/profile'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 20));
+    return Map<String, dynamic>.from(_body(response)['rider'] as Map);
+  }
+
+  /// Updates the signed-in Rider's name and birthday. Contact details,
+  /// vehicle, documents, and the Station Hub assignment stay hub-managed.
+  Future<Map<String, dynamic>> updateRiderProfile({
+    required String firstName,
+    required String middleName,
+    required String lastName,
+    required String birthday,
+  }) async {
+    final response = await http
+        .put(
+          Uri.parse('$baseUrl/profile'),
+          headers: await _authHeaders(),
+          body: jsonEncode({
+            'first_name': firstName,
+            'middle_name': middleName,
+            'last_name': lastName,
+            'birthday': birthday,
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
+    return Map<String, dynamic>.from(_body(response)['rider'] as Map);
+  }
+
+  /// Replaces the signed-in Rider's profile picture. The image goes to the web
+  /// app's public profile storage, not the private verification documents.
+  Future<Map<String, dynamic>> uploadProfilePicture(String photoPath) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/profile/photo'),
+    );
+    final headers = await _authHeaders();
+    headers.remove('Content-Type');
+    request.headers.addAll(headers);
+    request.files.add(await http.MultipartFile.fromPath('photo', photoPath));
+    final streamed = await request.send().timeout(const Duration(seconds: 60));
+    return Map<String, dynamic>.from(
+      _body(await http.Response.fromStream(streamed))['rider'] as Map,
+    );
+  }
+
+  /// Changes the signed-in Rider's password. The API checks the current
+  /// password and keeps this device signed in.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String password,
+    required String confirmation,
+  }) async {
+    final response = await http
+        .put(
+          Uri.parse('$baseUrl/profile/password'),
+          headers: await _authHeaders(),
+          body: jsonEncode({
+            'current_password': currentPassword,
+            'password': password,
+            'password_confirmation': confirmation,
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
+    _body(response);
+  }
+
   Future<Map<String, dynamic>> riderCash() async {
     final response = await http
         .get(Uri.parse('$baseUrl/cash'), headers: await _authHeaders())

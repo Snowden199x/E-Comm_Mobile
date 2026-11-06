@@ -18,7 +18,7 @@ class VendoBuyerApp extends StatelessWidget {
       title: 'Vendo',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        fontFamily: 'Roboto',
+        fontFamily: 'Poppins',
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF3B1F52)),
       ),
       home: const SplashScreen(),

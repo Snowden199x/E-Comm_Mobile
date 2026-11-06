@@ -167,6 +167,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String? _cityCode;
   String? _barangayCode;
   String? _matchedCenterName;
+  List<Map<String, dynamic>> _companies = const [];
+  bool _loadingCompanies = false;
+  String? _companiesError;
+  String? _companyId;
 
   // The fields that were wrong at the moment the user tapped Next.
   // Only these go red, and each one goes back to normal once it is fixed.
@@ -228,6 +232,50 @@ class _RegisterScreenState extends State<RegisterScreen> {
       }
     } finally {
       if (mounted) setState(() => _loadingLocations = false);
+    }
+  }
+
+  /// Logistics companies whose Station Hub covers the chosen municipality.
+  Future<void> _loadCompanies(String cityCode) async {
+    final provinceCode = _provinceCode;
+    if (provinceCode == null) return;
+    setState(() {
+      _loadingCompanies = true;
+      _companiesError = null;
+      _companies = const [];
+      _companyId = null;
+    });
+    try {
+      final data = await RiderApi.instance.logisticsCompanies(
+        provinceCode: provinceCode,
+        cityCode: cityCode,
+      );
+      if (!mounted || _cityCode != cityCode) return;
+      final companies = (data['companies'] as List? ?? [])
+          .map((company) => Map<String, dynamic>.from(company as Map))
+          .toList();
+      setState(() {
+        _companies = companies;
+        if (companies.isEmpty) {
+          _companiesError =
+              'No logistics company serves this municipality yet.';
+        }
+      });
+    } on RiderApiException catch (error) {
+      if (mounted && _cityCode == cityCode) {
+        setState(() => _companiesError = error.message);
+      }
+    } catch (_) {
+      if (mounted && _cityCode == cityCode) {
+        setState(
+          () => _companiesError =
+              'Cannot load logistics companies from ${RiderApi.baseUrl}.',
+        );
+      }
+    } finally {
+      if (mounted && _cityCode == cityCode) {
+        setState(() => _loadingCompanies = false);
+      }
     }
   }
 
@@ -393,6 +441,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           'zip_code': _zipCodeCtrl.text.trim(),
           'vehicle_type': _vehicleType!,
           'plate_number': _plateNumberCtrl.text.trim(),
+          'logistics_company_id': ?_companyId,
         },
         {
           'drivers_license': _driversLicensePath!,
@@ -400,7 +449,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         },
       );
       if (!mounted) return;
-      _matchedCenterName = (result['logistics_center'] as Map)['name']
+      final company = result['logistics_company'];
+      _matchedCenterName =
+          (company is Map ? company['name'] : (result['logistics_center'] as Map)['name'])
           ?.toString();
       _showSuccessModal(context);
     } on RiderApiException catch (error) {
@@ -425,6 +476,28 @@ class _RegisterScreenState extends State<RegisterScreen> {
         onBackToLogin: () => Navigator.of(context).popUntil((r) => r.isFirst),
       ),
     );
+  }
+
+  /// The Station Hub that will review the application for the chosen company.
+  String? get _selectedCompanyStation {
+    for (final company in _companies) {
+      if (company['id']?.toString() != _companyId) continue;
+      final station = company['station_hub'];
+      if (station is Map) {
+        final name = station['name']?.toString();
+        if (name != null && name.isNotEmpty) return name;
+      }
+    }
+    return null;
+  }
+
+  String get _selectedCompanyName {
+    for (final company in _companies) {
+      if (company['id']?.toString() == _companyId) {
+        return company['name']?.toString() ?? '';
+      }
+    }
+    return '';
   }
 
   static const _stepLabels = [
@@ -713,6 +786,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ('barangay', _barangayCode == null),
         ('street', _blank(_streetCtrl)),
         ('zip', _blank(_zipCodeCtrl)),
+        ('company', _companyId == null),
       ]);
     }
     return [for (final c in checks) if (c.$2) c.$1];
@@ -1426,6 +1500,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ? ''
                       : (_provinces[code] as Map)['name'].toString();
                   _municipalityCtrl.clear();
+                  _companies = const [];
+                  _companiesError = null;
+                  _companyId = null;
                 }),
         ),
         _gap,
@@ -1471,7 +1548,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         : (_provinces[_provinceCode] as Map)['cities'][code]
                               .toString();
                   });
-                  if (code != null) _loadBarangays(code);
+                  if (code != null) {
+                    _loadBarangays(code);
+                    _loadCompanies(code);
+                  } else {
+                    setState(() {
+                      _companies = const [];
+                      _companiesError = null;
+                      _companyId = null;
+                    });
+                  }
                 },
         ),
         _gap,
@@ -1538,6 +1624,66 @@ class _RegisterScreenState extends State<RegisterScreen> {
             }),
           ),
         ),
+        _gap,
+
+        KeyedSubtree(
+          key: _k('company'),
+          child: _label('Logistics Company', required: true),
+        ),
+        const SizedBox(height: 8),
+        if (_loadingCompanies)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 8),
+            child: LinearProgressIndicator(
+              color: _C.brique,
+              backgroundColor: _C.raisinSoft,
+            ),
+          ),
+        if (_companiesError != null)
+          TextButton(
+            style: _linkStyle,
+            onPressed: _cityCode == null
+                ? null
+                : () => _loadCompanies(_cityCode!),
+            child: Text('$_companiesError Tap to retry.'),
+          ),
+        DropdownButtonFormField<String>(
+          key: ValueKey('company-$_cityCode'),
+          initialValue: _companyId,
+          isExpanded: true,
+          icon: arrow,
+          borderRadius: BorderRadius.circular(_radius),
+          dropdownColor: Colors.white,
+          style: itemStyle,
+          decoration: _decoration(error: _flagged.contains('company')),
+          hint: const Text('Select logistics company', style: hintStyle),
+          items: _companies
+              .map(
+                (company) => DropdownMenuItem(
+                  value: company['id'].toString(),
+                  child: Text(
+                    company['name']?.toString() ?? '',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              )
+              .toList(),
+          onChanged: _companies.isEmpty
+              ? null
+              : (id) => setState(() {
+                  _companyId = id;
+                  _flagged.remove('company');
+                }),
+        ),
+        if (_selectedCompanyStation != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8, left: 2),
+            child: Text(
+              'Your application goes to ${_selectedCompanyStation!} for review.',
+              style: const TextStyle(color: _C.muted, fontSize: 12, height: 1.4),
+            ),
+          ),
+
         _gap,
 
         _col(
@@ -1619,6 +1765,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
               item1: _RC(label: 'Email', value: v(_emailCtrl.text)),
               item2: _RC(label: 'Age', value: v(_ageCtrl.text)),
               item3: _RC(label: 'Barangay', value: v(_barangayCtrl.text)),
+              item4: _RC(
+                label: 'Logistics Company',
+                value: _selectedCompanyName.isEmpty
+                    ? '—'
+                    : _selectedCompanyName,
+              ),
             ),
             _ReviewRow4(
               item1: _RC(label: 'Vehicle Type', value: _vehicleType ?? '—'),
@@ -1686,7 +1838,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               const SizedBox(height: 10),
               const Text(
                 'By submitting this registration, you confirm that all information provided is true and correct. '
-                'The matched logistics hub will review your application. You can sign in after approval.',
+                'The Station Hub of the logistics company you choose will review your application. You can sign in after approval.',
                 style: TextStyle(color: _C.muted, fontSize: 12.5, height: 1.5),
               ),
               const SizedBox(height: 14),
