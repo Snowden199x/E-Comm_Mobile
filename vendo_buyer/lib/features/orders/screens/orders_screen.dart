@@ -5,7 +5,11 @@ import 'package:vendo_buyer/features/shared/offline_banner.dart';
 
 /// The signed-in Buyer's orders, from `GET /api/v1/buyer/orders`.
 class OrdersScreen extends StatefulWidget {
-  const OrdersScreen({super.key});
+  /// Opens the list on one of the profile quick actions: to_ship, to_receive or
+  /// to_review. Null starts on All.
+  final String? initialGroup;
+
+  const OrdersScreen({super.key, this.initialGroup});
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
@@ -22,7 +26,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   List<ApiOrder> _orders = const [];
   bool _loading = true;
   String? _error;
-  String? _status;
+  String? _group;
 
   /// Set when the list came from the device instead of Vendo.
   DateTime? _offlineSince;
@@ -39,7 +43,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       _error = null;
     });
     try {
-      final orders = await BuyerApi.instance.orders(status: _status);
+      final orders = await BuyerApi.instance.orders(group: _group);
       if (!mounted) return;
       setState(() {
         _orders = orders;
@@ -54,7 +58,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       });
     } catch (_) {
       // Offline: show the orders saved on this device instead of an error.
-      final cached = await BuyerApi.instance.cachedOrders(status: _status);
+      final cached = await BuyerApi.instance.cachedOrders(group: _group);
       if (!mounted) return;
       if (cached == null) {
         setState(() {
@@ -95,12 +99,9 @@ class _OrdersScreenState extends State<OrdersScreen> {
               child: Row(
                 children: [
                   _filter('All', null),
-                  _filter('Placed', 'placed'),
-                  _filter('Confirmed', 'confirmed'),
-                  _filter('Shipped', 'shipped'),
-                  _filter('Delivered', 'delivered'),
-                  _filter('Completed', 'completed'),
-                  _filter('Cancelled', 'cancelled'),
+                  _filter('To Ship', 'to_ship'),
+                  _filter('To Receive', 'to_receive'),
+                  _filter('To Review', 'to_review'),
                 ],
               ),
             ),
@@ -119,10 +120,10 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 : _error != null
                     ? _errorState()
                     : _orders.isEmpty
-                        ? const Center(
+                        ? Center(
                             child: Text(
-                              'No orders yet.',
-                              style: TextStyle(color: _muted),
+                              _emptyMessage,
+                              style: const TextStyle(color: _muted),
                             ),
                           )
                         : RefreshIndicator(
@@ -141,7 +142,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
   }
 
   Widget _filter(String label, String? value) {
-    final selected = _status == value;
+    final selected = _group == value;
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: ChoiceChip(
@@ -154,11 +155,24 @@ class _OrdersScreenState extends State<OrdersScreen> {
           fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
         ),
         onSelected: (_) {
-          setState(() => _status = value);
+          setState(() => _group = value);
           _load();
         },
       ),
     );
+  }
+
+  String get _emptyMessage {
+    switch (_group) {
+      case 'to_ship':
+        return 'No orders to ship right now.';
+      case 'to_receive':
+        return 'No orders on the way right now.';
+      case 'to_review':
+        return 'Nothing to review right now.';
+      default:
+        return 'No orders yet.';
+    }
   }
 
   Widget _orderCard(ApiOrder order) {
@@ -245,6 +259,15 @@ class _OrdersScreenState extends State<OrdersScreen> {
                           color: Color(0xFF1A9B5A),
                         ),
                       ),
+                      if (order.reviewPending > 0)
+                        Text(
+                          '${order.reviewPending} product(s) to review',
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            color: Color(0xFFE8873A),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -478,6 +501,100 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     }
   }
 
+  Future<void> _review(ApiOrderItem item) async {
+    var rating = 0;
+    final comment = TextEditingController();
+
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final canSubmit = rating > 0 && comment.text.trim().length >= 10;
+          return AlertDialog(
+            title: Text(
+              'Rate ${item.name}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: _StarPicker(
+                      rating: rating,
+                      onChanged: (value) =>
+                          setDialogState(() => rating = value),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: comment,
+                    maxLines: 3,
+                    maxLength: 2000,
+                    onChanged: (_) => setDialogState(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Your review',
+                      hintText: 'What did you like or dislike?',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                  ),
+                  Text(
+                    rating == 0
+                        ? 'Choose a star rating.'
+                        : comment.text.trim().length < 10
+                        ? 'Write at least 10 characters.'
+                        : 'Ready to submit.',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: canSubmit ? _green : _muted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: _purpleMid),
+                onPressed: canSubmit
+                    ? () => Navigator.pop(context, true)
+                    : null,
+                child: const Text('Submit review'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    final text = comment.text.trim();
+    if (submitted != true) return;
+
+    setState(() => _working = true);
+    try {
+      await BuyerApi.instance.reviewOrderItem(item.id, rating, text);
+      if (!mounted) return;
+      _toast('Review submitted. Thank you!');
+      await _load();
+    } on BuyerApiException catch (e) {
+      if (mounted) _toast(e.message);
+    } catch (_) {
+      if (mounted) _toast('Could not reach Vendo. Check your connection.');
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
   void _toast(String message) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
@@ -641,6 +758,32 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                               ].join(' · '),
                               style: const TextStyle(fontSize: 11, color: _muted),
                             ),
+                            if (detail.order.status == 'completed') ...[
+                              const SizedBox(height: 2),
+                              item.reviewed
+                                  ? const Text(
+                                      'Reviewed',
+                                      style: TextStyle(
+                                        fontSize: 10.5,
+                                        color: _green,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    )
+                                  : GestureDetector(
+                                      onTap: _working
+                                          ? null
+                                          : () => _review(item),
+                                      child: const Text(
+                                        'Rate this product',
+                                        style: TextStyle(
+                                          fontSize: 10.5,
+                                          color: _purpleMid,
+                                          fontWeight: FontWeight.w600,
+                                          decoration: TextDecoration.underline,
+                                        ),
+                                      ),
+                                    ),
+                            ],
                           ],
                         ),
                       ),
@@ -735,6 +878,31 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           ),
         const SizedBox(height: 20),
       ],
+    );
+  }
+}
+
+class _StarPicker extends StatelessWidget {
+  final int rating;
+  final ValueChanged<int> onChanged;
+
+  const _StarPicker({required this.rating, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(5, (index) {
+        final value = index + 1;
+        return IconButton(
+          onPressed: () => onChanged(value),
+          icon: Icon(
+            value <= rating ? Icons.star_rounded : Icons.star_border_rounded,
+            color: const Color(0xFFE8873A),
+            size: 30,
+          ),
+        );
+      }),
     );
   }
 }

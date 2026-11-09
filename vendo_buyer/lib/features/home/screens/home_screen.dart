@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_buyer/core/api/api_models.dart';
@@ -5,10 +7,12 @@ import 'package:vendo_buyer/core/api/buyer_api.dart';
 import 'package:vendo_buyer/features/cart/screens/cart_screen.dart';
 import 'package:vendo_buyer/features/home/screens/category_products_screen.dart';
 import 'package:vendo_buyer/features/home/widgets/buyer_nav_bar.dart';
+import 'package:vendo_buyer/features/notifications/screens/notifications_screen.dart';
 import 'package:vendo_buyer/features/orders/screens/orders_screen.dart';
 import 'package:vendo_buyer/features/product/screens/api_product_screen.dart';
 import 'package:vendo_buyer/features/profile/screens/profile_screen.dart';
 import 'package:vendo_buyer/features/saved/screens/saved_screen.dart';
+import 'package:vendo_buyer/features/search/screens/search_results_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Vendo buyer palette (plum + gold)
@@ -60,51 +64,17 @@ class _HomeScreenState extends State<HomeScreen> {
         extendBody: true,
         body: IndexedStack(
           index: _currentIndex,
-          children: const [
-            _HomeTab(),
-            SavedScreen(),
-            _PlaceholderTab(
-              icon: Icons.notifications_outlined,
-              title: 'Notifications',
-            ),
-            BuyerProfileScreen(),
+          children: [
+            const _HomeTab(),
+            const SavedScreen(),
+            // Only the visible tab polls, so a hidden tab stays quiet.
+            NotificationsScreen(isActive: _currentIndex == 2),
+            const BuyerProfileScreen(),
           ],
         ),
         bottomNavigationBar: BuyerNavBar(
           currentIndex: _currentIndex,
           onTap: (i) => setState(() => _currentIndex = i),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Placeholder tab
-// ─────────────────────────────────────────────────────────────────────────────
-class _PlaceholderTab extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  const _PlaceholderTab({required this.icon, required this.title});
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 64, color: const Color(0xFFCCCCCC)),
-            const SizedBox(height: 16),
-            Text(
-              '$title coming soon',
-              style: const TextStyle(
-                color: Color(0xFF888888),
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -131,16 +101,10 @@ class _HomeTabState extends State<_HomeTab> {
   _Filter _filter = _Filter.all;
 
   final ScrollController _scrollCtrl = ScrollController();
-  final FocusNode _searchFocus = FocusNode();
-
-  /// True once the page is scrolled far enough to trade the search bar for a
-  /// search icon in the brand row.
-  bool _searchCollapsed = false;
 
   @override
   void initState() {
     super.initState();
-    _scrollCtrl.addListener(_onScroll);
     _loadHome();
     _loadCartCount();
   }
@@ -148,34 +112,42 @@ class _HomeTabState extends State<_HomeTab> {
   @override
   void dispose() {
     _scrollCtrl.dispose();
-    _searchFocus.dispose();
     super.dispose();
   }
 
-  void _onScroll() {
-    if (!_scrollCtrl.hasClients) return;
-    final offset = _scrollCtrl.offset;
-    // Hysteresis stops the header from flickering around the threshold.
-    final collapsed = _searchCollapsed ? offset > 8 : offset > 40;
-    if (collapsed != _searchCollapsed) {
-      setState(() => _searchCollapsed = collapsed);
-    }
-  }
-
-  /// The header's search icon scrolls back to the top, restores the bar and
-  /// focuses it so one tap is enough to start typing.
-  void _showSearch() {
-    setState(() => _searchCollapsed = false);
-    if (_scrollCtrl.hasClients) {
-      _scrollCtrl.animateTo(
-        0,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOut,
-      );
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _searchFocus.requestFocus();
-    });
+  void _openSearch() {
+    Navigator.push(
+      context,
+      PageRouteBuilder<void>(
+        settings: const RouteSettings(name: '/search'),
+        transitionDuration: const Duration(milliseconds: 450),
+        reverseTransitionDuration: const Duration(milliseconds: 300),
+        pageBuilder: (_, _, _) => const SearchResultsScreen(),
+        transitionsBuilder: (_, animation, _, child) {
+          final curved = CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          );
+          // Fade outpaces the slide so the screen is readable while it settles.
+          final fade = CurvedAnimation(
+            parent: animation,
+            curve: const Interval(0, 0.7, curve: Curves.easeOut),
+            reverseCurve: Curves.easeIn,
+          );
+          return FadeTransition(
+            opacity: fade,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 0.12),
+                end: Offset.zero,
+              ).animate(curved),
+              child: child,
+            ),
+          );
+        },
+      ),
+    );
   }
 
   /// Fills the header badge from the server; a failure leaves the last known
@@ -248,16 +220,21 @@ class _HomeTabState extends State<_HomeTab> {
       // Dark status bar icons because the header is now light
       value: SystemUiOverlayStyle.dark,
       child: CustomScrollView(
+        // Stable identity keeps hot reload/rebuilds from swapping this
+        // Scrollable with another one in the same slot.
+        key: const PageStorageKey<String>('buyer-home-scroll'),
         controller: _scrollCtrl,
         slivers: [
-          // ── Sticky light header: brand row + search ───────────────
+          // ── Sticky header ─────────────────────────────────────────
+          // Expanded: brand row + search bar. As the page scrolls, the search
+          // bar fades out and collapses; the brand row stays pinned and a
+          // search icon appears before the heart icon.
           SliverPersistentHeader(
+            key: const ValueKey<String>('buyer-home-header'),
             pinned: true,
-            delegate: _StickyHeaderDelegate(
+            delegate: _HomeHeaderDelegate(
               topPadding: MediaQuery.of(context).padding.top,
-              searchCollapsed: _searchCollapsed,
-              onSearchTap: _showSearch,
-              searchFocus: _searchFocus,
+              onSearchTap: _openSearch,
             ),
           ),
 
@@ -362,33 +339,29 @@ class _HomeTabState extends State<_HomeTab> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sticky header delegate: brand row (logo + icons) and the search bar
+// Collapsing header delegate
+//   expanded  : brand row (logo + icons) and the search bar
+//   collapsed : brand row only, with a search icon before the heart icon
 // ─────────────────────────────────────────────────────────────────────────────
-class _StickyHeaderDelegate extends SliverPersistentHeaderDelegate {
+class _HomeHeaderDelegate extends SliverPersistentHeaderDelegate {
   final double topPadding;
-  final bool searchCollapsed;
   final VoidCallback onSearchTap;
-  final FocusNode searchFocus;
 
-  const _StickyHeaderDelegate({
+  const _HomeHeaderDelegate({
     required this.topPadding,
-    required this.searchCollapsed,
     required this.onSearchTap,
-    required this.searchFocus,
   });
 
-  // 12 top + 36 brand row + 8 gap + search (~40) + 12 bottom + 1 border
-  static const double _expandedHeight = 108;
-  // 12 top + 36 brand row + 12 bottom + 1 border
-  static const double _collapsedHeight = 61;
-
-  double get _height =>
-      topPadding + (searchCollapsed ? _collapsedHeight : _expandedHeight);
+  static const double _vPad = 12;
+  static const double _rowHeight = 36;
+  static const double _gap = 8;
+  static const double _searchHeight = 40;
 
   @override
-  double get minExtent => _height;
+  double get minExtent => topPadding + _vPad + _rowHeight + _vPad;
+
   @override
-  double get maxExtent => _height;
+  double get maxExtent => minExtent + _gap + _searchHeight;
 
   @override
   Widget build(
@@ -396,86 +369,186 @@ class _StickyHeaderDelegate extends SliverPersistentHeaderDelegate {
     double shrinkOffset,
     bool overlapsContent,
   ) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.97),
-        border: const Border(bottom: BorderSide(color: _C.cardBorder)),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x0D000000),
-            blurRadius: 4,
-            offset: Offset(0, 1),
-          ),
-        ],
-      ),
-      // Reserve status-bar space manually so SafeArea doesn't compress us
-      padding: EdgeInsets.fromLTRB(16, topPadding + 12, 16, 12),
-      child: Column(
-        children: [
-          SizedBox(
-            height: 36,
-            child: Row(
-              children: [
-                const _BrandLogo(),
-                const Spacer(),
-                // Search appears only while the search bar is tucked away.
-                if (searchCollapsed)
-                  _HeaderIcon(
-                    icon: Icons.search_rounded,
-                    tooltip: 'Search',
-                    onTap: onSearchTap,
-                  ),
-                // ── Saved (same screen as the "Saved items" pill) ──
-                _HeaderIcon(
-                  icon: Icons.favorite_border_rounded,
-                  tooltip: 'Saved items',
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const SavedScreen()),
-                    );
-                  },
-                ),
-                // ── Chat ───────────────────────────────────────────
-                _HeaderIcon(
-                  icon: Icons.chat_bubble_outline_rounded,
-                  tooltip: 'Messages',
-                  onTap: () {},
-                ),
-                // ── Cart (badge mirrors the live cart count) ───────
-                ValueListenableBuilder<int>(
-                  valueListenable: BuyerApi.cartItemCount,
-                  builder: (context, count, _) => _HeaderIcon(
-                    icon: Icons.shopping_cart_outlined,
-                    tooltip: 'Cart',
-                    badge: '$count',
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const CartScreen()),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (!searchCollapsed) ...[
-            const SizedBox(height: 8),
-            // Takes whatever height is left so the header can never overflow.
-            Expanded(child: _SearchBar(focusNode: searchFocus)),
-          ],
-        ],
-      ),
+    final range = maxExtent - minExtent;
+    final progress = (shrinkOffset / range).clamp(0.0, 1.0);
+    return _HomeHeader(
+      topPadding: topPadding,
+      onSearchTap: onSearchTap,
+      progress: progress,
     );
   }
 
   @override
-  bool shouldRebuild(covariant _StickyHeaderDelegate oldDelegate) =>
-      oldDelegate.topPadding != topPadding ||
-      oldDelegate.searchCollapsed != searchCollapsed ||
-      oldDelegate.onSearchTap != onSearchTap ||
-      oldDelegate.searchFocus != searchFocus;
+  bool shouldRebuild(covariant _HomeHeaderDelegate oldDelegate) =>
+      topPadding != oldDelegate.topPadding ||
+      onSearchTap != oldDelegate.onSearchTap;
+}
+
+/// [progress] goes from 0 (fully expanded, search bar visible) to 1 (fully
+/// collapsed, only the brand row with the search icon).
+class _HomeHeader extends StatefulWidget {
+  final double topPadding;
+  final VoidCallback onSearchTap;
+  final double progress;
+
+  const _HomeHeader({
+    required this.topPadding,
+    required this.onSearchTap,
+    required this.progress,
+  });
+
+  @override
+  State<_HomeHeader> createState() => _HomeHeaderState();
+}
+
+class _HomeHeaderState extends State<_HomeHeader>
+    with SingleTickerProviderStateMixin {
+  // Drives the slow back-and-forth movement of the gradient.
+  late final AnimationController _ctrl = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 6),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final topPadding = widget.topPadding;
+    final onSearchTap = widget.onSearchTap;
+    final progress = widget.progress;
+
+    // The search bar fades out quickly (gone by ~60% of the collapse), and the
+    // header search icon fades in as the bar disappears.
+    final searchBarOpacity = (1 - progress * 1.6).clamp(0.0, 1.0);
+    final searchIconT = ((progress - 0.4) / 0.6).clamp(0.0, 1.0);
+
+    const rowTopOffset = _HomeHeaderDelegate._vPad;
+    const rowHeight = _HomeHeaderDelegate._rowHeight;
+    const gap = _HomeHeaderDelegate._gap;
+    const searchHeight = _HomeHeaderDelegate._searchHeight;
+
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, _) {
+        final t = Curves.easeInOut.transform(_ctrl.value);
+        return Container(
+          decoration: BoxDecoration(
+            // Lavender and warm gold tint (plum + gold theme) that slowly slides
+            gradient: LinearGradient(
+              begin: Alignment(-1 + 2 * t, -0.5),
+              end: Alignment(1 + 2 * t, 0.5),
+              tileMode: TileMode.mirror,
+              colors: const [
+                Color(0xFFEADCF2),
+                Color(0xFFF6EEF9),
+                Color(0xFFFBEFD0),
+              ],
+            ),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x1A2E1535),
+                blurRadius: 8,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          // Children are positioned by hand so the content never overflows
+          // while the header shrinks; whatever sticks out is clipped.
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              // ── Brand row: logo + icons (always visible) ────────
+              Positioned(
+                left: 16,
+                right: 16,
+                top: topPadding + rowTopOffset,
+                height: rowHeight,
+                child: Row(
+                  children: [
+                    const _BrandLogo(),
+                    const Spacer(),
+                    // ── Search icon (appears once the search bar is gone) ──
+                    ClipRect(
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        widthFactor: searchIconT,
+                        child: IgnorePointer(
+                          ignoring: searchIconT < 0.5,
+                          child: Opacity(
+                            opacity: searchIconT,
+                            child: _HeaderIcon(
+                              icon: Icons.search_rounded,
+                              tooltip: 'Search',
+                              onTap: onSearchTap,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    // ── Saved (same screen as the "Saved items" pill) ──
+                    _HeaderIcon(
+                      icon: Icons.favorite_border_rounded,
+                      tooltip: 'Saved items',
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const SavedScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                    // ── Chat ───────────────────────────────────────────
+                    _HeaderIcon(
+                      icon: Icons.chat_bubble_outline_rounded,
+                      tooltip: 'Messages',
+                      onTap: () {},
+                    ),
+                    // ── Cart (badge mirrors the live cart count) ───────
+                    ValueListenableBuilder<int>(
+                      valueListenable: BuyerApi.cartItemCount,
+                      builder: (context, count, _) => _HeaderIcon(
+                        icon: Icons.shopping_cart_outlined,
+                        tooltip: 'Cart',
+                        badge: '$count',
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const CartScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // ── Search bar (fades out while scrolling up) ───────
+              Positioned(
+                left: 16,
+                right: 16,
+                top: topPadding + rowTopOffset + rowHeight + gap,
+                height: searchHeight,
+                child: IgnorePointer(
+                  ignoring: searchBarOpacity < 0.5,
+                  child: Opacity(
+                    opacity: searchBarOpacity,
+                    child: _SearchBar(onTap: onSearchTap),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }
 
 /// Vendo logo image + "vendo" wordmark
@@ -572,50 +645,61 @@ class _HeaderIcon extends StatelessWidget {
   }
 }
 
-/// Pill search bar: search icon on the left, camera on the right.
+/// Pill search bar. It opens the search page, where typing searches products
+/// and shops live; keeping text input off the pinned header also keeps the
+/// Home sliver's element tree stable while the keyboard opens and on reload.
 class _SearchBar extends StatelessWidget {
-  final FocusNode? focusNode;
-  const _SearchBar({this.focusNode});
+  final VoidCallback onTap;
+
+  const _SearchBar({required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.only(left: 14, right: 4),
-      decoration: BoxDecoration(
-        color: _C.bg,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: _C.cardBorder),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            Icons.search_rounded,
-            color: _C.plum.withValues(alpha: 0.6),
-            size: 18,
+    return Semantics(
+      button: true,
+      label: 'Search products or shops',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.only(left: 14, right: 4),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            // Thin dark purple outline
+            border: Border.all(color: _C.plum, width: 1),
           ),
-          Expanded(
-            child: TextField(
-              focusNode: focusNode,
-              decoration: const InputDecoration(
-                hintText: 'Search in Vendo...',
-                hintStyle: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(horizontal: 10),
+          child: Row(
+            children: [
+              Icon(
+                Icons.search_rounded,
+                color: _C.plum.withValues(alpha: 0.6),
+                size: 18,
               ),
-              style: TextStyle(fontSize: 12, color: _C.ink),
-            ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Search products or shops...',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: const Color(0xFF9CA3AF),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: 28,
+                height: 28,
+                child: Icon(
+                  Icons.photo_camera_outlined,
+                  color: _C.plum.withValues(alpha: 0.6),
+                  size: 18,
+                ),
+              ),
+            ],
           ),
-          SizedBox(
-            width: 28,
-            height: 28,
-            child: Icon(
-              Icons.photo_camera_outlined,
-              color: _C.plum.withValues(alpha: 0.6),
-              size: 18,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1043,7 +1127,7 @@ class _SectionHeader extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Shop by category: white card with a sideways row of round icons
+// Shop by category: white card with a sideways row of round icons (no labels)
 // ─────────────────────────────────────────────────────────────────────────────
 /// Top-level categories from `GET /api/v1/buyer/home`.
 class _HomeCategory {
@@ -1083,7 +1167,7 @@ class _CategoryCard extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
         decoration: BoxDecoration(
           color: _C.white,
           borderRadius: BorderRadius.circular(12),
@@ -1129,7 +1213,7 @@ class _CategoryCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             SizedBox(
-              height: 84,
+              height: 48,
               child: ListView.separated(
                 scrollDirection: Axis.horizontal,
                 itemCount: categories.length,
@@ -1176,35 +1260,15 @@ class _CatTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: SizedBox(
-        width: 64,
-        child: Column(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: _C.lavenderBg,
-                shape: BoxShape.circle,
-                border: Border.all(color: _C.cardBorder),
-              ),
-              child: Icon(cat.icon, color: _C.lavenderMuted, size: 22),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              cat.label,
-              style: const TextStyle(
-                color: _C.muted,
-                fontSize: 10,
-                fontWeight: FontWeight.w500,
-                height: 1.2,
-              ),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
+      child: Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: _C.lavenderBg,
+          shape: BoxShape.circle,
+          border: Border.all(color: _C.cardBorder),
         ),
+        child: Icon(cat.icon, color: _C.lavenderMuted, size: 22),
       ),
     );
   }
@@ -1292,29 +1356,219 @@ class _ProductGrid extends StatelessWidget {
   final List<_Product> products;
   const _ProductGrid({required this.products});
 
+  /// Space between the two columns and between cards.
+  static const double gap = 6.0;
+
+  /// Rough height of a product card's text area (title, price, store row and
+  /// padding). Used only to size the tall banner so it spans two cards; tweak
+  /// this if the banner ends a little above or below the second card.
+  static const double cardDetailsHeight = 74.0;
+
+  /// Banner height as a multiple of one product card's height
+  /// (1.0 = same height as a card, 1.25 = a little bit taller).
+  static const double bannerHeightFactor = 1.25;
+
   @override
   Widget build(BuildContext context) {
-    const gap = 6.0; // space between the two columns and between cards
-    final left = <Widget>[];
-    final right = <Widget>[];
-    for (var i = 0; i < products.length; i++) {
-      final card = Padding(
-        padding: const EdgeInsets.only(bottom: gap),
-        child: _ProductCard(product: products[i]),
-      );
-      (i.isEven ? left : right).add(card);
-    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Same math as the layout below: 8px edges and one gap in the middle.
+        final columnWidth = (constraints.maxWidth - 16 - gap) / 2;
+        final bannerHeight =
+            bannerHeightFactor * (columnWidth + cardDetailsHeight);
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8), // left/right edge
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(children: [const SizedBox(height: 24), ...left]),
+        final left = <Widget>[
+          Padding(
+            padding: const EdgeInsets.only(bottom: gap),
+            child: SizedBox(
+              height: bannerHeight,
+              child: const _TallBannerCarousel(),
+            ),
           ),
-          const SizedBox(width: gap),
-          Expanded(child: Column(children: right)),
+        ];
+        final right = <Widget>[];
+
+        // The banner counts as `bannerHeightFactor` cards in the left column;
+        // each product goes to the shorter column so the bottoms stay close.
+        var leftWeight = bannerHeightFactor;
+        var rightWeight = 0.0;
+        for (final product in products) {
+          final card = Padding(
+            padding: const EdgeInsets.only(bottom: gap),
+            child: _ProductCard(product: product),
+          );
+          if (rightWeight < leftWeight) {
+            right.add(card);
+            rightWeight += 1;
+          } else {
+            left.add(card);
+            leftWeight += 1;
+          }
+        }
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8), // left/right edge
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: Column(children: left)),
+              const SizedBox(width: gap),
+              Expanded(child: Column(children: right)),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tall banner carousel (top of the left column). Slides every 4.5 seconds.
+// ─────────────────────────────────────────────────────────────────────────────
+class _TallBannerCarousel extends StatefulWidget {
+  /// Put your real banner widgets here later. While this is null or empty,
+  /// three empty placeholder slides are shown.
+  final List<Widget>? slides;
+
+  const _TallBannerCarousel({this.slides});
+
+  @override
+  State<_TallBannerCarousel> createState() => _TallBannerCarouselState();
+}
+
+class _TallBannerCarouselState extends State<_TallBannerCarousel> {
+  static const _autoSlideInterval = Duration(milliseconds: 4500);
+  static const _slideDuration = Duration(milliseconds: 450);
+
+  final PageController _pageCtrl = PageController();
+  Timer? _timer;
+  int _page = 0;
+  bool _autoSliding = false;
+
+  static const _placeholderGradients = <List<Color>>[
+    [Color(0xFFEADCF2), Color(0xFFF6EEF9)],
+    [Color(0xFFFBEFD0), Color(0xFFF6EEF9)],
+    [Color(0xFFD3BEDE), Color(0xFFEADCF2)],
+  ];
+
+  List<Widget> get _slides {
+    final given = widget.slides;
+    if (given != null && given.isNotEmpty) return given;
+    return [
+      for (final colors in _placeholderGradients)
+        Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: colors,
+            ),
+          ),
+          child: Center(
+            child: Icon(
+              Icons.image_outlined,
+              size: 36,
+              color: _C.lavenderMuted.withValues(alpha: 0.6),
+            ),
+          ),
+        ),
+    ];
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _startTimer();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TallBannerCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _startTimer();
+  }
+
+  /// One timer, only while there is more than one slide.
+  void _startTimer() {
+    _timer?.cancel();
+    _timer = null;
+    if (_slides.length > 1) {
+      _timer = Timer.periodic(_autoSlideInterval, (_) => _showNext());
+    }
+  }
+
+  void _showNext() {
+    if (!mounted || !_pageCtrl.hasClients) return;
+    _autoSliding = true;
+    _pageCtrl
+        .nextPage(duration: _slideDuration, curve: Curves.easeInOut)
+        .whenComplete(() => _autoSliding = false);
+  }
+
+  /// A shopper's swipe restarts the countdown so the slide stays readable.
+  void _onPageChanged(int index) {
+    setState(() => _page = index);
+    if (_autoSliding) return;
+    _startTimer();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _pageCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final slides = _slides;
+    final count = slides.length;
+    final active = _page % count;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: _C.white,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _C.cardBorder),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: PageView.builder(
+              controller: _pageCtrl,
+              // Endless forward sliding; a single slide stays put.
+              itemCount: count > 1 ? null : 1,
+              onPageChanged: _onPageChanged,
+              itemBuilder: (_, i) => slides[i % count],
+            ),
+          ),
+          if (count > 1)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 10,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  count,
+                  (index) => AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    margin: const EdgeInsets.symmetric(horizontal: 2.5),
+                    width: index == active ? 14 : 5,
+                    height: 5,
+                    decoration: BoxDecoration(
+                      color: index == active
+                          ? _C.plum
+                          : Colors.white.withValues(alpha: 0.9),
+                      borderRadius: BorderRadius.circular(99),
+                      boxShadow: const [
+                        BoxShadow(color: Color(0x22000000), blurRadius: 2),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1324,6 +1578,10 @@ class _ProductGrid extends StatelessWidget {
 class _Product {
   final int id;
   final String image;
+
+  /// Nullable because a hot reload leaves the new field empty on view models
+  /// that were built before it existed; readers treat that as "no photos".
+  final List<String>? images;
   final String title, price, sold, delivery, location;
   final String province, municipality;
   final IconData icon;
@@ -1346,6 +1604,7 @@ class _Product {
     this.municipality = '',
     this.id = 0,
     this.image = '',
+    this.images = const [],
     this.discount,
     this.discountPercent = 0,
     this.soldCount = 0,
@@ -1356,6 +1615,7 @@ class _Product {
   factory _Product.fromApi(ApiProduct product) => _Product(
     id: product.id,
     image: product.image,
+    images: product.images,
     title: product.name,
     price: product.price.replaceFirst('₱', ''),
     sold: product.sold > 0 ? '${product.sold} sold' : 'New arrival',
@@ -1406,7 +1666,91 @@ class _ProductCard extends StatefulWidget {
 }
 
 class _ProductCardState extends State<_ProductCard> {
+  /// A card with several photos cycles through them on its own.
+  static const _autoSlideInterval = Duration(milliseconds: 4500);
+  static const _slideDuration = Duration(milliseconds: 450);
+
   bool _liked = false;
+  int _imageIndex = 0;
+  bool _autoSliding = false;
+  Timer? _slideTimer;
+  final PageController _pageCtrl = PageController();
+
+  /// Photos shown on the card: every product photo, or the single cover image.
+  List<String> get _photos {
+    final photos = (widget.product.images ?? const <String>[])
+        .where((url) => url.trim().isNotEmpty)
+        .toList();
+    return photos.isNotEmpty ? photos : [widget.product.image];
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _syncAutoSlide();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ProductCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncAutoSlide();
+  }
+
+  /// Keeps one timer per card, and only while there is more than one photo.
+  void _syncAutoSlide() {
+    if (_photos.length > 1) {
+      _slideTimer ??= Timer.periodic(_autoSlideInterval, (_) => _showNext());
+    } else {
+      _slideTimer?.cancel();
+      _slideTimer = null;
+    }
+    if (_imageIndex >= _photos.length) {
+      _imageIndex = 0;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _pageCtrl.hasClients) _pageCtrl.jumpToPage(0);
+      });
+    }
+  }
+
+  void _showNext() {
+    if (!mounted || !_pageCtrl.hasClients) return;
+    final count = _photos.length;
+    if (count < 2) return;
+    _autoSliding = true;
+    _pageCtrl
+        .animateToPage(
+          (_imageIndex + 1) % count,
+          duration: _slideDuration,
+          curve: Curves.easeInOut,
+        )
+        .whenComplete(() => _autoSliding = false);
+  }
+
+  /// A shopper's swipe restarts the countdown so the next photo stays readable.
+  void _onPageChanged(int index) {
+    setState(() => _imageIndex = index);
+    if (_autoSliding) return;
+    _slideTimer?.cancel();
+    _slideTimer = Timer.periodic(_autoSlideInterval, (_) => _showNext());
+  }
+
+  Widget _photo(String url) => Image.network(
+    url,
+    fit: BoxFit.cover,
+    errorBuilder: (_, __, ___) => Container(
+      color: _C.lavenderBg,
+      child: Center(
+        child: Icon(widget.product.icon, size: 40, color: _C.lavenderMuted),
+      ),
+    ),
+  );
+
+  @override
+  void dispose() {
+    _slideTimer?.cancel();
+    _pageCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1422,7 +1766,7 @@ class _ProductCardState extends State<_ProductCard> {
       child: Container(
         decoration: BoxDecoration(
           color: _C.white,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(6),
           border: Border.all(color: _C.cardBorder),
         ),
         clipBehavior: Clip.antiAlias,
@@ -1439,20 +1783,14 @@ class _ProductCardState extends State<_ProductCard> {
                 child: Stack(
                   children: [
                     Positioned.fill(
-                      child: Image.network(
-                        p.image,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
-                          color: _C.lavenderBg,
-                          child: Center(
-                            child: Icon(
-                              p.icon,
-                              size: 40,
-                              color: _C.lavenderMuted,
-                            ),
-                          ),
-                        ),
-                      ),
+                      child: _photos.length > 1
+                          ? PageView.builder(
+                              controller: _pageCtrl,
+                              itemCount: _photos.length,
+                              onPageChanged: _onPageChanged,
+                              itemBuilder: (_, index) => _photo(_photos[index]),
+                            )
+                          : _photo(_photos.first),
                     ),
                     // Discount badge (top-left, flush to the corner)
                     if (p.discount != null)
@@ -1505,6 +1843,31 @@ class _ProductCardState extends State<_ProductCard> {
                         ),
                       ),
                     ),
+                    // Photo dots (bottom-center) when the card slides
+                    if (_photos.length > 1)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 6,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: List.generate(
+                            _photos.length,
+                            (index) => AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              margin: const EdgeInsets.symmetric(horizontal: 2),
+                              width: index == _imageIndex ? 12 : 5,
+                              height: 5,
+                              decoration: BoxDecoration(
+                                color: index == _imageIndex
+                                    ? _C.plum
+                                    : Colors.white.withValues(alpha: 0.85),
+                                borderRadius: BorderRadius.circular(99),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -1754,7 +2117,7 @@ class _CategorySkeleton extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
         decoration: BoxDecoration(
           color: _C.white,
           borderRadius: BorderRadius.circular(12),
@@ -1771,26 +2134,16 @@ class _CategorySkeleton extends StatelessWidget {
                   _Bone(width: 44, height: 12),
                 ],
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
               SizedBox(
-                height: 78,
+                height: 48,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   physics: const NeverScrollableScrollPhysics(),
                   itemCount: 6,
                   separatorBuilder: (_, __) => const SizedBox(width: 16),
-                  itemBuilder: (_, __) => const SizedBox(
-                    width: 64,
-                    child: Column(
-                      children: [
-                        _Bone(width: 48, height: 48, radius: 24),
-                        SizedBox(height: 8),
-                        _Bone(width: 44, height: 8, radius: 4),
-                        SizedBox(height: 4),
-                        _Bone(width: 32, height: 8, radius: 4),
-                      ],
-                    ),
-                  ),
+                  itemBuilder: (_, __) =>
+                      const _Bone(width: 48, height: 48, radius: 24),
                 ),
               ),
             ],
@@ -1806,37 +2159,49 @@ class _ProductGridSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const gap = 6.0;
-    // Same staggered layout as the real grid so nothing jumps when data lands.
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: _Shimmer(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            Expanded(
-              child: Column(
-                children: [
-                  SizedBox(height: 24),
-                  _ProductCardSkeleton(),
-                  SizedBox(height: gap),
-                  _ProductCardSkeleton(),
-                ],
-              ),
+    const gap = _ProductGrid.gap;
+    // Same layout as the real grid (tall banner on the left) so nothing jumps
+    // when data lands.
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columnWidth = (constraints.maxWidth - 16 - gap) / 2;
+        final bannerHeight =
+            _ProductGrid.bannerHeightFactor *
+            (columnWidth + _ProductGrid.cardDetailsHeight);
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: _Shimmer(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    children: [
+                      SizedBox(
+                        width: double.infinity,
+                        child: _Bone(height: bannerHeight),
+                      ),
+                      const SizedBox(height: gap),
+                      const _ProductCardSkeleton(),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: gap),
+                const Expanded(
+                  child: Column(
+                    children: [
+                      _ProductCardSkeleton(),
+                      SizedBox(height: gap),
+                      _ProductCardSkeleton(),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            SizedBox(width: gap),
-            Expanded(
-              child: Column(
-                children: [
-                  _ProductCardSkeleton(),
-                  SizedBox(height: gap),
-                  _ProductCardSkeleton(),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }
