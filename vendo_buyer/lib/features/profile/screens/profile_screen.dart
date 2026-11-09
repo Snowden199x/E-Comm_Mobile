@@ -3,9 +3,17 @@ import 'package:flutter/services.dart';
 import 'package:vendo_buyer/core/api/buyer_api.dart';
 import 'package:vendo_buyer/features/auth/screens/login_screen.dart';
 import 'package:vendo_buyer/features/home/widgets/buyer_nav_bar.dart';
+import 'package:vendo_buyer/features/legal/screens/legal_screen.dart';
 import 'package:vendo_buyer/features/notifications/screens/notifications_screen.dart';
 import 'package:vendo_buyer/features/orders/screens/orders_screen.dart';
+import 'package:vendo_buyer/features/profile/screens/change_password_screen.dart';
+import 'package:vendo_buyer/features/profile/screens/delivery_address_screen.dart';
+import 'package:vendo_buyer/features/profile/screens/personal_information_screen.dart';
+import 'package:vendo_buyer/features/reviews/screens/my_reviews_screen.dart';
 import 'package:vendo_buyer/features/saved/screens/saved_screen.dart';
+import 'package:vendo_buyer/features/support/screens/help_faq_screen.dart';
+import 'package:vendo_buyer/features/support/screens/rate_app_screen.dart';
+import 'package:vendo_buyer/features/vouchers/screens/vouchers_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Palette — matches the rest of the buyer app
@@ -40,6 +48,7 @@ class BuyerProfileScreen extends StatefulWidget {
 class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
   String _name = '';
   String _email = '';
+  String _avatar = '';
   bool _loggingOut = false;
 
   @override
@@ -51,12 +60,36 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
   Future<void> _loadProfile() async {
     final name = await BuyerApi.instance.buyerName();
     final email = await BuyerApi.instance.buyerEmail();
-    if (mounted) {
+    final avatar = await BuyerApi.instance.buyerAvatar();
+    if (!mounted) return;
+    setState(() {
+      _name = name ?? 'Buyer';
+      _email = email ?? '';
+      _avatar = avatar ?? '';
+    });
+
+    // Refresh from the shared account record so a change made on the web or in
+    // a sub-screen shows up as soon as this tab is visible again.
+    try {
+      final buyer = await BuyerApi.instance.account();
+      if (!mounted) return;
       setState(() {
-        _name = name ?? 'Buyer';
-        _email = email ?? '';
+        _name = buyer.name;
+        _email = buyer.email;
+        _avatar = buyer.profilePicture ?? _avatar;
       });
+    } catch (_) {
+      // Offline: keep the values saved on the device.
     }
+  }
+
+  Future<void> _open(Widget screen) async {
+    HapticFeedback.selectionClick();
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => screen),
+    );
+    if (mounted) _loadProfile();
   }
 
   Future<void> _confirmLogout() async {
@@ -162,24 +195,23 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                         _MenuItem(
                           icon: Icons.person_outline_rounded,
                           label: 'Personal Information',
+                          onTap: () =>
+                              _open(const PersonalInformationScreen()),
                         ),
                         _MenuItem(
                           icon: Icons.location_on_outlined,
-                          label: 'Delivery Addresses',
+                          label: 'Delivery Address',
+                          onTap: () => _open(const DeliveryAddressScreen()),
                         ),
                         _MenuItem(
                           icon: Icons.lock_outline_rounded,
                           label: 'Change Password',
+                          onTap: () => _open(const ChangePasswordScreen()),
                         ),
                         _MenuItem(
                           icon: Icons.notifications_outlined,
                           label: 'Notifications',
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const NotificationsScreen(),
-                            ),
-                          ),
+                          onTap: () => _open(const NotificationsScreen()),
                         ),
                       ],
                     ),
@@ -192,26 +224,22 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                         _MenuItem(
                           icon: Icons.receipt_long_outlined,
                           label: 'My Orders',
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const OrdersScreen()),
-                          ),
+                          onTap: () => _open(const OrdersScreen()),
                         ),
                         _MenuItem(
                           icon: Icons.favorite_border_rounded,
                           label: 'Saved Items',
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const SavedScreen()),
-                          ),
+                          onTap: () => _open(const SavedScreen()),
                         ),
-                        const _MenuItem(
+                        _MenuItem(
                           icon: Icons.local_offer_outlined,
                           label: 'My Vouchers',
+                          onTap: () => _open(const VouchersScreen()),
                         ),
-                        const _MenuItem(
+                        _MenuItem(
                           icon: Icons.star_border_rounded,
                           label: 'My Reviews',
+                          onTap: () => _open(const MyReviewsScreen()),
                         ),
                       ],
                     ),
@@ -220,18 +248,16 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                     // ── Support section ─────────────────────────
                     _Section(
                       title: 'Support',
-                      items: const [
+                      items: [
                         _MenuItem(
                           icon: Icons.help_outline_rounded,
                           label: 'Help & FAQ',
-                        ),
-                        _MenuItem(
-                          icon: Icons.headset_mic_outlined,
-                          label: 'Contact Support',
+                          onTap: () => _open(const HelpFaqScreen()),
                         ),
                         _MenuItem(
                           icon: Icons.star_outline_rounded,
                           label: 'Rate the App',
+                          onTap: () => _open(const RateAppScreen()),
                         ),
                       ],
                     ),
@@ -240,14 +266,26 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                     // ── Legal section ───────────────────────────
                     _Section(
                       title: 'Legal',
-                      items: const [
+                      items: [
                         _MenuItem(
                           icon: Icons.description_outlined,
                           label: 'Terms & Conditions',
+                          onTap: () => _open(
+                            const LegalScreen(
+                              page: 'terms',
+                              title: 'Terms & Conditions',
+                            ),
+                          ),
                         ),
                         _MenuItem(
                           icon: Icons.privacy_tip_outlined,
                           label: 'Privacy Policy',
+                          onTap: () => _open(
+                            const LegalScreen(
+                              page: 'privacy',
+                              title: 'Privacy Policy',
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -296,16 +334,30 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                   color: _C.orange,
                   shape: BoxShape.circle,
                 ),
-                child: Container(
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF5C3275),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.person_rounded,
-                    color: Colors.white,
-                    size: 40,
-                  ),
+                child: ClipOval(
+                  child: _avatar.isEmpty
+                      ? Container(
+                          color: const Color(0xFF5C3275),
+                          child: const Icon(
+                            Icons.person_rounded,
+                            color: Colors.white,
+                            size: 40,
+                          ),
+                        )
+                      : Image.network(
+                          _avatar,
+                          width: 66,
+                          height: 66,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => Container(
+                            color: const Color(0xFF5C3275),
+                            child: const Icon(
+                              Icons.person_rounded,
+                              color: Colors.white,
+                              size: 40,
+                            ),
+                          ),
+                        ),
                 ),
               ),
               Positioned(
@@ -392,7 +444,7 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
 
           // Edit button
           IconButton(
-            onPressed: () {},
+            onPressed: () => _open(const PersonalInformationScreen()),
             icon: Container(
               width: 34,
               height: 34,
@@ -415,11 +467,9 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
   // ── Order status quick-jump bar ───────────────────────────────────────────
   Widget _buildOrderBar() {
     const statuses = [
-      _OrderStatus(Icons.payments_outlined, 'To Pay'),
-      _OrderStatus(Icons.local_shipping_outlined, 'To Ship'),
-      _OrderStatus(Icons.inventory_2_outlined, 'To Receive'),
-      _OrderStatus(Icons.rate_review_outlined, 'To Review'),
-      _OrderStatus(Icons.assignment_return_outlined, 'Returns'),
+      _OrderStatus(Icons.local_shipping_outlined, 'To Ship', 'to_ship'),
+      _OrderStatus(Icons.inventory_2_outlined, 'To Receive', 'to_receive'),
+      _OrderStatus(Icons.rate_review_outlined, 'To Review', 'to_review'),
     ];
 
     return Container(
@@ -446,7 +496,7 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                 ),
                 const Spacer(),
                 GestureDetector(
-                  onTap: () {},
+                  onTap: () => _open(const OrdersScreen()),
                   child: const Row(
                     children: [
                       Text(
@@ -468,7 +518,7 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
             children: statuses.map((s) {
               return Expanded(
                 child: GestureDetector(
-                  onTap: () {},
+                  onTap: () => _open(OrdersScreen(initialGroup: s.group)),
                   child: Column(
                     children: [
                       Container(
@@ -553,8 +603,9 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
 class _OrderStatus {
   final IconData icon;
   final String label;
+  final String group;
 
-  const _OrderStatus(this.icon, this.label);
+  const _OrderStatus(this.icon, this.label, this.group);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -664,5 +715,5 @@ class _MenuItem extends StatelessWidget {
         ),
       ),
     );
-  }//
+  }
 }

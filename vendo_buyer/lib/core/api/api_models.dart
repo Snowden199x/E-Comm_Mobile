@@ -7,9 +7,14 @@ double _num(dynamic value) {
   return double.tryParse(value?.toString() ?? '') ?? 0;
 }
 
-int _int(dynamic value) => value is num ? value.toInt() : int.tryParse('$value') ?? 0;
+int _int(dynamic value) =>
+    value is num ? value.toInt() : int.tryParse('$value') ?? 0;
 
 bool _bool(dynamic value) => value == true || value == 1 || value == '1';
+
+/// A field of a nested object, without caring whether the server sent one.
+String? _child(dynamic map, String key) =>
+    map is Map ? map[key]?.toString() : null;
 
 class ApiProduct {
   final int id;
@@ -19,6 +24,7 @@ class ApiProduct {
   final String? compareAtPrice;
   final int discountPercent;
   final String image;
+  final List<String> images;
   final String shop;
   final int shopId;
   final String province;
@@ -42,6 +48,7 @@ class ApiProduct {
     required this.stock,
     this.province = '',
     this.municipality = '',
+    this.images = const [],
     this.compareAtPrice,
     this.discountPercent = 0,
     this.rating,
@@ -60,6 +67,7 @@ class ApiProduct {
     compareAtPrice: json['compare_at_price']?.toString(),
     discountPercent: _int(json['discount_percent']),
     image: json['image']?.toString() ?? '',
+    images: (json['images'] as List?)?.map((e) => '$e').toList() ?? const [],
     shop: json['shop']?.toString() ?? '',
     shopId: _int(json['shop_id']),
     province: json['province']?.toString() ?? '',
@@ -164,7 +172,8 @@ class ApiProductDetail {
       product: ApiProduct.fromJson(product),
       description: product['description']?.toString(),
       category: product['category']?.toString(),
-      images: (product['images'] as List?)?.map((e) => '$e').toList() ?? const [],
+      images:
+          (product['images'] as List?)?.map((e) => '$e').toList() ?? const [],
       variants: (product['variants'] as List? ?? [])
           .map((e) => ApiVariant.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
@@ -172,7 +181,9 @@ class ApiProductDetail {
           .map((e) => ApiSpec('${e['name']}', '${e['value']}'))
           .toList(),
       seller: product['seller'] is Map
-          ? ApiSeller.fromJson(Map<String, dynamic>.from(product['seller'] as Map))
+          ? ApiSeller.fromJson(
+              Map<String, dynamic>.from(product['seller'] as Map),
+            )
           : null,
       recommended: (json['recommended'] as List? ?? [])
           .map((e) => ApiProduct.fromJson(Map<String, dynamic>.from(e as Map)))
@@ -321,6 +332,13 @@ class ApiOrder {
   final String? placedAtLabel;
   final bool canCancel;
 
+  /// Same grouping the web My Orders tabs use: to_ship, in_transit, delivered,
+  /// cancelled or returned.
+  final String shipmentGroup;
+
+  /// Completed order items that still need a review.
+  final int reviewPending;
+
   const ApiOrder({
     required this.id,
     required this.number,
@@ -334,6 +352,8 @@ class ApiOrder {
     required this.image,
     this.placedAtLabel,
     this.canCancel = false,
+    this.shipmentGroup = '',
+    this.reviewPending = 0,
   });
 
   factory ApiOrder.fromJson(Map<String, dynamic> json) => ApiOrder(
@@ -349,6 +369,8 @@ class ApiOrder {
     image: json['image']?.toString() ?? '',
     placedAtLabel: json['placed_at_label']?.toString(),
     canCancel: _bool(json['can_cancel']),
+    shipmentGroup: json['shipment_group']?.toString() ?? '',
+    reviewPending: _int(json['review_pending']),
   );
 }
 
@@ -360,6 +382,7 @@ class ApiOrderItem {
   final String price;
   final String? color;
   final String? size;
+  final bool reviewed;
 
   const ApiOrderItem({
     required this.id,
@@ -369,6 +392,7 @@ class ApiOrderItem {
     required this.price,
     this.color,
     this.size,
+    this.reviewed = false,
   });
 
   factory ApiOrderItem.fromJson(Map<String, dynamic> json) => ApiOrderItem(
@@ -379,6 +403,7 @@ class ApiOrderItem {
     price: json['price']?.toString() ?? '',
     color: json['color']?.toString(),
     size: json['size']?.toString(),
+    reviewed: _bool(json['reviewed']),
   );
 }
 
@@ -410,7 +435,9 @@ class ApiOrderDetail {
     moneyStatusLabel: json['money_status_label']?.toString(),
     voucherCode: json['voucher_code']?.toString(),
     voucherDiscount: json['voucher_discount']?.toString(),
-    timeline: (json['timeline'] as List? ?? []).map((e) => '${e['label']}').toList(),
+    timeline: (json['timeline'] as List? ?? [])
+        .map((e) => '${e['label']}')
+        .toList(),
   );
 }
 
@@ -421,20 +448,51 @@ class ApiNotification {
   final bool read;
   final String? timeAgo;
 
+  /// Notification kind from the server (`order_update`, `platform_announcement`,
+  /// …), the same field the web buyer page groups by. Nullable because a hot
+  /// reload leaves it empty on objects built before it existed; the card then
+  /// draws the generic bell icon.
+  final String? type;
+
+  /// The product the notification is about — the contents of the parcel — as the
+  /// server resolves it from the notification's link. Null for notifications
+  /// that point at nothing on sale (announcements, account notices).
+  final String? productName;
+  final String? productImage;
+
   const ApiNotification({
     required this.id,
     required this.title,
     required this.message,
     required this.read,
     this.timeAgo,
+    this.type,
+    this.productName,
+    this.productImage,
   });
 
-  factory ApiNotification.fromJson(Map<String, dynamic> json) => ApiNotification(
-    id: _int(json['id']),
-    title: json['title']?.toString() ?? '',
-    message: json['message']?.toString() ?? '',
-    read: _bool(json['read']),
-    timeAgo: json['time_ago']?.toString(),
+  factory ApiNotification.fromJson(Map<String, dynamic> json) =>
+      ApiNotification(
+        id: _int(json['id']),
+        title: json['title']?.toString() ?? '',
+        message: json['message']?.toString() ?? '',
+        read: _bool(json['read']),
+        timeAgo: json['time_ago']?.toString(),
+        type: json['type']?.toString(),
+        productName: _child(json['product'], 'name'),
+        productImage: _child(json['product'], 'image'),
+      );
+
+  /// The same record after the server (or the screen) marked it read.
+  ApiNotification copyWith({bool? read}) => ApiNotification(
+    id: id,
+    title: title,
+    message: message,
+    read: read ?? this.read,
+    timeAgo: timeAgo,
+    type: type,
+    productName: productName,
+    productImage: productImage,
   );
 }
 
@@ -443,6 +501,7 @@ class ApiBuyer {
   final String name;
   final String email;
   final String? phone;
+  final String? profilePicture;
   final Map<String, dynamic>? address;
 
   const ApiBuyer({
@@ -450,6 +509,7 @@ class ApiBuyer {
     required this.name,
     required this.email,
     this.phone,
+    this.profilePicture,
     this.address,
   });
 
@@ -458,7 +518,218 @@ class ApiBuyer {
     name: json['name']?.toString() ?? '',
     email: json['email']?.toString() ?? '',
     phone: json['phone_number']?.toString(),
-    address: json['address'] is Map ? Map<String, dynamic>.from(json['address'] as Map) : null,
+    profilePicture: json['profile_picture']?.toString(),
+    address: json['address'] is Map
+        ? Map<String, dynamic>.from(json['address'] as Map)
+        : null,
+  );
+
+  String get province => _child(address, 'province') ?? '';
+  String get municipality => _child(address, 'municipality') ?? '';
+  String get barangay => _child(address, 'barangay') ?? '';
+  String get street => _child(address, 'street') ?? '';
+  String get houseNo => _child(address, 'house_no') ?? '';
+  String get zipCode => _child(address, 'zip_code') ?? '';
+}
+
+/// A shop voucher as the My Vouchers screen shows it. Distinct from
+/// [ApiVoucher], which is one shop's checkout quote.
+class ApiShopVoucher {
+  final int id;
+  final int shopId;
+  final String shop;
+  final String name;
+  final String code;
+  final String discountLabel;
+  final String scopeLabel;
+  final String minSpendLabel;
+  final String? maxDiscountLabel;
+  final String validLabel;
+  final int usesLeft;
+  final int? shopUsesLeft;
+  final bool usable;
+  final String? unavailableReason;
+
+  const ApiShopVoucher({
+    required this.id,
+    required this.shopId,
+    required this.shop,
+    required this.name,
+    required this.code,
+    required this.discountLabel,
+    required this.scopeLabel,
+    required this.minSpendLabel,
+    required this.validLabel,
+    required this.usesLeft,
+    required this.usable,
+    this.maxDiscountLabel,
+    this.shopUsesLeft,
+    this.unavailableReason,
+  });
+
+  factory ApiShopVoucher.fromJson(Map<String, dynamic> json) => ApiShopVoucher(
+    id: _int(json['id']),
+    shopId: _int(json['shop_id']),
+    shop: json['shop']?.toString() ?? '',
+    name: json['name']?.toString() ?? '',
+    code: json['code']?.toString() ?? '',
+    discountLabel: json['discount_label']?.toString() ?? '',
+    scopeLabel: json['scope_label']?.toString() ?? '',
+    minSpendLabel: json['min_spend_label']?.toString() ?? '',
+    maxDiscountLabel: json['max_discount_label']?.toString(),
+    validLabel: json['valid_label']?.toString() ?? '',
+    usesLeft: _int(json['uses_left']),
+    shopUsesLeft: json['shop_uses_left'] == null
+        ? null
+        : _int(json['shop_uses_left']),
+    usable: _bool(json['usable']),
+    unavailableReason: json['unavailable_reason']?.toString(),
+  );
+}
+
+class ApiReviewReply {
+  final String body;
+  final String? atLabel;
+
+  const ApiReviewReply({required this.body, this.atLabel});
+
+  factory ApiReviewReply.fromJson(Map<String, dynamic> json) => ApiReviewReply(
+    body: json['body']?.toString() ?? '',
+    atLabel: json['at_label']?.toString(),
+  );
+}
+
+/// One of the signed-in Buyer's own product reviews.
+class ApiReview {
+  final int id;
+  final int orderId;
+  final int productId;
+  final String productName;
+  final String image;
+  final String shop;
+  final int rating;
+  final String comment;
+  final String visibility;
+  final String? createdAtLabel;
+  final ApiReviewReply? reply;
+
+  const ApiReview({
+    required this.id,
+    required this.orderId,
+    required this.productId,
+    required this.productName,
+    required this.image,
+    required this.shop,
+    required this.rating,
+    required this.comment,
+    this.visibility = 'published',
+    this.createdAtLabel,
+    this.reply,
+  });
+
+  factory ApiReview.fromJson(Map<String, dynamic> json) => ApiReview(
+    id: _int(json['id']),
+    orderId: _int(json['order_id']),
+    productId: _int(json['product_id']),
+    productName: json['product_name']?.toString() ?? '',
+    image: json['image']?.toString() ?? '',
+    shop: json['shop']?.toString() ?? '',
+    rating: _int(json['rating']),
+    comment: json['comment']?.toString() ?? '',
+    visibility: json['visibility']?.toString() ?? 'published',
+    createdAtLabel: json['created_at_label']?.toString(),
+    reply: json['reply'] is Map
+        ? ApiReviewReply.fromJson(Map<String, dynamic>.from(json['reply'] as Map))
+        : null,
+  );
+}
+
+/// A block of a legal page. `type` is heading, paragraph or bullet.
+class ApiContentBlock {
+  final String type;
+  final String text;
+  final int level;
+
+  const ApiContentBlock({
+    required this.type,
+    required this.text,
+    this.level = 0,
+  });
+
+  factory ApiContentBlock.fromJson(Map<String, dynamic> json) =>
+      ApiContentBlock(
+        type: json['type']?.toString() ?? 'paragraph',
+        text: json['text']?.toString() ?? '',
+        level: _int(json['level']),
+      );
+}
+
+class ApiContentPage {
+  final String title;
+  final String? updatedLabel;
+  final List<ApiContentBlock> blocks;
+
+  const ApiContentPage({
+    required this.title,
+    required this.blocks,
+    this.updatedLabel,
+  });
+
+  factory ApiContentPage.fromJson(Map<String, dynamic> json) => ApiContentPage(
+    title: json['title']?.toString() ?? '',
+    updatedLabel: json['updated_label']?.toString(),
+    blocks: (json['blocks'] as List? ?? [])
+        .map((e) => ApiContentBlock.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList(),
+  );
+}
+
+class ApiFaqItem {
+  final String question;
+  final String answer;
+
+  const ApiFaqItem({required this.question, required this.answer});
+
+  factory ApiFaqItem.fromJson(Map<String, dynamic> json) => ApiFaqItem(
+    question: json['question']?.toString() ?? '',
+    answer: json['answer']?.toString() ?? '',
+  );
+}
+
+class ApiFaqGroup {
+  final String title;
+  final List<ApiFaqItem> items;
+
+  const ApiFaqGroup({required this.title, required this.items});
+
+  factory ApiFaqGroup.fromJson(Map<String, dynamic> json) => ApiFaqGroup(
+    title: json['title']?.toString() ?? '',
+    items: (json['items'] as List? ?? [])
+        .map((e) => ApiFaqItem.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList(),
+  );
+}
+
+class ApiFaqPage {
+  final String title;
+  final String intro;
+  final String? contactEmail;
+  final List<ApiFaqGroup> groups;
+
+  const ApiFaqPage({
+    required this.title,
+    required this.intro,
+    required this.groups,
+    this.contactEmail,
+  });
+
+  factory ApiFaqPage.fromJson(Map<String, dynamic> json) => ApiFaqPage(
+    title: json['title']?.toString() ?? '',
+    intro: json['intro']?.toString() ?? '',
+    contactEmail: json['contact_email']?.toString(),
+    groups: (json['groups'] as List? ?? [])
+        .map((e) => ApiFaqGroup.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList(),
   );
 }
 
@@ -534,15 +805,18 @@ class ApiCheckoutShop {
     this.vouchers = const [],
   });
 
-  factory ApiCheckoutShop.fromJson(Map<String, dynamic> json) => ApiCheckoutShop(
-    sellerId: _int(json['seller_id']),
-    shop: json['shop']?.toString() ?? '',
-    items: json['items']?.toString() ?? '',
-    itemsValue: _num(json['items_value']),
-    vouchers: (json['vouchers'] as List? ?? [])
-        .map((e) => ApiVoucher.fromJson(Map<String, dynamic>.from(e as Map)))
-        .toList(),
-  );
+  factory ApiCheckoutShop.fromJson(Map<String, dynamic> json) =>
+      ApiCheckoutShop(
+        sellerId: _int(json['seller_id']),
+        shop: json['shop']?.toString() ?? '',
+        items: json['items']?.toString() ?? '',
+        itemsValue: _num(json['items_value']),
+        vouchers: (json['vouchers'] as List? ?? [])
+            .map(
+              (e) => ApiVoucher.fromJson(Map<String, dynamic>.from(e as Map)),
+            )
+            .toList(),
+      );
 }
 
 class ApiCheckoutPreview {
@@ -558,14 +832,20 @@ class ApiCheckoutPreview {
     required this.defaultAddress,
   });
 
-  factory ApiCheckoutPreview.fromJson(Map<String, dynamic> json) => ApiCheckoutPreview(
-    revision: json['checkout_revision']?.toString() ?? '',
-    cart: ApiCart.fromJson(Map<String, dynamic>.from(json['cart'] as Map)),
-    shops: (json['shops'] as List? ?? [])
-        .map((e) => ApiCheckoutShop.fromJson(Map<String, dynamic>.from(e as Map)))
-        .toList(),
-    defaultAddress: Map<String, dynamic>.from((json['default_address'] as Map?) ?? const {}),
-  );
+  factory ApiCheckoutPreview.fromJson(Map<String, dynamic> json) =>
+      ApiCheckoutPreview(
+        revision: json['checkout_revision']?.toString() ?? '',
+        cart: ApiCart.fromJson(Map<String, dynamic>.from(json['cart'] as Map)),
+        shops: (json['shops'] as List? ?? [])
+            .map(
+              (e) =>
+                  ApiCheckoutShop.fromJson(Map<String, dynamic>.from(e as Map)),
+            )
+            .toList(),
+        defaultAddress: Map<String, dynamic>.from(
+          (json['default_address'] as Map?) ?? const {},
+        ),
+      );
 }
 
 class ApiShippingQuote {

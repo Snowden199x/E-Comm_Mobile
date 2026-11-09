@@ -40,6 +40,14 @@ class CachedNotifications {
   final DateTime cachedAt;
 }
 
+/// One page of the signed-in Buyer's notifications, plus the unread total.
+class ApiNotificationFeed {
+  const ApiNotificationFeed({required this.items, required this.unreadCount});
+
+  final List<ApiNotification> items;
+  final int unreadCount;
+}
+
 /// What happened when the offline outbox was flushed back to Vendo.
 class OfflineSyncReport {
   const OfflineSyncReport({
@@ -86,8 +94,9 @@ class BuyerApi {
   @visibleForTesting
   void useClient(http.Client client) => _client = client;
 
-  static String _ordersKey(String? status) =>
-      'offline:orders:${status == null || status.isEmpty ? 'all' : status}';
+  static String _ordersKey(String? status, String? group) =>
+      'offline:orders:${status == null || status.isEmpty ? 'all' : status}:'
+      '${group == null || group.isEmpty ? 'all' : group}';
   static String _orderKey(int id) => 'offline:order:$id';
   static const String _notificationsKey = 'offline:notifications';
 
@@ -96,6 +105,7 @@ class BuyerApi {
       (await _storage.read(key: 'buyer_token')) != null;
   Future<String?> buyerName() => _storage.read(key: 'buyer_name');
   Future<String?> buyerEmail() => _storage.read(key: 'buyer_email');
+  Future<String?> buyerAvatar() => _storage.read(key: 'buyer_avatar');
 
   Future<void> clearSession() async {
     await _storage.deleteAll();
@@ -419,22 +429,26 @@ class BuyerApi {
   }
 
   // ── Orders ─────────────────────────────────────────────────────────────────
-  Future<List<ApiOrder>> orders({String? status}) async {
+  /// [group] is the My Orders tab: to_ship, to_receive or to_review.
+  Future<List<ApiOrder>> orders({String? status, String? group}) async {
     final uri = Uri.parse('$baseUrl/orders').replace(queryParameters: {
       if (status != null && status.isNotEmpty) 'status': status,
+      if (group != null && group.isNotEmpty) 'group': group,
     });
-    final response = await http
+    final response = await _client
         .get(uri, headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
     final data = _check(response);
     // Keep the newest list on the device so orders survive a bad signal.
-    await OfflineStore.instance.cacheJson(_ordersKey(status), data);
+    await OfflineStore.instance.cacheJson(_ordersKey(status, group), data);
     return _orders(data);
   }
 
   /// The last order list this device saw, when the API cannot be reached.
-  Future<CachedOrders?> cachedOrders({String? status}) async {
-    final cached = await OfflineStore.instance.readJson(_ordersKey(status));
+  Future<CachedOrders?> cachedOrders({String? status, String? group}) async {
+    final cached = await OfflineStore.instance.readJson(
+      _ordersKey(status, group),
+    );
     if (cached == null) return null;
     return CachedOrders(
       items: _orders(cached.payload),
@@ -508,13 +522,41 @@ class BuyerApi {
   }
 
   // ── Notifications and account ──────────────────────────────────────────────
-  Future<List<ApiNotification>> notifications() async {
-    final response = await http
-        .get(Uri.parse('$baseUrl/notifications'), headers: await _authHeaders())
+  /// The Buyer's newest notifications plus the unread total.
+  ///
+  /// These are the rows the web buyer page reads, so anything created or read
+  /// on either side is visible here after the next refresh. [unreadOnly] maps
+  /// to the API's `filter=unread`.
+  Future<ApiNotificationFeed> notifications({bool unreadOnly = false}) async {
+    final response = await _client
+        .get(
+          Uri.parse(
+            '$baseUrl/notifications${unreadOnly ? '?filter=unread' : ''}',
+          ),
+          headers: await _authHeaders(),
+        )
         .timeout(const Duration(seconds: 25));
     final data = _check(response);
-    await OfflineStore.instance.cacheJson(_notificationsKey, data);
-    return _notifications(data);
+    // Only the unfiltered page is worth keeping for offline reading.
+    if (!unreadOnly) {
+      await OfflineStore.instance.cacheJson(_notificationsKey, data);
+    }
+    return ApiNotificationFeed(
+      items: _notifications(data),
+      unreadCount: _unreadCount(data),
+    );
+  }
+
+  /// Marks one notification read. The web buyer page reads the same row, so it
+  /// stops counting as new there too.
+  Future<int> markNotificationRead(int id) async {
+    final response = await _client
+        .post(
+          Uri.parse('$baseUrl/notifications/$id/read'),
+          headers: await _authHeaders(),
+        )
+        .timeout(const Duration(seconds: 25));
+    return _unreadCount(_check(response));
   }
 
   /// The last notifications list saved on this device.
@@ -594,12 +636,127 @@ class BuyerApi {
   }
 
   Future<ApiBuyer> account() async {
-    final response = await http
+    final response = await _client
         .get(Uri.parse('$baseUrl/account'), headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
-    return ApiBuyer.fromJson(
-      Map<String, dynamic>.from(_check(response)['buyer'] as Map),
+    return _buyer(_check(response));
+  }
+
+  /// Saves the profile fields the app sends. Address fields stay untouched
+  /// unless they are part of this call, so the two profile screens never
+  /// overwrite each other. The same record is what the web account page reads.
+  Future<ApiBuyer> updateAccount({
+    required String name,
+    String? phone,
+    String? province,
+    String? municipality,
+    String? barangay,
+    String? street,
+    String? houseNo,
+    String? zipCode,
+  }) async {
+    final response = await _client
+        .put(
+          Uri.parse('$baseUrl/account'),
+          headers: await _authHeaders(),
+          body: jsonEncode({
+            'name': name,
+            if (phone != null) 'phone_number': phone,
+            if (province != null) 'province': province,
+            if (municipality != null) 'municipality': municipality,
+            if (barangay != null) 'barangay': barangay,
+            if (street != null) 'street': street,
+            if (houseNo != null) 'house_no': houseNo,
+            if (zipCode != null) 'zip_code': zipCode,
+          }),
+        )
+        .timeout(const Duration(seconds: 30));
+    return _buyer(_check(response));
+  }
+
+  /// Replaces the profile picture shown on both the app and the web account page.
+  Future<ApiBuyer> uploadProfilePhoto(String path) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/account/photo'),
     );
+    request.headers['Accept'] = 'application/json';
+    request.headers['Authorization'] = 'Bearer ${await _token()}';
+    request.files.add(
+      await http.MultipartFile.fromPath('profile_picture', path),
+    );
+    final streamed = await request.send().timeout(const Duration(seconds: 60));
+    return _buyer(_check(await http.Response.fromStream(streamed)));
+  }
+
+  Future<void> changePassword({
+    required String currentPassword,
+    required String password,
+    required String passwordConfirmation,
+  }) async {
+    final response = await _client
+        .put(
+          Uri.parse('$baseUrl/account/password'),
+          headers: await _authHeaders(),
+          body: jsonEncode({
+            'current_password': currentPassword,
+            'password': password,
+            'password_confirmation': passwordConfirmation,
+          }),
+        )
+        .timeout(const Duration(seconds: 30));
+    _check(response);
+  }
+
+  // ── My Vouchers and My Reviews ────────────────────────────────────────────
+  Future<List<ApiShopVoucher>> vouchers() async {
+    final response = await _client
+        .get(Uri.parse('$baseUrl/vouchers'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 25));
+    final data = _check(response);
+    return (data['data'] as List? ?? [])
+        .map((e) => ApiShopVoucher.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  Future<List<ApiReview>> reviews() async {
+    final response = await _client
+        .get(Uri.parse('$baseUrl/reviews'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 25));
+    final data = _check(response);
+    return (data['data'] as List? ?? [])
+        .map((e) => ApiReview.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  // ── Support and legal ─────────────────────────────────────────────────────
+  Future<ApiFaqPage> help() async {
+    final response = await _client
+        .get(Uri.parse('$baseUrl/help'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 25));
+    return ApiFaqPage.fromJson(_check(response));
+  }
+
+  /// [page] is `terms` or `privacy`; the server reads the same docs the web serves.
+  Future<ApiContentPage> legal(String page) async {
+    final response = await _client
+        .get(Uri.parse('$baseUrl/legal/$page'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 25));
+    return ApiContentPage.fromJson(_check(response));
+  }
+
+  /// The app rating stays on this device; signing out clears it with the session.
+  Future<int?> appRating() async {
+    final raw = await _storage.read(key: 'buyer_app_rating');
+    return int.tryParse(raw ?? '');
+  }
+
+  Future<String?> appRatingComment() =>
+      _storage.read(key: 'buyer_app_rating_comment');
+
+  Future<void> saveAppRating(int rating, String comment) async {
+    await _storage.write(key: 'buyer_app_rating', value: '$rating');
+    await _storage.write(key: 'buyer_app_rating_comment', value: comment.trim());
   }
 
   List<ApiProduct> _products(Map<String, dynamic> data) =>
@@ -619,12 +776,39 @@ class BuyerApi {
           )
           .toList();
 
+  int _unreadCount(Map<String, dynamic> data) {
+    final value = data['unread_count'];
+    if (value is num) return value.toInt();
+    return int.tryParse('$value') ?? 0;
+  }
+
   // ── Internal ───────────────────────────────────────────────────────────────
   Future<void> _saveLogin(Map<String, dynamic> data) async {
     await _storage.write(key: 'buyer_token', value: data['token'] as String);
     final buyer = data['buyer'] as Map<String, dynamic>;
     await _storage.write(key: 'buyer_name', value: buyer['name']?.toString());
     await _storage.write(key: 'buyer_email', value: buyer['email']?.toString());
+    await _storage.write(
+      key: 'buyer_avatar',
+      value: buyer['profile_picture']?.toString(),
+    );
+  }
+
+  /// Reads a buyer payload, and keeps the locally cached name, email and photo
+  /// in step so the profile header is right even before the next request.
+  Future<ApiBuyer> _buyer(Map<String, dynamic> data) async {
+    final buyer = ApiBuyer.fromJson(
+      Map<String, dynamic>.from(data['buyer'] as Map),
+    );
+    await _storage.write(key: 'buyer_name', value: buyer.name);
+    await _storage.write(key: 'buyer_email', value: buyer.email);
+    if (buyer.profilePicture != null) {
+      await _storage.write(
+        key: 'buyer_avatar',
+        value: buyer.profilePicture,
+      );
+    }
+    return buyer;
   }
 
   Map<String, String> _jsonHeaders() => {
@@ -632,10 +816,15 @@ class BuyerApi {
     'Content-Type': 'application/json',
   };
 
-  Future<Map<String, String>> _authHeaders() async {
+  Future<String> _token() async {
     final token = debugToken ?? await _storage.read(key: 'buyer_token');
     if (token == null)
       throw const BuyerApiException('Please sign in again.', 401);
+    return token;
+  }
+
+  Future<Map<String, String>> _authHeaders() async {
+    final token = await _token();
     return {
       'Accept': 'application/json',
       'Content-Type': 'application/json',
