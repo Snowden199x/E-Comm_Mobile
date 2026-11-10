@@ -1,4 +1,4 @@
-package com.example.vendo_rider
+package vendoph.rider
 
 import io.flutter.embedding.android.FlutterActivity
 
