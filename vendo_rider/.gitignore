@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local build tooling (JDK 21 for Gradle 8.14); not part of the app.
+.tooling/

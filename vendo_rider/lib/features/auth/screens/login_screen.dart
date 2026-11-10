@@ -136,6 +136,43 @@ class _LoginScreenState extends State<LoginScreen>
         MaterialPageRoute(builder: (_) => const DashboardScreen()),
       );
     } on RiderApiException catch (error) {
+      // A Transport Driver signs in with the same form. Rider login refuses the
+      // account with 401, so ask the driver endpoint before showing the error;
+      // a pending or rejected application gets its own reason here.
+      if (error.statusCode == 401) {
+        try {
+          await RiderApi.instance.transportDriverLogin(
+            _emailCtrl.text,
+            _passwordCtrl.text,
+          );
+          if (!mounted) return;
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const TransportDriverTripsScreen()),
+          );
+          return;
+        } on RiderApiException catch (driverError) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  driverError.statusCode == 403
+                      ? driverError.message
+                      : error.message,
+                ),
+              ),
+            );
+          }
+          return;
+        } catch (_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(error.message)),
+            );
+          }
+          return;
+        }
+      }
       if (mounted) {
         ScaffoldMessenger.of(
           context,
