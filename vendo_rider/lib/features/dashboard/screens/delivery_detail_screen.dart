@@ -53,6 +53,8 @@ enum RiderStage {
   forDelivery,
   onTheWayToBuyer,
   linehaul,
+  returnPickup,
+  returnHandover,
   delivered,
   deliveryFailed,
   other,
@@ -65,6 +67,12 @@ String _text(dynamic value) => value?.toString().trim() ?? '';
 
 RiderStage riderStageOf(Map<String, dynamic> order) {
   if (order['assignment'] == 'linehaul') return RiderStage.linehaul;
+  if (order['assignment'] == 'return') {
+    // The return leg is a separate trip: collect from the Buyer, then hand back to the Seller.
+    return _text(_map(order['return'])['status']) == 'picked_up'
+        ? RiderStage.returnHandover
+        : RiderStage.returnPickup;
+  }
   switch (order['status']?.toString()) {
     case 'ready_for_pickup':
       return RiderStage.readyForPickup;
@@ -90,6 +98,8 @@ String riderAssignmentLabel(Map<String, dynamic> order) {
       return 'Pickup';
     case 'linehaul':
       return 'Truck linehaul';
+    case 'return':
+      return 'Return';
     default:
       return 'Delivery';
   }
@@ -102,6 +112,8 @@ String riderStageBadge(RiderStage stage) => switch (stage) {
   RiderStage.forDelivery => 'For delivery',
   RiderStage.onTheWayToBuyer => 'On the way',
   RiderStage.linehaul => 'Linehaul',
+  RiderStage.returnPickup => 'Return pickup',
+  RiderStage.returnHandover => 'Return to seller',
   RiderStage.delivered => 'Delivered',
   RiderStage.deliveryFailed => 'Failed',
   RiderStage.other => 'Assigned',
@@ -137,6 +149,14 @@ String riderStageTitle(Map<String, dynamic> order) {
     case RiderStage.linehaul:
       final target = _text(riderRouteTarget(order)['name']);
       return target.isEmpty ? 'Truck linehaul' : 'Next stop: $target';
+    case RiderStage.returnPickup:
+      return stopName.isEmpty
+          ? 'Collect the return from the buyer'
+          : 'Collect the return from $stopName';
+    case RiderStage.returnHandover:
+      return stopName.isEmpty
+          ? 'Hand the return to the seller'
+          : 'Hand the return to $stopName';
     case RiderStage.delivered:
       return stopName.isEmpty ? 'Delivered' : 'Delivered to $stopName';
     case RiderStage.deliveryFailed:
@@ -161,6 +181,9 @@ String riderStageSubtitle(Map<String, dynamic> order) {
       return hub.isEmpty
           ? 'Bring the parcel to the origin hub for sorting.'
           : 'Bring the parcel to $hub for sorting.';
+    case RiderStage.returnPickup:
+    case RiderStage.returnHandover:
+      return address.isEmpty ? 'Address unavailable' : address;
     case RiderStage.linehaul:
       final route = _map(order['planned_route']);
       final scanTarget = _map(route['scan_target']);
@@ -189,6 +212,12 @@ String riderStageSubtitle(Map<String, dynamic> order) {
 /// Server-supported scan action for the current status, or null when no scan
 /// is due.
 String? riderScanTypeFor(Map<String, dynamic> order) {
+  if (order['assignment'] == 'return') {
+    final returnStatus = _text(_map(order['return'])['status']);
+    if (returnStatus == 'pending_pickup') return 'return_pickup';
+    if (returnStatus == 'picked_up') return 'returned_to_seller';
+    return null;
+  }
   final status = order['status']?.toString();
   if (order['assignment'] == 'pickup') {
     if (status == 'ready_for_pickup') return 'pickup';
@@ -205,6 +234,8 @@ String riderScanLabelFor(String type) => switch (type) {
   'pickup' => 'Scan seller pickup',
   'origin_arrival' => 'Scan at origin hub',
   'delivered' => 'Scan after handing over parcel',
+  'return_pickup' => 'Scan: collected from buyer',
+  'returned_to_seller' => 'Scan: handed to seller',
   _ => 'Scan out for delivery',
 };
 
@@ -316,6 +347,9 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       }
     }
     final tracking = _text(_order['tracking_number']);
+    final orderId = int.tryParse('${_order['order_id']}') ?? 0;
+    final isReturnScan =
+        type == 'return_pickup' || type == 'returned_to_seller';
     final scanned = await Navigator.push<String>(
       context,
       MaterialPageRoute(
@@ -334,7 +368,19 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         key = _newUuid();
         await api.saveScanKey(tracking, type, key);
       }
-      final result = proofRequired
+      final result = isReturnScan && orderId > 0
+          ? await (type == 'return_pickup'
+                ? api.returnPickup(
+                    orderId: orderId,
+                    trackingNumber: tracking,
+                    scanKey: key,
+                  )
+                : api.returnHandover(
+                    orderId: orderId,
+                    trackingNumber: tracking,
+                    scanKey: key,
+                  ))
+          : proofRequired
           ? await api.submitDeliveryProof(
               trackingNumber: tracking,
               scanKey: key,
@@ -355,6 +401,10 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       }
       final message = result['duplicate'] == true
           ? 'Scan already recorded. Parcel status is up to date.'
+          : type == 'return_pickup'
+          ? 'Return collected from the buyer. Hand it over to the seller next.'
+          : type == 'returned_to_seller'
+          ? 'Return handed to the seller. Buyer and seller now show it as returned.'
           : type == 'delivered'
           ? 'Delivered. The buyer, the seller and the station hub now show this parcel as delivered.'
           : 'Scan saved. Seller and buyer tracking is updated.';
@@ -384,7 +434,12 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                 : null,
           );
         } else {
-          await api.queueScanOffline(tracking, type, queuedKey);
+          await api.queueScanOffline(
+            tracking,
+            type,
+            queuedKey,
+            orderId: isReturnScan ? orderId : null,
+          );
         }
       }
       if (mounted) {
@@ -819,7 +874,11 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                     const SizedBox(height: 24),
                     _buildStopSection(),
                     const SizedBox(height: 24),
-                    if (!_finished && _order['assignment'] == 'delivery') ...[
+                    if (!_finished &&
+                        (_order['assignment'] == 'delivery' ||
+                            (_order['assignment'] == 'return' &&
+                                _text(_map(_order['return'])['status']) ==
+                                    'pending_pickup'))) ...[
                       _buildMapSection(),
                       const SizedBox(height: 24),
                     ],
@@ -1239,12 +1298,23 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     final name = _text(stop['name']);
     final phone = _text(stop['phone']);
     final address = _text(stop['address']);
-    final isSeller = _order['assignment'] == 'pickup';
+    final returnStatus = _text(_map(_order['return'])['status']);
+    final isSeller =
+        _order['assignment'] == 'pickup' ||
+        (_order['assignment'] == 'return' && returnStatus == 'picked_up');
+    final isReturnBuyer =
+        _order['assignment'] == 'return' && returnStatus == 'pending_pickup';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionTitle(isSeller ? 'Seller' : 'Recipient'),
+        _SectionTitle(
+          isSeller
+              ? 'Seller'
+              : isReturnBuyer
+              ? 'Buyer'
+              : 'Recipient',
+        ),
         const SizedBox(height: 12),
         _Card(
           child: Row(
@@ -1353,6 +1423,16 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
       return '$logistics  TN: $tracking, Rider: $rider.\n'
           'I am your assigned rider and I am on my way to collect this parcel.\n\n'
           'Thank you for choosing $logistics. Stay safe and have a great day ahead.';
+    }
+    if (_order['assignment'] == 'return') {
+      final returnStatus = _text(_map(_order['return'])['status']);
+      return returnStatus == 'picked_up'
+          ? '$logistics  TN: $tracking, Rider: $rider.\n'
+                'I collected the returned parcel and I am on my way to hand it back to you.\n\n'
+                'Thank you for choosing $logistics.'
+          : '$logistics  TN: $tracking, Rider: $rider.\n'
+                'I am your assigned rider and I am on my way to collect the returned parcel.\n\n'
+                'Thank you for choosing $logistics.';
     }
     final amount = _text(_order['cash_to_collect']);
     final codLine = amount.isEmpty
@@ -1833,6 +1913,10 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
           'Scan the parcel label at ${_text(scanTarget['name'])}. The server checks the route order before accepting it.';
     } else if (scanType != null) {
       message = switch (scanType) {
+        'return_pickup' =>
+          'Scan the label when the buyer hands back the parcel. Bring it to the seller next.',
+        'returned_to_seller' =>
+          'Scan the label when the seller receives the returned parcel.',
         'pickup' =>
           'Scan the label when the seller hands you the parcel. The next step is $hub.',
         'origin_arrival' =>
@@ -2143,6 +2227,16 @@ class _StageStyle {
       _C.brique,
       _C.briqueSoft,
       Icons.near_me_rounded,
+    ),
+    RiderStage.returnPickup => const _StageStyle(
+      _C.brique,
+      _C.briqueSoft,
+      Icons.replay_rounded,
+    ),
+    RiderStage.returnHandover => const _StageStyle(
+      _C.prune,
+      _C.raisinSoft,
+      Icons.assignment_return_rounded,
     ),
     RiderStage.linehaul => const _StageStyle(
       _C.prune,

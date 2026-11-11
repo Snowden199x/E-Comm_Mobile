@@ -46,3 +46,6 @@ app.*.map.json
 
 # Local build tooling (JDK 21 for Gradle 8.14); not part of the app.
 .tooling/
+
+# Firebase Android config (project-specific; supply your own for local builds).
+/android/app/google-services.json
