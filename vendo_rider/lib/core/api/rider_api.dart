@@ -398,13 +398,16 @@ class RiderApi {
   Future<void> queueScanOffline(
     String trackingNumber,
     String scanType,
-    String scanKey,
-  ) => OfflineStore.instance.enqueue(
+    String scanKey, {
+    int? orderId,
+  }) => OfflineStore.instance.enqueue(
     kind: 'scan',
     fields: {
       'tracking_number': trackingNumber,
       'scan_type': scanType,
       'scan_key': scanKey,
+      // Return legs post to their own endpoint, which needs the order id.
+      if (orderId != null) 'order_id': orderId,
     },
   );
 
@@ -462,7 +465,30 @@ class RiderApi {
           continue;
         }
         if (kind == 'scan') {
-          await scan(tracking, '${action['scan_type'] ?? ''}', scanKey);
+          final scanType = '${action['scan_type'] ?? ''}';
+          final returnOrderId = int.tryParse('${action['order_id'] ?? ''}');
+          if (scanType == 'return_pickup' || scanType == 'returned_to_seller') {
+            if (returnOrderId == null || returnOrderId == 0) {
+              await OfflineStore.instance.removeAction(id);
+              failed++;
+              continue;
+            }
+            if (scanType == 'return_pickup') {
+              await returnPickup(
+                orderId: returnOrderId,
+                trackingNumber: tracking,
+                scanKey: scanKey,
+              );
+            } else {
+              await returnHandover(
+                orderId: returnOrderId,
+                trackingNumber: tracking,
+                scanKey: scanKey,
+              );
+            }
+          } else {
+            await scan(tracking, scanType, scanKey);
+          }
         } else if (kind == 'facility_scan') {
           final facilityId = int.tryParse('${action['facility_id']}') ?? 0;
           if (facilityId == 0) {
@@ -671,6 +697,39 @@ class RiderApi {
     return _body(response);
   }
 
+  /// Collects the returned parcel from the Buyer (approved return only).
+  Future<Map<String, dynamic>> returnPickup({
+    required int orderId,
+    required String trackingNumber,
+    required String scanKey,
+  }) => _returnLeg('return-pickup', orderId, trackingNumber, scanKey);
+
+  /// Hands the collected return back to the Seller.
+  Future<Map<String, dynamic>> returnHandover({
+    required int orderId,
+    required String trackingNumber,
+    required String scanKey,
+  }) => _returnLeg('return-handover', orderId, trackingNumber, scanKey);
+
+  Future<Map<String, dynamic>> _returnLeg(
+    String action,
+    int orderId,
+    String trackingNumber,
+    String scanKey,
+  ) async {
+    final response = await _client
+        .post(
+          Uri.parse('$baseUrl/deliveries/$orderId/$action'),
+          headers: await _authHeaders(),
+          body: jsonEncode({
+            'tracking_number': trackingNumber,
+            'scan_key': scanKey,
+          }),
+        )
+        .timeout(const Duration(seconds: 25));
+    return _body(response);
+  }
+
   Future<Map<String, dynamic>> scanFacility(
     String trackingNumber,
     int facilityId,
@@ -758,7 +817,43 @@ class RiderApi {
 
   Future<void> clearSession() => _storage.deleteAll();
 
+  /// Registers this phone's FCM token so Rider notifications also arrive as push.
+  Future<Map<String, dynamic>> registerPushToken(
+    String token,
+    String platform,
+  ) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/push-tokens'),
+          headers: await _authHeaders(),
+          body: jsonEncode({'token': token, 'platform': platform}),
+        )
+        .timeout(const Duration(seconds: 20));
+    final data = _body(response);
+    await _storage.write(key: 'push_token', value: token);
+    return data;
+  }
+
+  /// Drops this phone's token (logout or permission revoked). Best effort.
+  Future<void> removePushToken([String? token]) async {
+    final value = token ?? await _storage.read(key: 'push_token');
+    if (value == null || value.isEmpty) return;
+    try {
+      await http
+          .delete(
+            Uri.parse('$baseUrl/push-tokens'),
+            headers: await _authHeaders(),
+            body: jsonEncode({'token': value}),
+          )
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // Signing out must succeed even when the API is unreachable.
+    }
+    await _storage.delete(key: 'push_token');
+  }
+
   Future<void> logout() async {
+    await removePushToken();
     final response = await http
         .post(Uri.parse('$baseUrl/logout'), headers: await _authHeaders())
         .timeout(const Duration(seconds: 20));

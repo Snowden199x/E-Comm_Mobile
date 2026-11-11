@@ -208,6 +208,9 @@ class DeliveriesScreenState extends State<DeliveriesScreen>
           stages.contains(RiderStage.onTheWayToBuyer))
         'On the way',
       if (stages.contains(RiderStage.forDelivery)) 'Delivery',
+      if (stages.contains(RiderStage.returnPickup) ||
+          stages.contains(RiderStage.returnHandover))
+        'Return',
       if (stages.contains(RiderStage.linehaul)) 'Linehaul',
       if (stages.contains(RiderStage.deliveryFailed)) 'Failed',
     ];
@@ -221,6 +224,9 @@ class DeliveriesScreenState extends State<DeliveriesScreen>
         stage == RiderStage.onTheWayToHub ||
             stage == RiderStage.onTheWayToBuyer,
       'Delivery' => stage == RiderStage.forDelivery,
+      'Return' =>
+        stage == RiderStage.returnPickup ||
+            stage == RiderStage.returnHandover,
       'Linehaul' => stage == RiderStage.linehaul,
       'Failed' => stage == RiderStage.deliveryFailed,
       _ => true,
@@ -267,7 +273,11 @@ class DeliveriesScreenState extends State<DeliveriesScreen>
               onTheWay: onTheWay,
               deliver: isTruck
                   ? _countStage(orders, {RiderStage.linehaul})
-                  : _countStage(orders, {RiderStage.forDelivery}),
+                  : _countStage(orders, {
+                      RiderStage.forDelivery,
+                      RiderStage.returnPickup,
+                      RiderStage.returnHandover,
+                    }),
               deliverLabel: isTruck ? 'Linehaul' : 'Delivery',
             ),
             if (_offlineSince != null) ...[
@@ -1217,6 +1227,16 @@ class _StageStyle {
       _C.brique,
       _C.briqueSoft,
       Icons.near_me_rounded,
+    ),
+    RiderStage.returnPickup => const _StageStyle(
+      _C.brique,
+      _C.briqueSoft,
+      Icons.replay_rounded,
+    ),
+    RiderStage.returnHandover => const _StageStyle(
+      _C.prune,
+      _C.raisinSoft,
+      Icons.assignment_return_rounded,
     ),
     RiderStage.linehaul => const _StageStyle(
       _C.prune,
