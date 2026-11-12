@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'package:vendo_rider/core/push/rider_push_service.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/notifications/rider_notification_center.dart';
 import 'package:vendo_rider/core/offline/offline_sync_service.dart';
@@ -99,6 +100,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _notifications.start();
+    // Push tokens are registered after sign-in; polling remains the fallback.
+    RiderPushService.instance.start();
     // Watch for the connection returning so queued scans upload immediately.
     OfflineSyncService.instance.start();
   }
@@ -108,6 +111,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     WidgetsBinding.instance.removeObserver(this);
     _notifications.stop();
     OfflineSyncService.instance.stop();
+    RiderPushService.instance.reset();
     super.dispose();
   }
 

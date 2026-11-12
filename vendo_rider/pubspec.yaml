@@ -2,7 +2,7 @@ name: vendo_rider
 description: "Vendo Rider app."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.0+2
 
 environment:
   sdk: ^3.10.3
@@ -24,6 +24,8 @@ dependencies:
   url_launcher: ^6.3.3
   connectivity_plus: ^7.3.2
   path_provider: ^2.1.6
+  firebase_core: ^5.1.0
+  firebase_messaging: ^17.0.1
 dev_dependencies:
   flutter_launcher_icons: ^0.14.4
   flutter_test:
@@ -58,7 +60,9 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/images/rider_logo.jpg"
+  image_path: "assets/images/app_icon.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/app_icon_foreground.png"
   min_sdk_android: 21
 
   # fonts:
