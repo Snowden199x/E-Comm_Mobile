@@ -2,16 +2,19 @@ import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/core/push/rider_push_service.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/notifications/rider_notification_center.dart';
 import 'package:vendo_rider/core/offline/offline_sync_service.dart';
 import 'package:vendo_rider/features/dashboard/screens/deliveries_screen.dart';
+import 'package:vendo_rider/features/dashboard/screens/delivery_detail_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/earnings_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/home_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/notifications_screen.dart';
 import 'package:vendo_rider/features/dashboard/screens/profile_screen.dart';
 import 'package:vendo_rider/features/dashboard/widgets/rider_notice_banner.dart';
+import 'package:vendo_rider/features/scanner/screens/parcel_scanner_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Same Vendo palette as the Home, Deliveries, Earnings and Profile screens
@@ -27,12 +30,18 @@ class _DashColors {
   // See-through bar: white at about 70% so the page shows through
   static const glass = Color(0xB3FFFFFF);
   static const glassBorder = Color(0x33412143);
+
+  // Centre scan button: dark purple disc with a small soft glow
+  static const scan = Color(0xFF412143); // same as prune
+  static const scanGlow = Color(0x667B3F8C); // lighter purple, see-through
 }
 
 // Tab positions, so the code below reads clearly
 class _Tab {
   static const home = 0;
   static const parcels = 1;
+  // Index 2 is the centre scan button, not a page tab; the Notifications page
+  // still lives at this index and is opened from the Home bell or the banner.
   static const notifications = 2;
   static const earnings = 3;
   static const profile = 4;
@@ -79,10 +88,12 @@ class _DashboardScreenState extends State<DashboardScreen>
       activeIcon: Icons.inventory_2_rounded,
       label: 'Parcels',
     ),
+    // Placeholder for the middle slot; the floating scan button is drawn on
+    // top of it, so this entry is never rendered as a tab.
     _NavItem(
-      icon: Icons.notifications_none_rounded,
-      activeIcon: Icons.notifications_rounded,
-      label: 'Notifications',
+      icon: Icons.qr_code_scanner_rounded,
+      activeIcon: Icons.qr_code_scanner_rounded,
+      label: 'Scan',
     ),
     _NavItem(
       icon: Icons.account_balance_wallet_outlined,
@@ -142,7 +153,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (index == _selectedTab) {
       if (index == _Tab.home) _homeKey.currentState?.refreshAssignments();
       if (index == _Tab.parcels) _parcelsKey.currentState?.refreshAssignments();
-      if (index == _Tab.notifications) _notificationsKey.currentState?.refreshNotifications();
+      if (index == _Tab.notifications)
+        _notificationsKey.currentState?.refreshNotifications();
       if (index == _Tab.earnings) _earningsRefresh.value++;
       return;
     }
@@ -150,8 +162,77 @@ class _DashboardScreenState extends State<DashboardScreen>
     setState(() => _selectedTab = index);
     if (index == _Tab.home) _homeKey.currentState?.refreshAssignments();
     if (index == _Tab.parcels) _parcelsKey.currentState?.refreshAssignments();
-    if (index == _Tab.notifications) _notificationsKey.currentState?.refreshNotifications();
+    if (index == _Tab.notifications)
+      _notificationsKey.currentState?.refreshNotifications();
     if (index == _Tab.earnings) _earningsRefresh.value++;
+  }
+
+  /// Scans a parcel label and opens that parcel's delivery details.
+  Future<void> _scanToParcel() async {
+    final scanned = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (_) => const ParcelScannerScreen()),
+    );
+    if (!mounted || scanned == null) return;
+
+    final code = scanned.trim().toLowerCase();
+    if (code.isEmpty) return;
+
+    // Fresh list first; fall back to the work saved on this device offline.
+    List<Map<String, dynamic>> work;
+    try {
+      work = await RiderApi.instance.assignments();
+    } catch (_) {
+      final cached = await RiderApi.instance.cachedWork();
+      if (!mounted) return;
+      if (cached == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Cannot reach Vendo. Try again when you have signal.',
+            ),
+          ),
+        );
+        return;
+      }
+      work = (cached.payload['assignments'] as List<dynamic>? ?? [])
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    }
+    if (!mounted) return;
+
+    Map<String, dynamic>? match;
+    for (final order in work) {
+      final tracking = '${order['tracking_number'] ?? ''}'.trim().toLowerCase();
+      final orderId = '${order['order_id'] ?? ''}'.trim();
+      if (tracking.isNotEmpty && tracking == code) {
+        match = order;
+        break;
+      }
+      if (orderId.isNotEmpty && orderId == code) {
+        match = order;
+        break;
+      }
+      // Labels sometimes carry the tracking number inside a longer payload.
+      if (tracking.length >= 6 && code.contains(tracking)) {
+        match = order;
+        break;
+      }
+    }
+
+    if (match == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$scanned is not one of your parcels.')),
+      );
+      return;
+    }
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => DeliveryDetailScreen(order: match!)),
+    );
+    if (mounted) await _parcelsKey.currentState?.refreshAssignments();
   }
 
   @override
@@ -191,8 +272,8 @@ class _DashboardScreenState extends State<DashboardScreen>
           bottomNavigationBar: _BottomNav(
             selectedIndex: _selectedTab,
             items: _navItems,
-            unreadCount: _notifications.unreadCount,
             onTap: _onTabSelected,
+            onScan: _scanToParcel,
           ),
         ),
       ),
@@ -209,15 +290,15 @@ class _DashboardScreenState extends State<DashboardScreen>
 // ─────────────────────────────────────────────────────────────────────────────
 class _BottomNav extends StatefulWidget {
   final int selectedIndex;
-  final int unreadCount;
   final List<_NavItem> items;
   final ValueChanged<int> onTap;
+  final VoidCallback onScan;
 
   const _BottomNav({
     required this.selectedIndex,
-    required this.unreadCount,
     required this.items,
     required this.onTap,
+    required this.onScan,
   });
 
   @override
@@ -232,6 +313,12 @@ class _BottomNavState extends State<_BottomNav>
   static const _duration = Duration(milliseconds: 650); // longer = slower
   static const _squash = 0.14; // how much the pill flattens while travelling
   static const _vPad = 10.0; // space above and below the icons (also tap area)
+  static const _barTop = 32.0; // space above the bar (room for the scan button)
+  static const _scanTop = 2.0; // scan button height: bigger = lower
+  static const _notchGap = 8.0; // clear space between the button and the bar
+  // The curve in the bar is a circle around the scan button.
+  static const _notchRadius = _ScanButton._disc / 2 + _notchGap;
+  static const _notchCenterY = _scanTop + _ScanButton._tapArea / 2 - _barTop;
   // ───────────────────────────────────────────────────────────────────────
 
   late final AnimationController _controller;
@@ -316,86 +403,174 @@ class _BottomNavState extends State<_BottomNav>
   Widget build(BuildContext context) {
     // Floating bar: rounded all around, lifted off the bottom edge, with a
     // soft shadow. The jelly pill and icons inside are unchanged.
+    // The bar has a round cut-out in the middle so the scan button floats.
+    const shape = _NotchedBarShape(
+      notchRadius: _notchRadius,
+      notchCenterY: _notchCenterY,
+      borderColor: _DashColors.glassBorder,
+    );
     return SafeArea(
       top: false,
       minimum: const EdgeInsets.only(bottom: 10),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
-        child: Container(
-          // Soft shadow around the bar
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(36),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x1F412143),
-                blurRadius: 24,
-                offset: Offset(0, 6),
+      // The bar keeps the padding room above it that the scan button needs.
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, _barTop, 16, 6),
+            child: Container(
+              // Soft shadow around the bar
+              decoration: const ShapeDecoration(
+                shape: shape,
+                shadows: [
+                  BoxShadow(
+                    color: Color(0x1F412143),
+                    blurRadius: 24,
+                    offset: Offset(0, 6),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(36),
-            // Frosted glass: the content behind the bar is blurred, not hidden
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                decoration: BoxDecoration(
-                  color: _DashColors.glass,
-                  borderRadius: BorderRadius.circular(36),
-                  border: Border.all(color: _DashColors.glassBorder),
+              child: ClipPath(
+                clipper: ShapeBorderClipper(shape: shape),
+                // Frosted glass: the content behind the bar is blurred, not hidden
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    decoration: const ShapeDecoration(
+                      color: _DashColors.glass,
+                      shape: shape,
+                    ),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final cell = constraints.maxWidth / widget.items.length;
+
+                        return AnimatedBuilder(
+                          animation: _controller,
+                          builder: (context, _) {
+                            final pill = _pillShape(cell);
+                            // Index 2 is the scan button: no pill while it is the tab.
+                            final onScanSlot =
+                                widget.selectedIndex == _Tab.notifications ||
+                                _fromIndex == _Tab.notifications;
+
+                            return Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                // The jelly pill (behind the icons)
+                                if (!onScanSlot)
+                                  Positioned(
+                                    left: pill.left,
+                                    top: pill.top + _vPad,
+                                    width: math.max(pill.right - pill.left, 0),
+                                    height: pill.height,
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        color: _DashColors.prune,
+                                        borderRadius: BorderRadius.circular(
+                                          pill.height / 2,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                // Icons and labels (on top)
+                                Row(
+                                  children: List.generate(widget.items.length, (
+                                    i,
+                                  ) {
+                                    // The middle slot is empty: the scan button floats
+                                    // over it.
+                                    if (i == _Tab.notifications) {
+                                      return const Expanded(
+                                        child: SizedBox.shrink(),
+                                      );
+                                    }
+                                    return Expanded(
+                                      child: _NavButton(
+                                        item: widget.items[i],
+                                        isActive: i == widget.selectedIndex,
+                                        iconColor: _iconColor(i, cell, pill),
+                                        iconAreaHeight: _pillHeight,
+                                        verticalPadding: _vPad,
+                                        onTap: () => widget.onTap(i),
+                                      ),
+                                    );
+                                  }),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
                 ),
-                child: LayoutBuilder(
-            builder: (context, constraints) {
-              final cell = constraints.maxWidth / widget.items.length;
-
-              return AnimatedBuilder(
-                animation: _controller,
-                builder: (context, _) {
-                  final pill = _pillShape(cell);
-
-                  return Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      // The jelly pill (behind the icons)
-                      Positioned(
-                        left: pill.left,
-                        top: pill.top + _vPad,
-                        width: math.max(pill.right - pill.left, 0),
-                        height: pill.height,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: _DashColors.prune,
-                            borderRadius: BorderRadius.circular(
-                              pill.height / 2,
-                            ),
-                          ),
-                        ),
-                      ),
-                      // Icons and labels (on top)
-                      Row(
-                        children: List.generate(widget.items.length, (i) {
-                          return Expanded(
-                            child: _NavButton(
-                              item: widget.items[i],
-                              isActive: i == widget.selectedIndex,
-                              iconColor: _iconColor(i, cell, pill),
-                              iconAreaHeight: _pillHeight,
-                              verticalPadding: _vPad,
-                              badgeCount: i == _Tab.notifications
-                                  ? widget.unreadCount
-                                  : 0,
-                              onTap: () => widget.onTap(i),
-                            ),
-                          );
-                        }),
-                      ),
-                    ],
-                  );
-                },
-              );
-            },
+              ),
+            ),
           ),
+          // Centre scan button: floats in the curve of the bar. Change
+          // _scanTop above to move it (the curve follows it automatically).
+          Positioned(
+            top: _scanTop,
+            left: 0,
+            right: 0,
+            child: Center(child: _ScanButton(onTap: widget.onScan)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Centre scan button
+// ─────────────────────────────────────────────────────────────────────────────
+class _ScanButton extends StatelessWidget {
+  static const _tapArea = 66.0; // invisible, just keeps the tap area big
+  static const _disc = 52.0;
+
+  final VoidCallback onTap;
+
+  const _ScanButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: 'Scan parcel',
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: _tapArea,
+          height: _tapArea,
+          child: Center(
+            child: Container(
+              width: _disc,
+              height: _disc,
+              decoration: const BoxDecoration(
+                color: _DashColors.scan,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  // Small soft glow around the disc. Raise blurRadius or
+                  // spreadRadius for a bigger glow, lower them for less.
+                  BoxShadow(
+                    color: _DashColors.scanGlow,
+                    blurRadius: 10,
+                    spreadRadius: 1,
+                  ),
+                  // Soft drop shadow underneath
+                  BoxShadow(
+                    color: Color(0x40412143),
+                    blurRadius: 14,
+                    offset: Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.qr_code_scanner_rounded,
+                color: Colors.white,
+                size: 22,
               ),
             ),
           ),
@@ -403,6 +578,106 @@ class _BottomNavState extends State<_BottomNav>
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bar shape: a pill with a round bite taken out of the top middle, so the scan
+// button looks separated from the bar and floating.
+// ─────────────────────────────────────────────────────────────────────────────
+class _NotchedBarShape extends ShapeBorder {
+  final double notchRadius;
+  final double
+  notchCenterY; // distance from the bar's top edge to the circle centre
+  final Color borderColor;
+
+  const _NotchedBarShape({
+    required this.notchRadius,
+    required this.notchCenterY,
+    required this.borderColor,
+  });
+
+  @override
+  EdgeInsetsGeometry get dimensions => EdgeInsets.zero;
+
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) =>
+      getOuterPath(rect, textDirection: textDirection);
+
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
+    final r = rect.height / 2;
+    final cx = rect.center.dx;
+    final cy = rect.top + notchCenterY;
+    final radius = notchRadius;
+    const soften =
+        8.0; // rounds the sharp corners where the curve meets the top
+
+    // Where the circle crosses the top edge
+    final w = math.sqrt(radius * radius - notchCenterY * notchCenterY);
+    final phi0 = math.atan2(-notchCenterY, -w) + 2 * math.pi;
+    final phiL = phi0 - 0.25; // start of the circle arc (left)
+    final phiR = math.pi - phiL; // end of the circle arc (right)
+
+    Offset onCircle(double a) =>
+        Offset(cx + radius * math.cos(a), cy + radius * math.sin(a));
+    Offset heading(double a) => Offset(math.sin(a), -math.cos(a));
+
+    final endL = onCircle(phiL);
+    final endR = onCircle(phiR);
+    final dirL = heading(phiL);
+    final dirR = heading(phiR);
+
+    final path = Path()
+      ..moveTo(rect.left + r, rect.top)
+      ..lineTo(cx - w - soften, rect.top)
+      ..cubicTo(
+        cx - w - soften + 5,
+        rect.top,
+        endL.dx - dirL.dx * 4,
+        endL.dy - dirL.dy * 4,
+        endL.dx,
+        endL.dy,
+      )
+      ..arcTo(
+        Rect.fromCircle(center: Offset(cx, cy), radius: radius),
+        phiL,
+        math.pi - 2 * phiL,
+        false,
+      )
+      ..cubicTo(
+        endR.dx + dirR.dx * 4,
+        endR.dy + dirR.dy * 4,
+        cx + w + soften - 5,
+        rect.top,
+        cx + w + soften,
+        rect.top,
+      )
+      ..lineTo(rect.right - r, rect.top)
+      ..arcToPoint(Offset(rect.right, rect.top + r), radius: Radius.circular(r))
+      ..arcToPoint(
+        Offset(rect.right - r, rect.bottom),
+        radius: Radius.circular(r),
+      )
+      ..lineTo(rect.left + r, rect.bottom)
+      ..arcToPoint(Offset(rect.left, rect.top + r), radius: Radius.circular(r))
+      ..arcToPoint(Offset(rect.left + r, rect.top), radius: Radius.circular(r))
+      ..close();
+    return path;
+  }
+
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
+    canvas.drawPath(
+      getOuterPath(rect, textDirection: textDirection),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = borderColor,
+    );
+  }
+
+  @override
+  ShapeBorder scale(double t) => this;
 }
 
 class _PillShape {
@@ -422,7 +697,6 @@ class _NavButton extends StatelessWidget {
   final Color iconColor;
   final double iconAreaHeight;
   final double verticalPadding;
-  final int badgeCount;
   final VoidCallback onTap;
 
   const _NavButton({
@@ -431,7 +705,6 @@ class _NavButton extends StatelessWidget {
     required this.iconColor,
     required this.iconAreaHeight,
     required this.verticalPadding,
-    this.badgeCount = 0,
     required this.onTap,
   });
 
@@ -451,48 +724,16 @@ class _NavButton extends StatelessWidget {
             SizedBox(
               height: iconAreaHeight,
               child: Center(
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 200),
-                      transitionBuilder: (child, animation) =>
-                          ScaleTransition(scale: animation, child: child),
-                      child: Icon(
-                        isActive ? item.activeIcon : item.icon,
-                        key: ValueKey(isActive),
-                        size: 24,
-                        color: iconColor,
-                      ),
-                    ),
-                    if (badgeCount > 0)
-                      Positioned(
-                        right: -11,
-                        top: -5,
-                        child: Container(
-                          constraints: const BoxConstraints(minWidth: 16),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 4,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFBF5E40),
-                            borderRadius: BorderRadius.circular(9),
-                            border: Border.all(color: Colors.white, width: 1.4),
-                          ),
-                          child: Text(
-                            badgeCount > 99 ? '99+' : '$badgeCount',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 9,
-                              height: 1.2,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 200),
+                  transitionBuilder: (child, animation) =>
+                      ScaleTransition(scale: animation, child: child),
+                  child: Icon(
+                    isActive ? item.activeIcon : item.icon,
+                    key: ValueKey(isActive),
+                    size: 24,
+                    color: iconColor,
+                  ),
                 ),
               ),
             ),

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
+import 'package:vendo_rider/core/notifications/rider_notification_center.dart';
 import 'package:vendo_rider/features/dashboard/screens/delivery_detail_screen.dart';
 import 'package:vendo_rider/features/dashboard/widgets/offline_banner.dart';
 
@@ -22,8 +23,6 @@ class _C {
   static const briqueGlow = Color(0xFFFE8357);
   static const lin = Color(0xFFFFDEAD);
   static const amber = Color(0xFFFABC4D);
-  static const raisin = Color(0xFF815488);
-  static const lilac = Color(0xFFAA87B0);
   static const online = Color(0xFF22C55E);
 
   static const background = Color(0xFFFAF7F2);
@@ -34,8 +33,6 @@ class _C {
 
   static const raisinSoft = Color(0x123C2143);
   static const briqueSoft = Color(0xFFF9EAE1);
-
-  static const offline = Color(0xFF9A8F9D);
 }
 
 const double _radius = 16;
@@ -68,6 +65,15 @@ class HomeScreenState extends State<HomeScreen>
   bool _loadingAssignments = true;
   String? _assignmentError;
 
+  // Deliveries finished today, from the delivery history endpoint. Null until
+  // the first answer arrives, so the cell shows a dash instead of a wrong 0.
+  int? _completedToday;
+
+  final _notifications = RiderNotificationCenter.instance;
+
+  /// The rider's account photo, so the header matches the Profile screen.
+  String? _avatarUrl;
+
   // Offline mode: the home totals come from the last saved work when the API
   // cannot be reached, and queued scans upload as soon as it can.
   DateTime? _offlineSince;
@@ -88,13 +94,28 @@ class HomeScreenState extends State<HomeScreen>
     RiderApi.instance.riderName().then((name) {
       if (mounted) setState(() => _riderName = name ?? 'Rider');
     });
+    _loadAvatar();
+    RiderApi.instance.profileRevision.addListener(_loadAvatar);
     _refreshAssignments();
   }
 
   @override
   void dispose() {
+    RiderApi.instance.profileRevision.removeListener(_loadAvatar);
     _bgController.dispose();
     super.dispose();
+  }
+
+  /// Loads the account photo. With no photo, or a failed request, the header
+  /// keeps the plain rider icon so it never breaks over a missing image.
+  Future<void> _loadAvatar() async {
+    try {
+      final rider = await RiderApi.instance.riderProfile();
+      final url = rider['profile_picture']?.toString().trim() ?? '';
+      if (mounted) setState(() => _avatarUrl = url.isEmpty ? null : url);
+    } catch (_) {
+      // Offline or the request failed: keep what is already showing.
+    }
   }
 
   String get _greeting {
@@ -109,7 +130,11 @@ class HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _refreshAssignments() async {
-    if (mounted) setState(() { _loadingAssignments = true; _assignmentError = null; });
+    if (mounted)
+      setState(() {
+        _loadingAssignments = true;
+        _assignmentError = null;
+      });
     try {
       final data = await RiderApi.instance.assignmentDashboard();
       _applyWork(data);
@@ -126,7 +151,10 @@ class HomeScreenState extends State<HomeScreen>
         if (mounted) setState(() => _offlineSince = cached.cachedAt);
         await _refreshPendingCount();
       } else if (mounted) {
-        setState(() => _assignmentError = 'Could not load assigned work. Check your connection and retry.');
+        setState(
+          () => _assignmentError =
+              'Could not load assigned work. Check your connection and retry.',
+        );
       }
     } finally {
       if (mounted) setState(() => _loadingAssignments = false);
@@ -134,6 +162,22 @@ class HomeScreenState extends State<HomeScreen>
       // reloaded every time the work data is refreshed (app start, tab focus,
       // retry, after an offline sync) instead of only once at startup.
       _refreshEarnings();
+      _refreshCompletedToday();
+    }
+  }
+
+  /// Today's completed deliveries. Kept separate from the assignment list
+  /// because those parcels are already finished and no longer assigned.
+  Future<void> _refreshCompletedToday() async {
+    try {
+      final data = await RiderApi.instance.deliveryHistory();
+      final summary = data['summary'] is Map
+          ? Map<String, dynamic>.from(data['summary'] as Map)
+          : const <String, dynamic>{};
+      final count = int.tryParse(summary['count']?.toString() ?? '');
+      if (mounted && count != null) setState(() => _completedToday = count);
+    } catch (_) {
+      // Offline: keep the last count we successfully loaded.
     }
   }
 
@@ -146,7 +190,10 @@ class HomeScreenState extends State<HomeScreen>
     final summary = data['summary'] is Map
         ? Map<String, dynamic>.from(data['summary'] as Map)
         : <String, dynamic>{};
-    setState(() { _assignments = items; _assignmentSummary = summary; });
+    setState(() {
+      _assignments = items;
+      _assignmentSummary = summary;
+    });
   }
 
   Future<void> _refreshPendingCount() async {
@@ -191,8 +238,11 @@ class HomeScreenState extends State<HomeScreen>
       final summary = data['summary'] is Map
           ? Map<String, dynamic>.from(data['summary'] as Map)
           : <String, dynamic>{};
-      final amount = double.tryParse(summary['accrued_total']?.toString() ?? '');
-      if (mounted && amount != null) setState(() => _accruedEarnings = '₱${amount.toStringAsFixed(2)}');
+      final amount = double.tryParse(
+        summary['accrued_total']?.toString() ?? '',
+      );
+      if (mounted && amount != null)
+        setState(() => _accruedEarnings = '₱${amount.toStringAsFixed(2)}');
     } catch (_) {
       // Keep the last amount we successfully loaded rather than blanking it on
       // a hiccup; only a first load with no data shows the error state.
@@ -200,11 +250,6 @@ class HomeScreenState extends State<HomeScreen>
         setState(() => _accruedEarnings = 'Unavailable');
       }
     }
-  }
-
-  void _onAssignParcel() {
-    HapticFeedback.selectionClick();
-    widget.onOpenParcels?.call();
   }
 
   @override
@@ -241,8 +286,6 @@ class HomeScreenState extends State<HomeScreen>
                       ),
                       const SizedBox(height: 20),
                     ],
-                    _buildActionTiles(),
-                    const SizedBox(height: 24),
                     _buildSectionTitle('Parcel Overview'),
                     const SizedBox(height: 12),
                     _buildStats(),
@@ -402,11 +445,25 @@ class HomeScreenState extends State<HomeScreen>
                     ),
                   ],
                 ),
-                child: const Icon(
-                  Icons.account_circle_outlined,
-                  color: Color(0xFFE0BAE5),
-                  size: 26,
-                ),
+                clipBehavior: Clip.antiAlias,
+                child: _avatarUrl == null
+                    ? const Icon(
+                        Icons.account_circle_outlined,
+                        color: Color(0xFFE0BAE5),
+                        size: 26,
+                      )
+                    : Image.network(
+                        _avatarUrl!,
+                        width: 44,
+                        height: 44,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) =>
+                            const Icon(
+                              Icons.account_circle_outlined,
+                              color: Color(0xFFE0BAE5),
+                              size: 26,
+                            ),
+                      ),
               ),
               Positioned(
                 right: 2,
@@ -454,30 +511,72 @@ class HomeScreenState extends State<HomeScreen>
           ),
         ),
         const SizedBox(width: 12),
-        Semantics(
-          button: true,
-          label: 'Notifications',
-          child: Material(
-            color: const Color(0x33000000),
-            shape: const CircleBorder(),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              onTap: widget.onOpenNotifications,
-              child: Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: const Color(0x1FFFFFFF)),
-                ),
-                child: const Icon(
-                  Icons.notifications_none_rounded,
-                  color: Colors.white,
-                  size: 22,
+        ListenableBuilder(
+          listenable: _notifications,
+          builder: (context, _) {
+            final unread = _notifications.unreadCount;
+            return Semantics(
+              button: true,
+              label: unread > 0
+                  ? 'Notifications, $unread unread'
+                  : 'Notifications',
+              child: Material(
+                color: const Color(0x33000000),
+                shape: const CircleBorder(),
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: widget.onOpenNotifications,
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0x1FFFFFFF)),
+                    ),
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      alignment: Alignment.center,
+                      children: [
+                        const Icon(
+                          Icons.notifications_none_rounded,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                        // Unread count, sitting on the bell's top-right corner
+                        if (unread > 0)
+                          Positioned(
+                            top: 4,
+                            right: 3,
+                            child: Container(
+                              constraints: const BoxConstraints(minWidth: 18),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: _C.brique,
+                                borderRadius: BorderRadius.circular(9),
+                                border: Border.all(color: _C.prune, width: 1.5),
+                              ),
+                              child: Text(
+                                unread > 99 ? '99+' : '$unread',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  height: 1.2,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         ),
       ],
     );
@@ -566,10 +665,7 @@ class HomeScreenState extends State<HomeScreen>
                   const Expanded(
                     child: Text(
                       'Accrued Earnings',
-                      style: TextStyle(
-                        color: Color(0xFFCFC3CC),
-                        fontSize: 12,
-                      ),
+                      style: TextStyle(color: Color(0xFFCFC3CC), fontSize: 12),
                     ),
                   ),
                   Container(
@@ -622,184 +718,10 @@ class HomeScreenState extends State<HomeScreen>
     );
   }
 
-  // ── Quick action tiles: the terracotta tile is the main action ───────────
-  Widget _buildActionTiles() {
-    final loaded = _loadingAssignments
-        ? '—'
-        : '${_assignmentSummary['loaded'] ?? _assignments.length}';
-
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Tile 1 — assigned parcels (same action as before)
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(_radius),
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [_C.brique, _C.briqueDark],
-                ),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x47C85A32),
-                    blurRadius: 24,
-                    spreadRadius: -4,
-                    offset: Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: Material(
-                color: Colors.transparent,
-                borderRadius: BorderRadius.circular(_radius),
-                clipBehavior: Clip.antiAlias,
-                child: InkWell(
-                  onTap: _onAssignParcel,
-                  child: Stack(
-                    children: [
-                      const Positioned(
-                        right: 8,
-                        bottom: 8,
-                        child: Icon(
-                          Icons.inventory_2_outlined,
-                          color: Color(0x33FFFFFF),
-                          size: 40,
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Row(
-                              mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Container(
-                                  width: 36,
-                                  height: 36,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0x26FFFFFF),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: const Icon(
-                                    Icons.qr_code_scanner_rounded,
-                                    color: Colors.white,
-                                    size: 20,
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 3,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: Text(
-                                    '$loaded now',
-                                    style: const TextStyle(
-                                      color: _C.briqueDark,
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 0.4,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 14),
-                            const Text(
-                              'Assigned parcels',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                height: 1.2,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            const Text(
-                              'Work from Logistics',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: Color(0xE6FFDBCF),
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          // Tile 2 — earnings (reuses the existing earnings callback)
-          Expanded(
-            child: _card(
-              onTap: widget.onOpenEarnings,
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: _C.raisinSoft,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.account_balance_wallet_outlined,
-                      color: _C.prune,
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  const Text(
-                    'Earnings',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: _C.prune,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      height: 1.2,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _accruedEarnings,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: _C.muted, fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   // ── Parcel stats: one card, 2×2 tinted cells ─────────────────────────────
   Widget _buildStats() {
     final pickup = _assignmentSummary['pickup'] ?? 0;
     final delivery = _assignmentSummary['delivery'] ?? 0;
-    final linehaul = _assignmentSummary['linehaul'] ?? 0;
     return _card(
       padding: const EdgeInsets.all(8),
       child: Column(
@@ -809,7 +731,9 @@ class HomeScreenState extends State<HomeScreen>
               Expanded(
                 child: _StatCell(
                   icon: Icons.inventory_2_outlined,
-                  value: _loadingAssignments ? '—' : '${_assignmentSummary['loaded'] ?? _assignments.length}',
+                  value: _loadingAssignments
+                      ? '—'
+                      : '${_assignmentSummary['loaded'] ?? _assignments.length}',
                   label: 'Assigned now',
                 ),
               ),
@@ -837,9 +761,9 @@ class HomeScreenState extends State<HomeScreen>
               const SizedBox(width: 8),
               Expanded(
                 child: _StatCell(
-                  icon: Icons.route_rounded,
-                  value: _loadingAssignments ? '—' : '$linehaul',
-                  label: 'Linehaul',
+                  icon: Icons.task_alt_rounded,
+                  value: _completedToday == null ? '—' : '$_completedToday',
+                  label: 'Completed',
                 ),
               ),
             ],
@@ -860,12 +784,15 @@ class HomeScreenState extends State<HomeScreen>
       children: [
         _buildSectionTitle(
           'Active Delivery',
-          trailing: (!_loadingAssignments &&
+          trailing:
+              (!_loadingAssignments &&
                   _assignmentError == null &&
                   _assignments.isNotEmpty)
               ? Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: _C.briqueSoft,
                     borderRadius: BorderRadius.circular(20),
@@ -888,172 +815,193 @@ class HomeScreenState extends State<HomeScreen>
         else if (_assignmentError != null)
           _card(
             onTap: _refreshAssignments,
-            child: Text('$_assignmentError  Tap to retry.', style: const TextStyle(color: _C.muted)),
+            child: Text(
+              '$_assignmentError  Tap to retry.',
+              style: const TextStyle(color: _C.muted),
+            ),
           )
         else if (order == null)
-          _card(child: const Text('No active assignments yet.', style: TextStyle(color: _C.muted)))
+          _card(
+            child: const Text(
+              'No active assignments yet.',
+              style: TextStyle(color: _C.muted),
+            ),
+          )
         else
-        _card(
-          onTap: _openDeliveryDetails,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Tracking code + status badge
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'TRACKING CODE',
-                          style: TextStyle(
-                            color: _C.muted,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.8,
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          order['tracking_number']?.toString() ?? 'Assigned parcel',
-                          style: const TextStyle(
-                            color: _C.prune,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 0.3,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _C.briqueSoft,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      riderStageBadge(riderStageOf(order)),
-                      style: const TextStyle(
-                        color: _C.brique,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              const Divider(height: 1, thickness: 1, color: Color(0xFFF0EDE9)),
-              const SizedBox(height: 12),
-              // Destination box
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: _C.cell,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
+          _card(
+            onTap: _openDeliveryDetails,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Tracking code + status badge
+                Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Padding(
-                      padding: EdgeInsets.only(top: 1),
-                      child: Icon(
-                        Icons.pin_drop_outlined,
-                        color: _C.brique,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            '${stop['name'] ?? 'Next stop'}',
-                            style: const TextStyle(
-                              color: _C.ink,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
+                          const Text(
+                            'TRACKING CODE',
+                            style: TextStyle(
+                              color: _C.muted,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.8,
                             ),
                           ),
-                          const SizedBox(height: 2),
+                          const SizedBox(height: 3),
                           Text(
-                            '${stop['address'] ?? 'Address unavailable'}',
+                            order['tracking_number']?.toString() ??
+                                'Assigned parcel',
                             style: const TextStyle(
-                              color: _C.muted,
-                              fontSize: 12,
-                              height: 1.35,
+                              color: _C.prune,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.3,
                             ),
                           ),
                         ],
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _C.briqueSoft,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        riderStageBadge(riderStageOf(order)),
+                        style: const TextStyle(
+                          color: _C.brique,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
-              ),
-              const SizedBox(height: 12),
-              // Current stage
-              Row(
-                children: [
-                  const Icon(Icons.near_me_outlined, size: 16, color: _C.muted),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      riderStageTitle(order),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: _C.muted, fontSize: 13),
-                    ),
+                const SizedBox(height: 12),
+                const Divider(
+                  height: 1,
+                  thickness: 1,
+                  color: Color(0xFFF0EDE9),
+                ),
+                const SizedBox(height: 12),
+                // Destination box
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: _C.cell,
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              // Primary plum button (same action as tapping the card)
-              Material(
-                color: _C.prune,
-                borderRadius: BorderRadius.circular(12),
-                clipBehavior: Clip.antiAlias,
-                child: InkWell(
-                  onTap: _openDeliveryDetails,
-                  child: const SizedBox(
-                    height: 48,
-                    width: double.infinity,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.near_me_rounded, color: Colors.white, size: 18),
-                        SizedBox(width: 8),
-                        Text(
-                          'View details',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.2,
-                          ),
-                        ),
-                        SizedBox(width: 4),
-                        Icon(
-                          Icons.chevron_right_rounded,
-                          color: Colors.white,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 1),
+                        child: Icon(
+                          Icons.pin_drop_outlined,
+                          color: _C.brique,
                           size: 20,
                         ),
-                      ],
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${stop['name'] ?? 'Next stop'}',
+                              style: const TextStyle(
+                                color: _C.ink,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${stop['address'] ?? 'Address unavailable'}',
+                              style: const TextStyle(
+                                color: _C.muted,
+                                fontSize: 12,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // Current stage
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.near_me_outlined,
+                      size: 16,
+                      color: _C.muted,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        riderStageTitle(order),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: _C.muted, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                // Primary plum button (same action as tapping the card)
+                Material(
+                  color: _C.prune,
+                  borderRadius: BorderRadius.circular(12),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: _openDeliveryDetails,
+                    child: const SizedBox(
+                      height: 48,
+                      width: double.infinity,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.near_me_rounded,
+                            color: Colors.white,
+                            size: 18,
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'View details',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                          SizedBox(width: 4),
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
       ],
     );
   }
@@ -1271,62 +1219,6 @@ class _StatCell extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _VDivider extends StatelessWidget {
-  const _VDivider();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(width: 1, height: 44, color: _C.border);
-  }
-}
-
-class _RouteStop extends StatelessWidget {
-  final Color dotColor;
-  final String label, address;
-
-  const _RouteStop({
-    required this.dotColor,
-    required this.label,
-    required this.address,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 9,
-          height: 9,
-          margin: const EdgeInsets.only(top: 5),
-          decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(color: _C.muted, fontSize: 11),
-              ),
-              const SizedBox(height: 1),
-              Text(
-                address,
-                style: const TextStyle(
-                  color: _C.ink,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }

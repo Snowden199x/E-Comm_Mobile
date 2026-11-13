@@ -119,6 +119,19 @@ String riderStageBadge(RiderStage stage) => switch (stage) {
   RiderStage.other => 'Assigned',
 };
 
+/// How long ago this parcel was assigned to the Rider, from the server's
+/// `assigned_at`. Empty when the API sent no timestamp, so the card omits it.
+String riderAssignedAgo(Map<String, dynamic> order) {
+  final at = DateTime.tryParse(_text(order['assigned_at']));
+  if (at == null) return '';
+  final elapsed = DateTime.now().difference(at.toLocal());
+  if (elapsed.inMinutes < 1) return 'just now';
+  if (elapsed.inMinutes < 60) return '${elapsed.inMinutes}m ago';
+  if (elapsed.inHours < 24) return '${elapsed.inHours}h ago';
+  if (elapsed.inDays < 7) return '${elapsed.inDays}d ago';
+  return '${elapsed.inDays ~/ 7}w ago';
+}
+
 /// The next server-provided stop on a Truck linehaul route, when set.
 Map<String, dynamic> riderRouteTarget(Map<String, dynamic> order) {
   final route = _map(order['planned_route']);
