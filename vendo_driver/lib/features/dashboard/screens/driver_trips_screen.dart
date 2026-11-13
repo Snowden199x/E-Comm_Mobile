@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:vendo_driver/core/data/driver_store.dart';
 import 'package:vendo_driver/core/theme/vendo_theme.dart';
 import 'package:vendo_driver/features/shared/widgets/driver_ui.dart';
+import 'package:vendo_driver/features/trips/screens/driver_trip_history_screen.dart';
 
 enum _TripFilter { all, scheduled, inTransit, completed }
 
@@ -44,6 +45,29 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const DriverTripHistoryScreen(),
+                    ),
+                  ),
+                  icon: const Icon(Icons.history_rounded, size: 17),
+                  label: const Text('Trip history'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: VColors.prune,
+                    backgroundColor: Colors.white,
+                    side: const BorderSide(color: VColors.border),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    textStyle: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -105,8 +129,8 @@ class _DriverTripsScreenState extends State<DriverTripsScreen> {
                 title: 'More trip tools are coming later',
                 message:
                     'Cancellations, container scanning, per-parcel scan '
-                    'status, incident reports and trip history are planned '
-                    'for a later version.',
+                    'status and incident reports are planned for a later '
+                    'version.',
               ),
             ],
           ),

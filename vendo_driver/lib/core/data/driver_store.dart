@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -191,20 +192,81 @@ class DriverProfile {
   bool get licenseValid => licenseExpiry.isAfter(DateTime.now());
 }
 
-/// A per-stop credit from the older earnings rule. New orders no longer create
-/// driver credits, so this screen only lists legacy rows.
-class LegacyCredit {
-  const LegacyCredit({
-    required this.trip,
-    required this.date,
-    required this.stops,
+/// One accrued per-stop shipping share from `GET /earnings`.
+class DriverEarning {
+  const DriverEarning({
+    required this.orderNumber,
+    required this.hub,
+    required this.routePosition,
+    required this.amount,
+    required this.earnedAt,
   });
 
-  final String trip;
-  final DateTime date;
-  final int stops;
+  final String orderNumber;
+  final String hub;
+  final int routePosition;
+  final double amount;
+  final DateTime? earnedAt;
+}
 
-  double get amount => stops * 10;
+/// The server's earnings summary plus the recent credits behind it.
+class DriverEarnings {
+  const DriverEarnings({
+    required this.accruedTotal,
+    required this.hubCredits,
+    required this.rows,
+  });
+
+  /// Sum of the accrued lines the web has not settled yet. Not a payout.
+  final double accruedTotal;
+  final int hubCredits;
+  final List<DriverEarning> rows;
+}
+
+/// One notification the web addressed to this driver's account. The app never
+/// writes a notification; it only reads and marks them.
+class DriverNotification {
+  const DriverNotification({
+    required this.id,
+    required this.type,
+    required this.title,
+    required this.message,
+    required this.createdAt,
+    this.readAt,
+  });
+
+  final int id;
+  final String type;
+  final String title;
+  final String message;
+  final DateTime? createdAt;
+  final DateTime? readAt;
+
+  bool get isUnread => readAt == null;
+}
+
+/// One finished trip on the driver's history list. Kept apart from [DriverTrip]
+/// because a closed trip carries no live scan state to act on.
+class DriverTripHistoryEntry {
+  const DriverTripHistoryEntry({
+    required this.code,
+    required this.origin,
+    required this.destination,
+    required this.vehicle,
+    required this.parcelCount,
+    required this.scheduledDeparture,
+    required this.departedAt,
+    required this.completedAt,
+  });
+
+  final String code;
+  final String origin;
+  final String destination;
+  final String vehicle;
+  final int parcelCount;
+  final DateTime? scheduledDeparture;
+  final DateTime? departedAt;
+  final DateTime? completedAt;
 }
 
 class DriverStore extends ChangeNotifier {
@@ -417,19 +479,234 @@ class DriverStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  final List<LegacyCredit> legacyCredits = [
-    LegacyCredit(trip: 'TRP-2141', date: DateTime(2026, 9, 18), stops: 14),
-    LegacyCredit(trip: 'TRP-2137', date: DateTime(2026, 9, 11), stops: 9),
-    LegacyCredit(trip: 'TRP-2129', date: DateTime(2026, 9, 4), stops: 18),
-    LegacyCredit(trip: 'TRP-2116', date: DateTime(2026, 8, 27), stops: 11),
-    LegacyCredit(trip: 'TRP-2108', date: DateTime(2026, 8, 20), stops: 7),
-    LegacyCredit(trip: 'TRP-2099', date: DateTime(2026, 8, 13), stops: 12),
-  ];
+  /// The last earnings answer from Vendo, or null before the first load.
+  DriverEarnings? earnings;
 
-  double get legacyTotal =>
-      legacyCredits.fold(0, (total, credit) => total + credit.amount);
+  bool earningsLoading = false;
 
-  int get legacyStops => legacyCredits.fold(0, (total, c) => total + c.stops);
+  /// The last earnings failure, shown on the Earnings tab with a retry.
+  String? earningsError;
+
+  /// Set when the stored token was rejected while loading earnings.
+  bool earningsSessionExpired = false;
+
+  DateTime? earningsSyncedAt;
+
+  /// Loads the accrued per-stop credits from `GET /earnings`. Runs on sign-in
+  /// and on pull-to-refresh; a second call while one is running is ignored.
+  Future<void> refreshEarnings() async {
+    if (earningsLoading) return;
+    earningsLoading = true;
+    earningsError = null;
+    notifyListeners();
+
+    try {
+      final data = await DriverApi.instance.earnings();
+      final summary = data['summary'] as Map?;
+      final rows = (data['earnings'] as List? ?? const [])
+          .whereType<Map>()
+          .toList(growable: false);
+
+      double amount(Object? value) =>
+          double.tryParse(value?.toString() ?? '') ?? 0;
+      int number(Object? value) => value is num
+          ? value.toInt()
+          : int.tryParse(value?.toString() ?? '') ?? 0;
+      String text(Object? value) => value == null ? '' : value.toString().trim();
+
+      earnings = DriverEarnings(
+        accruedTotal: amount(summary?['accrued_total']),
+        hubCredits: number(summary?['hub_credits']),
+        rows: rows.map((row) {
+          return DriverEarning(
+            orderNumber: text(row['order_number']),
+            hub: text(row['hub']),
+            routePosition: number(row['route_position']),
+            amount: amount(row['amount']),
+            earnedAt: DateTime.tryParse(text(row['earned_at']))?.toLocal(),
+          );
+        }).toList(growable: false),
+      );
+      earningsSyncedAt = DateTime.now();
+      earningsSessionExpired = false;
+    } on DriverApiException catch (error) {
+      earningsError = error.isUnauthenticated
+          ? 'Your session expired. Sign in again to load your earnings.'
+          : error.message;
+      earningsSessionExpired = error.isUnauthenticated;
+    } catch (_) {
+      earningsError =
+          'Could not reach Vendo. Check the connection, then pull down to retry.';
+    } finally {
+      earningsLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Notifications the web sent this account, newest first.
+  List<DriverNotification> notifications = const [];
+
+  bool notificationsLoading = false;
+
+  String? notificationsError;
+
+  bool notificationsSessionExpired = false;
+
+  int unreadNotifications = 0;
+
+  /// Loads `GET /notifications` and keeps the unread count the server reports,
+  /// so the bell badge never guesses.
+  Future<void> refreshNotifications() async {
+    if (notificationsLoading) return;
+    notificationsLoading = true;
+    notificationsError = null;
+    notifyListeners();
+
+    try {
+      final data = await DriverApi.instance.notifications();
+      DateTime? instant(Object? value) =>
+          DateTime.tryParse(value?.toString() ?? '')?.toLocal();
+      String text(Object? value) => value == null ? '' : value.toString().trim();
+
+      notifications = (data['data'] as List? ?? const [])
+          .whereType<Map>()
+          .map((row) {
+            return DriverNotification(
+              id: (row['id'] as num?)?.toInt() ?? 0,
+              type: text(row['type']),
+              title: text(row['title']),
+              message: text(row['message']),
+              createdAt: instant(row['created_at']),
+              readAt: instant(row['read_at']),
+            );
+          })
+          .toList(growable: false);
+      unreadNotifications = (data['unread_count'] as num?)?.toInt() ??
+          notifications.where((item) => item.isUnread).length;
+      notificationsSessionExpired = false;
+    } on DriverApiException catch (error) {
+      notificationsError = error.isUnauthenticated
+          ? 'Your session expired. Sign in again to load your notifications.'
+          : error.message;
+      notificationsSessionExpired = error.isUnauthenticated;
+    } catch (_) {
+      notificationsError =
+          'Could not reach Vendo. Check the connection, then try again.';
+    } finally {
+      notificationsLoading = false;
+      notifyListeners();
+    }
+  }
+
+  /// Marks one notification read locally, then tells the server. A failed call
+  /// puts the row back so the badge cannot drift from what the web holds.
+  Future<void> markNotificationRead(int notificationId) async {
+    final index = notifications.indexWhere((item) => item.id == notificationId);
+    if (index < 0 || !notifications[index].isUnread) return;
+
+    final previous = notifications[index];
+    notifications = [...notifications]
+      ..[index] = DriverNotification(
+        id: previous.id,
+        type: previous.type,
+        title: previous.title,
+        message: previous.message,
+        createdAt: previous.createdAt,
+        readAt: DateTime.now(),
+      );
+    unreadNotifications = unreadNotifications > 0 ? unreadNotifications - 1 : 0;
+    notifyListeners();
+
+    try {
+      await DriverApi.instance.markNotificationRead(notificationId);
+    } catch (_) {
+      notifications = [...notifications]..[index] = previous;
+      unreadNotifications += 1;
+      notifyListeners();
+    }
+  }
+
+  Future<void> markAllNotificationsRead() async {
+    if (unreadNotifications == 0) return;
+    final now = DateTime.now();
+    notifications = notifications
+        .map(
+          (item) => item.isUnread
+              ? DriverNotification(
+                  id: item.id,
+                  type: item.type,
+                  title: item.title,
+                  message: item.message,
+                  createdAt: item.createdAt,
+                  readAt: now,
+                )
+              : item,
+        )
+        .toList(growable: false);
+    unreadNotifications = 0;
+    notifyListeners();
+
+    try {
+      await DriverApi.instance.markAllNotificationsRead();
+    } catch (_) {
+      // Resync instead of leaving the app claiming reads the web never got.
+      await refreshNotifications();
+    }
+  }
+
+  /// The trips this driver already closed, newest first.
+  List<DriverTripHistoryEntry> tripHistory = const [];
+
+  bool tripHistoryLoading = false;
+
+  String? tripHistoryError;
+
+  bool tripHistorySessionExpired = false;
+
+  Future<void> refreshTripHistory() async {
+    if (tripHistoryLoading) return;
+    tripHistoryLoading = true;
+    tripHistoryError = null;
+    notifyListeners();
+
+    try {
+      final raw = await DriverApi.instance.tripHistory();
+      DateTime? instant(Object? value) =>
+          DateTime.tryParse(value?.toString() ?? '')?.toLocal();
+      String text(Object? value) => value == null ? '' : value.toString().trim();
+
+      tripHistory = raw.map((trip) {
+        final origin = trip['origin'] as Map?;
+        final destination = trip['destination'] as Map?;
+        final vehicle = trip['vehicle'] as Map?;
+        return DriverTripHistoryEntry(
+          code: text(trip['code']),
+          origin: text(origin?['name']),
+          destination: text(destination?['name']),
+          vehicle: [
+            text(vehicle?['type']),
+            text(vehicle?['plate_number']),
+          ].where((part) => part.isNotEmpty).join(' · '),
+          parcelCount: (trip['parcel_count'] as num?)?.toInt() ?? 0,
+          scheduledDeparture: instant(trip['scheduled_departure_at']),
+          departedAt: instant(trip['departed_at']),
+          completedAt: instant(trip['arrived_at']),
+        );
+      }).toList(growable: false);
+      tripHistorySessionExpired = false;
+    } on DriverApiException catch (error) {
+      tripHistoryError = error.isUnauthenticated
+          ? 'Your session expired. Sign in again to load your trip history.'
+          : error.message;
+      tripHistorySessionExpired = error.isUnauthenticated;
+    } catch (_) {
+      tripHistoryError =
+          'Could not reach Vendo. Check the connection, then pull down to retry.';
+    } finally {
+      tripHistoryLoading = false;
+      notifyListeners();
+    }
+  }
 
   DriverTrip? tripByCode(String code) {
     for (final trip in trips) {
@@ -671,6 +948,9 @@ class DriverStore extends ChangeNotifier {
     if (trip.isLive) {
       try {
         _replaceWithApiTrip(await DriverApi.instance.arriveTrip(trip.id!));
+        // Closing the trip can accrue the driver's per-stop credits, so reload
+        // the ledger in the background instead of waiting for a manual pull.
+        unawaited(refreshEarnings());
         return '';
       } on DriverApiException catch (error) {
         sessionExpired = error.isUnauthenticated;

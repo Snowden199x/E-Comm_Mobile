@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+  <background android:drawable="@color/ic_launcher_background"/>
+  <!-- driver_logo_icon.png already carries its own padding, so the artwork is
+       drawn full-bleed instead of being shrunk again by the 16% inset. -->
+  <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

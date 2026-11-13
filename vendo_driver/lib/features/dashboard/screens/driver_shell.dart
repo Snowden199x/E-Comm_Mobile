@@ -22,9 +22,11 @@ class _DriverShellState extends State<DriverShell> {
   @override
   void initState() {
     super.initState();
-    // The profile is already loaded by the start screen; the trips come next so
-    // the first Home render is not the sample board.
+    // The profile is already loaded by the start screen; the trips and the
+    // earnings ledger come next so the first renders are not the sample board.
     DriverStore.instance.refreshTrips();
+    DriverStore.instance.refreshEarnings();
+    DriverStore.instance.refreshNotifications();
   }
 
   void _selectTab(int index) {

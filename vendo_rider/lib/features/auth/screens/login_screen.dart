@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:vendo_rider/core/config/google_auth_config.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/features/auth/screens/forgot_password_screen.dart';
 import 'package:vendo_rider/features/auth/screens/register_screen.dart';
@@ -206,11 +207,22 @@ class _LoginScreenState extends State<LoginScreen>
       );
       return;
     }
+    const serverClientId = GoogleAuthConfig.webClientId;
+    const iosClientId = GoogleAuthConfig.iosClientId;
+    const macosClientId = GoogleAuthConfig.macosClientId;
+    if (defaultTargetPlatform == TargetPlatform.android &&
+        serverClientId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This build has no Google web client ID, so Google cannot issue a token. Rebuild with --dart-define=GOOGLE_WEB_CLIENT_ID=<web client id>.',
+          ),
+        ),
+      );
+      return;
+    }
     setState(() => _googleBusy = true);
     try {
-      const serverClientId = String.fromEnvironment('GOOGLE_WEB_CLIENT_ID');
-      const iosClientId = String.fromEnvironment('GOOGLE_IOS_CLIENT_ID');
-      const macosClientId = String.fromEnvironment('GOOGLE_MACOS_CLIENT_ID');
       final nativeClientId = defaultTargetPlatform == TargetPlatform.macOS
           ? macosClientId
           : iosClientId;
@@ -252,18 +264,49 @@ class _LoginScreenState extends State<LoginScreen>
           context,
         ).showSnackBar(SnackBar(content: Text(error.message)));
       }
-    } catch (_) {
+    } on GoogleSignInException catch (error) {
+      if (error.code == GoogleSignInExceptionCode.canceled) return;
+      debugPrint('Google sign-in failed: $error');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_googleFailureMessage(error))),
+      );
+    } catch (error) {
+      debugPrint('Google sign-in failed: $error');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Google sign-in could not complete. Check the configured Android/iOS OAuth client and try again.',
+              'Google sign-in could not start on this device. Try again, or use email verification.',
             ),
           ),
         );
       }
     } finally {
       if (mounted) setState(() => _googleBusy = false);
+    }
+  }
+
+  /// A wrong OAuth client or a client ID the build does not have is a setup
+  /// problem, so the message says what to fix instead of blaming the sign-in.
+  String _googleFailureMessage(GoogleSignInException e) {
+    switch (e.code) {
+      case GoogleSignInExceptionCode.clientConfigurationError:
+      case GoogleSignInExceptionCode.providerConfigurationError:
+        return 'Google does not recognise this app build. Register an Android '
+            'OAuth client for vendoph.rider with the SHA-1 of this build in the '
+            'same Google Cloud project, and check GOOGLE_WEB_CLIENT_ID matches '
+            'the server.';
+      case GoogleSignInExceptionCode.canceled:
+        return 'Google sign-in was cancelled.';
+      case GoogleSignInExceptionCode.interrupted:
+      case GoogleSignInExceptionCode.uiUnavailable:
+        return 'Google sign-in was interrupted. Try again.';
+      default:
+        final detail = e.description;
+        return detail == null || detail.isEmpty
+            ? 'Google sign-in failed (${e.code.name}). Try again.'
+            : 'Google sign-in failed (${e.code.name}): $detail';
     }
   }
 

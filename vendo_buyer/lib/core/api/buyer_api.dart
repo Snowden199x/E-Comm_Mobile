@@ -79,6 +79,9 @@ class BuyerApi {
     if (kDebugMode && defaultTargetPlatform == TargetPlatform.linux) {
       return 'http://127.0.0.1:8000/api/v1/buyer';
     }
+    if (kDebugMode) {
+      return 'http://192.168.1.17:8000/api/v1/buyer';
+    }
     return 'https://vendo-ph.app/api/v1/buyer';
   }
 
@@ -177,6 +180,23 @@ class BuyerApi {
     await _saveLogin(data);
   }
 
+  /// Signs in with a Google ID token. The API verifies the token and returns
+  /// the same session as [login]; a Google email without an approved Buyer
+  /// account gets a [BuyerApiException] explaining what to do instead.
+  Future<void> googleSignIn(String idToken) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/google'),
+          headers: _jsonHeaders(),
+          body: jsonEncode({
+            'credential': idToken,
+            'device_name': 'Vendo Buyer mobile',
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
+    await _saveLogin(_check(response));
+  }
+
   Future<void> logout() async {
     try {
       final response = await http
@@ -210,7 +230,8 @@ class BuyerApi {
   }) async {
     final query = <String, String>{'page': '$page'};
     if (categoryId != null) query['category_id'] = '$categoryId';
-    if (search != null && search.trim().isNotEmpty) query['search'] = search.trim();
+    if (search != null && search.trim().isNotEmpty)
+      query['search'] = search.trim();
     final uri = Uri.parse('$baseUrl/products').replace(queryParameters: query);
     final response = await http
         .get(uri, headers: await _authHeaders())
@@ -229,9 +250,11 @@ class BuyerApi {
   }
 
   Future<List<ApiSeller>> sellers({String? search}) async {
-    final uri = Uri.parse('$baseUrl/sellers').replace(queryParameters: {
-      if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
-    });
+    final uri = Uri.parse('$baseUrl/sellers').replace(
+      queryParameters: {
+        if (search != null && search.trim().isNotEmpty) 'search': search.trim(),
+      },
+    );
     final response = await http
         .get(uri, headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
@@ -241,10 +264,17 @@ class BuyerApi {
         .toList();
   }
 
-  Future<Map<String, dynamic>> seller(int id, {String? search, String sort = 'latest'}) async {
+  Future<Map<String, dynamic>> seller(
+    int id, {
+    String? search,
+    String sort = 'latest',
+  }) async {
     final query = <String, String>{'sort': sort};
-    if (search != null && search.trim().isNotEmpty) query['search'] = search.trim();
-    final uri = Uri.parse('$baseUrl/sellers/$id').replace(queryParameters: query);
+    if (search != null && search.trim().isNotEmpty)
+      query['search'] = search.trim();
+    final uri = Uri.parse(
+      '$baseUrl/sellers/$id',
+    ).replace(queryParameters: query);
     final response = await http
         .get(uri, headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
@@ -261,14 +291,20 @@ class BuyerApi {
 
   Future<List<ApiProduct>> saveItem(int productId) async {
     final response = await http
-        .post(Uri.parse('$baseUrl/saved-items/$productId'), headers: await _authHeaders())
+        .post(
+          Uri.parse('$baseUrl/saved-items/$productId'),
+          headers: await _authHeaders(),
+        )
         .timeout(const Duration(seconds: 25));
     return _products(_check(response));
   }
 
   Future<List<ApiProduct>> removeSavedItem(int productId) async {
     final response = await http
-        .delete(Uri.parse('$baseUrl/saved-items/$productId'), headers: await _authHeaders())
+        .delete(
+          Uri.parse('$baseUrl/saved-items/$productId'),
+          headers: await _authHeaders(),
+        )
         .timeout(const Duration(seconds: 25));
     return _products(_check(response));
   }
@@ -323,7 +359,10 @@ class BuyerApi {
 
   Future<ApiCart> removeCartLine(int itemId) async {
     final response = await http
-        .delete(Uri.parse('$baseUrl/cart/$itemId'), headers: await _authHeaders())
+        .delete(
+          Uri.parse('$baseUrl/cart/$itemId'),
+          headers: await _authHeaders(),
+        )
         .timeout(const Duration(seconds: 25));
     return _trackCart(ApiCart.fromJson(_check(response)));
   }
@@ -357,14 +396,17 @@ class BuyerApi {
         )
         .timeout(const Duration(seconds: 30));
     final data = _check(response);
-    final quotes = Map<String, dynamic>.from((data['quotes'] as Map?) ?? const {});
+    final quotes = Map<String, dynamic>.from(
+      (data['quotes'] as Map?) ?? const {},
+    );
     final perSeller = <int, double>{};
     final perSellerLabel = <int, String>{};
     quotes.forEach((key, value) {
       final row = Map<String, dynamic>.from(value as Map);
       perSeller[int.parse(key)] =
           double.tryParse(row['shipping_fee']?.toString() ?? '') ?? 0;
-      perSellerLabel[int.parse(key)] = row['shipping_fee_label']?.toString() ?? '';
+      perSellerLabel[int.parse(key)] =
+          row['shipping_fee_label']?.toString() ?? '';
     });
     return ApiShippingQuote(
       total: double.tryParse(data['shipping_total']?.toString() ?? '') ?? 0,
@@ -431,10 +473,12 @@ class BuyerApi {
   // ── Orders ─────────────────────────────────────────────────────────────────
   /// [group] is the My Orders tab: to_ship, to_receive or to_review.
   Future<List<ApiOrder>> orders({String? status, String? group}) async {
-    final uri = Uri.parse('$baseUrl/orders').replace(queryParameters: {
-      if (status != null && status.isNotEmpty) 'status': status,
-      if (group != null && group.isNotEmpty) 'group': group,
-    });
+    final uri = Uri.parse('$baseUrl/orders').replace(
+      queryParameters: {
+        if (status != null && status.isNotEmpty) 'status': status,
+        if (group != null && group.isNotEmpty) 'group': group,
+      },
+    );
     final response = await _client
         .get(uri, headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
@@ -492,7 +536,8 @@ class BuyerApi {
           body: jsonEncode({
             'expected_status': expectedStatus,
             'reason': reason,
-            if (details != null && details.isNotEmpty) 'reason_details': details,
+            if (details != null && details.isNotEmpty)
+              'reason_details': details,
           }),
         )
         .timeout(const Duration(seconds: 30));
@@ -503,14 +548,21 @@ class BuyerApi {
 
   Future<ApiOrderDetail> completeOrder(int id) async {
     final response = await http
-        .post(Uri.parse('$baseUrl/orders/$id/complete'), headers: await _authHeaders())
+        .post(
+          Uri.parse('$baseUrl/orders/$id/complete'),
+          headers: await _authHeaders(),
+        )
         .timeout(const Duration(seconds: 30));
     return ApiOrderDetail.fromJson(
       Map<String, dynamic>.from(_check(response)['order'] as Map),
     );
   }
 
-  Future<void> reviewOrderItem(int orderItemId, int rating, String comment) async {
+  Future<void> reviewOrderItem(
+    int orderItemId,
+    int rating,
+    String comment,
+  ) async {
     final response = await http
         .post(
           Uri.parse('$baseUrl/order-items/$orderItemId/review'),
@@ -715,7 +767,9 @@ class BuyerApi {
         .timeout(const Duration(seconds: 25));
     final data = _check(response);
     return (data['data'] as List? ?? [])
-        .map((e) => ApiShopVoucher.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map(
+          (e) => ApiShopVoucher.fromJson(Map<String, dynamic>.from(e as Map)),
+        )
         .toList();
   }
 
@@ -756,7 +810,10 @@ class BuyerApi {
 
   Future<void> saveAppRating(int rating, String comment) async {
     await _storage.write(key: 'buyer_app_rating', value: '$rating');
-    await _storage.write(key: 'buyer_app_rating_comment', value: comment.trim());
+    await _storage.write(
+      key: 'buyer_app_rating_comment',
+      value: comment.trim(),
+    );
   }
 
   List<ApiProduct> _products(Map<String, dynamic> data) =>
@@ -772,7 +829,8 @@ class BuyerApi {
   List<ApiNotification> _notifications(Map<String, dynamic> data) =>
       (data['data'] as List? ?? [])
           .map(
-            (e) => ApiNotification.fromJson(Map<String, dynamic>.from(e as Map)),
+            (e) =>
+                ApiNotification.fromJson(Map<String, dynamic>.from(e as Map)),
           )
           .toList();
 
@@ -803,10 +861,7 @@ class BuyerApi {
     await _storage.write(key: 'buyer_name', value: buyer.name);
     await _storage.write(key: 'buyer_email', value: buyer.email);
     if (buyer.profilePicture != null) {
-      await _storage.write(
-        key: 'buyer_avatar',
-        value: buyer.profilePicture,
-      );
+      await _storage.write(key: 'buyer_avatar', value: buyer.profilePicture);
     }
     return buyer;
   }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The cream behind assets/images/driver_logo.png, so the launch logo has no edge. -->
+    <color name="launch_background">#FEF8E8</color>
+	<color name="ic_launcher_background">#FEF8E8</color>
+</resources>

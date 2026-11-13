@@ -1,12 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
+import 'package:vendo_rider/features/dashboard/screens/cod_collections_screen.dart';
 import 'package:vendo_rider/features/dashboard/widgets/offline_banner.dart';
 
 class EarningsScreen extends StatefulWidget {
   final bool transportDriver;
 
-  const EarningsScreen({super.key, this.transportDriver = false});
+  /// Bumped by the dashboard whenever the Rider opens this tab, so amounts
+  /// and COD collections are not the ones loaded when the app started.
+  final Listenable? refreshSignal;
+
+  const EarningsScreen({
+    super.key,
+    this.transportDriver = false,
+    this.refreshSignal,
+  });
 
   @override
   State<EarningsScreen> createState() => _EarningsScreenState();
@@ -31,8 +40,17 @@ class _EarningsScreenState extends State<EarningsScreen> {
   @override
   void initState() {
     super.initState();
+    widget.refreshSignal?.addListener(_refresh);
     _load();
   }
+
+  @override
+  void dispose() {
+    widget.refreshSignal?.removeListener(_refresh);
+    super.dispose();
+  }
+
+  Future<void> _refresh() => _load();
 
   Future<void> _load() async {
     setState(() {
@@ -133,6 +151,28 @@ class _EarningsScreenState extends State<EarningsScreen> {
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ];
     return '${months[date.month - 1]} ${date.day}, ${date.year}';
+  }
+
+  /// The earnings screen only previews today's collections; the full
+  /// history with date filters lives in [CodCollectionsScreen].
+  List<Map<String, dynamic>> get _previewCollections {
+    final now = DateTime.now();
+    return _collections.where((row) {
+      final date = DateTime.tryParse(
+        row['collected_at']?.toString() ?? '',
+      )?.toLocal();
+      return date != null &&
+          date.year == now.year &&
+          date.month == now.month &&
+          date.day == now.day;
+    }).toList();
+  }
+
+  void _openAllCollections() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CodCollectionsScreen()),
+    );
   }
 
   _CashStatus _cashStatus(Map<String, dynamic> row) {
@@ -312,9 +352,27 @@ class _EarningsScreenState extends State<EarningsScreen> {
       ])),
       if (_collections.isNotEmpty) ...[
         const SizedBox(height: 18),
-        const Text('Recent COD collections', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _purple)),
+        Row(children: [
+          const Expanded(
+            child: Text('Recent COD collections', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _purple)),
+          ),
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _openAllCollections,
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 4),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('View all', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: _purple)),
+                Icon(Icons.chevron_right_rounded, size: 18, color: _purple),
+              ]),
+            ),
+          ),
+        ]),
         const SizedBox(height: 8),
-        ..._collections.map((row) {
+        if (_previewCollections.isEmpty)
+          _card(const Text('No COD collections today.', textAlign: TextAlign.center, style: TextStyle(color: _muted)))
+        else
+          ..._previewCollections.map((row) {
           final status = _cashStatus(row);
           return _card(Row(children: [
             const Icon(Icons.receipt_long_outlined, color: _purple),
