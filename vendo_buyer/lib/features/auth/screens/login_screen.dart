@@ -1,7 +1,10 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:vendo_buyer/core/config/google_auth_config.dart';
 import 'package:vendo_buyer/core/api/buyer_api.dart';
 import 'package:vendo_buyer/features/auth/screens/register_screen.dart';
 import 'package:vendo_buyer/features/home/screens/home_screen.dart';
@@ -45,6 +48,8 @@ class _LoginScreenState extends State<LoginScreen>
   final _passwordCtrl = TextEditingController();
   bool _obscure = true;
   bool _loggingIn = false;
+  bool _googleBusy = false;
+  Future<void>? _googleInitialized;
 
   // Entrance animation
   late final AnimationController _enter;
@@ -100,8 +105,93 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
-  void _onGoogleSignIn() {
-    _snack('Google sign-in coming soon.');
+  /// Signs in with Google. The API verifies the ID token and returns the same
+  /// Buyer session as the password login, so only approved Buyers get in.
+  Future<void> _continueWithGoogle() async {
+    if (_googleBusy || _loggingIn) return;
+    if (defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.iOS &&
+        defaultTargetPlatform != TargetPlatform.macOS) {
+      _snack(
+        'Google sign-in is available on Android, iOS, and macOS. Use email and password here.',
+      );
+      return;
+    }
+    const serverClientId = GoogleAuthConfig.webClientId;
+    const iosClientId = GoogleAuthConfig.iosClientId;
+    const macosClientId = GoogleAuthConfig.macosClientId;
+    if (defaultTargetPlatform == TargetPlatform.android &&
+        serverClientId.isEmpty) {
+      _snack(
+        'This build has no Google web client ID, so Google cannot issue a '
+        'token. Rebuild with --dart-define=GOOGLE_WEB_CLIENT_ID=<web client id>.',
+      );
+      return;
+    }
+    setState(() => _googleBusy = true);
+    try {
+      final nativeClientId = defaultTargetPlatform == TargetPlatform.macOS
+          ? macosClientId
+          : iosClientId;
+      _googleInitialized ??= GoogleSignIn.instance.initialize(
+        serverClientId: serverClientId.isEmpty ? null : serverClientId,
+        clientId: nativeClientId.isEmpty ? null : nativeClientId,
+      );
+      await _googleInitialized;
+      final account = await GoogleSignIn.instance.authenticate();
+      final idToken = account.authentication.idToken;
+      if (idToken == null || idToken.isEmpty) {
+        throw const BuyerApiException(
+          'Google did not return a verified sign-in token. Check the app OAuth client configuration.',
+        );
+      }
+      await BuyerApi.instance.googleSignIn(idToken);
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const HomeScreen()),
+      );
+    } on BuyerApiException catch (e) {
+      if (mounted) _snack(e.message);
+    } on GoogleSignInException catch (e) {
+      if (e.code == GoogleSignInExceptionCode.canceled) return;
+      debugPrint('Google sign-in failed: $e');
+      if (!mounted) return;
+      _snack(_googleFailureMessage(e));
+    } catch (e) {
+      debugPrint('Google sign-in failed: $e');
+      if (mounted) {
+        _snack(
+          'Google sign-in could not start on this device. Try again, or sign '
+          'in with your email and password.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _googleBusy = false);
+    }
+  }
+
+  /// A wrong OAuth client or a client ID the build does not have is a setup
+  /// problem, so the message says what to fix instead of blaming the sign-in.
+  String _googleFailureMessage(GoogleSignInException e) {
+    switch (e.code) {
+      case GoogleSignInExceptionCode.clientConfigurationError:
+      case GoogleSignInExceptionCode.providerConfigurationError:
+        return 'Google does not recognise this app build. Register an Android '
+            'OAuth client for com.example.vendo_buyer with the SHA-1 of this build '
+            'in the same Google Cloud project, and check GOOGLE_WEB_CLIENT_ID '
+            'matches the server.';
+      case GoogleSignInExceptionCode.canceled:
+        return 'Google sign-in was cancelled.';
+      case GoogleSignInExceptionCode.interrupted:
+      case GoogleSignInExceptionCode.uiUnavailable:
+        return 'Google sign-in was interrupted. Try again.';
+      default:
+        final detail = e.description;
+        return detail == null || detail.isEmpty
+            ? 'Google sign-in failed (${e.code.name}). Try again.'
+            : 'Google sign-in failed (${e.code.name}): $detail';
+    }
   }
 
   void _onForgotPassword() {}
@@ -162,7 +252,8 @@ class _LoginScreenState extends State<LoginScreen>
                                   setState(() => _obscure = !_obscure),
                               onLogin: _onLogin,
                               loggingIn: _loggingIn,
-                              onGoogle: _onGoogleSignIn,
+                              onGoogle: _continueWithGoogle,
+                              googleBusy: _googleBusy,
                               onForgot: _onForgotPassword,
                               onRegister: _onRegister,
                             ),
@@ -485,6 +576,7 @@ class _FormCard extends StatelessWidget {
   final VoidCallback onLogin;
   final bool loggingIn;
   final VoidCallback onGoogle;
+  final bool googleBusy;
   final VoidCallback onForgot;
   final VoidCallback onRegister;
 
@@ -496,6 +588,7 @@ class _FormCard extends StatelessWidget {
     required this.onLogin,
     required this.loggingIn,
     required this.onGoogle,
+    required this.googleBusy,
     required this.onForgot,
     required this.onRegister,
   });
@@ -642,7 +735,7 @@ class _FormCard extends StatelessWidget {
             width: double.infinity,
             height: 54,
             child: OutlinedButton(
-              onPressed: onGoogle,
+              onPressed: googleBusy || loggingIn ? null : onGoogle,
               style: OutlinedButton.styleFrom(
                 backgroundColor: Colors.white,
                 side: const BorderSide(color: _C.border, width: 1.5),
@@ -650,14 +743,24 @@ class _FormCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(_radius),
                 ),
               ),
-              child: const Row(
+              child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  _GoogleLogo(),
-                  SizedBox(width: 10),
+                  if (googleBusy)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: _C.raisin,
+                      ),
+                    )
+                  else
+                    const _GoogleLogo(),
+                  const SizedBox(width: 10),
                   Text(
-                    'Continue with Google',
-                    style: TextStyle(
+                    googleBusy ? 'Signing in…' : 'Continue with Google',
+                    style: const TextStyle(
                       color: _C.ink,
                       fontSize: 15,
                       fontWeight: FontWeight.w700,

@@ -708,8 +708,31 @@ class _SearchBar extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 // Welcome hero banner (plum card, gold CTA, shopping-bag illustration)
 // ─────────────────────────────────────────────────────────────────────────────
-class _HeroBanner extends StatelessWidget {
+class _HeroBanner extends StatefulWidget {
   const _HeroBanner();
+
+  @override
+  State<_HeroBanner> createState() => _HeroBannerState();
+}
+
+class _HeroBannerState extends State<_HeroBanner>
+    with SingleTickerProviderStateMixin {
+  // Slow back-and-forth so the bag drifts rather than bobs too fast.
+  late final AnimationController _floatCtrl = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2400),
+  )..repeat(reverse: true);
+
+  late final Animation<double> _float = CurvedAnimation(
+    parent: _floatCtrl,
+    curve: Curves.easeInOut,
+  );
+
+  @override
+  void dispose() {
+    _floatCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -757,22 +780,35 @@ class _HeroBanner extends StatelessWidget {
                 ),
               ),
             ),
-            // Shopping illustration
-            const Positioned(
+            // Shopping illustration — floats gently up and down forever.
+            Positioned(
               right: -12,
               bottom: -4,
               child: IgnorePointer(
                 child: Opacity(
                   opacity: 0.9,
-                  child: SizedBox(
-                    width: 144,
-                    height: 144,
-                    child: CustomPaint(painter: _HeroIllustrationPainter()),
+                  child: AnimatedBuilder(
+                    animation: _float,
+                    builder: (context, child) {
+                      final t = _float.value;
+                      return Transform.translate(
+                        offset: Offset(0, -10 * t),
+                        child: Transform.rotate(
+                          angle: 0.03 * t,
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: const SizedBox(
+                      width: 144,
+                      height: 144,
+                      child: CustomPaint(painter: _HeroIllustrationPainter()),
+                    ),
                   ),
                 ),
               ),
             ),
-            // Text + buttons
+            // Text block
             Padding(
               padding: const EdgeInsets.all(20),
               child: Column(
@@ -823,63 +859,8 @@ class _HeroBanner extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 18),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _C.accent,
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        child: const Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              'Shop now',
-                              style: TextStyle(
-                                color: _C.plum,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            SizedBox(width: 6),
-                            Icon(
-                              Icons.arrow_forward_rounded,
-                              color: _C.plum,
-                              size: 15,
-                            ),
-                          ],
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(24),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.6),
-                          ),
-                        ),
-                        child: const Text(
-                          'Browse categories',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  // Breathing room below the copy so the floating bag has space.
+                  const SizedBox(height: 20),
                 ],
               ),
             ),
@@ -1426,8 +1407,8 @@ class _ProductGrid extends StatelessWidget {
 // Tall banner carousel (top of the left column). Slides every 4.5 seconds.
 // ─────────────────────────────────────────────────────────────────────────────
 class _TallBannerCarousel extends StatefulWidget {
-  /// Put your real banner widgets here later. While this is null or empty,
-  /// three empty placeholder slides are shown.
+  /// Extra banner widgets to show instead of the bundled `ads_*` artwork.
+  /// While this is null or empty, the three ad images are shown.
   final List<Widget>? slides;
 
   const _TallBannerCarousel({this.slides});
@@ -1445,6 +1426,13 @@ class _TallBannerCarouselState extends State<_TallBannerCarousel> {
   int _page = 0;
   bool _autoSliding = false;
 
+  /// Banner artwork, shown in the order it appears in `assets/images`.
+  static const _adImages = <String>[
+    'assets/images/ads_1.jpg',
+    'assets/images/ads_2.jpg',
+    'assets/images/ads_3.png',
+  ];
+
   static const _placeholderGradients = <List<Color>>[
     [Color(0xFFEADCF2), Color(0xFFF6EEF9)],
     [Color(0xFFFBEFD0), Color(0xFFF6EEF9)],
@@ -1455,20 +1443,27 @@ class _TallBannerCarouselState extends State<_TallBannerCarousel> {
     final given = widget.slides;
     if (given != null && given.isNotEmpty) return given;
     return [
-      for (final colors in _placeholderGradients)
-        Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: colors,
+      for (var i = 0; i < _adImages.length; i++)
+        Image.asset(
+          _adImages[i],
+          fit: BoxFit.cover,
+          alignment: Alignment.center,
+          width: double.infinity,
+          height: double.infinity,
+          errorBuilder: (_, _, _) => Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: _placeholderGradients[i % _placeholderGradients.length],
+              ),
             ),
-          ),
-          child: Center(
-            child: Icon(
-              Icons.image_outlined,
-              size: 36,
-              color: _C.lavenderMuted.withValues(alpha: 0.6),
+            child: Center(
+              child: Icon(
+                Icons.image_outlined,
+                size: 36,
+                color: _C.lavenderMuted.withValues(alpha: 0.6),
+              ),
             ),
           ),
         ),

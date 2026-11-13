@@ -52,6 +52,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   final _homeKey = GlobalKey<HomeScreenState>();
   final _parcelsKey = GlobalKey<DeliveriesScreenState>();
   final _notificationsKey = GlobalKey<NotificationsScreenState>();
+  final _earningsRefresh = ValueNotifier<int>(0);
   final _notifications = RiderNotificationCenter.instance;
 
   late final List<Widget> _pages = [
@@ -63,7 +64,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     ),
     DeliveriesScreen(key: _parcelsKey),
     NotificationsScreen(key: _notificationsKey),
-    const EarningsScreen(),
+    EarningsScreen(refreshSignal: _earningsRefresh),
     const ProfileScreen(),
   ];
 
@@ -112,6 +113,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     _notifications.stop();
     OfflineSyncService.instance.stop();
     RiderPushService.instance.reset();
+    _earningsRefresh.dispose();
     super.dispose();
   }
 
@@ -141,6 +143,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       if (index == _Tab.home) _homeKey.currentState?.refreshAssignments();
       if (index == _Tab.parcels) _parcelsKey.currentState?.refreshAssignments();
       if (index == _Tab.notifications) _notificationsKey.currentState?.refreshNotifications();
+      if (index == _Tab.earnings) _earningsRefresh.value++;
       return;
     }
     HapticFeedback.selectionClick();
@@ -148,6 +151,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (index == _Tab.home) _homeKey.currentState?.refreshAssignments();
     if (index == _Tab.parcels) _parcelsKey.currentState?.refreshAssignments();
     if (index == _Tab.notifications) _notificationsKey.currentState?.refreshNotifications();
+    if (index == _Tab.earnings) _earningsRefresh.value++;
   }
 
   @override

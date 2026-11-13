@@ -229,61 +229,37 @@ class NotificationsScreenState extends State<NotificationsScreen>
                     ),
                     const SizedBox(width: 10),
                   ],
-                  Flexible(
-                    child: Text(
-                      'Notifications',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.4,
+                  // The title gets all the free space and is never cut off.
+                  // If the screen is very narrow it shrinks a little instead.
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: const Text(
+                          'Notifications',
+                          maxLines: 1,
+                          softWrap: false,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.4,
+                          ),
+                        ),
                       ),
                     ),
                   ),
                   if (_unreadCount > 0) ...[
                     const SizedBox(width: 10),
-                    _buildNewBadge(),
+                    _buildMarkAllButton(),
                   ],
-                  const Spacer(),
-                  if (_unreadCount > 0) _buildMarkAllButton(),
                 ],
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  // "• 2 new" pill with a softly pulsing dot
-  Widget _buildNewBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-      decoration: BoxDecoration(
-        color: const Color(0x4DF43F5E),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0x66FB7185)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _PulseDot(
-            controller: _bgController,
-            color: const Color(0xFFFB7185),
-            size: 6,
-          ),
-          const SizedBox(width: 6),
-          Text(
-            '$_unreadCount new',
-            style: const TextStyle(
-              color: Color(0xFFFECDD3),
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -430,26 +406,13 @@ class NotificationsScreenState extends State<NotificationsScreen>
   Widget _buildFeed() {
     // Keep the order the API gave us; add a divider whenever the group changes.
     final groups = _items.map(_dayGroup).toList();
-    final counts = <int, int>{};
-    final unreadCounts = <int, int>{};
-    for (var i = 0; i < _items.length; i++) {
-      counts[groups[i]] = (counts[groups[i]] ?? 0) + 1;
-      if (_items[i]['read_at'] == null) {
-        unreadCounts[groups[i]] = (unreadCounts[groups[i]] ?? 0) + 1;
-      }
-    }
 
     final rows = <Widget>[];
     int? previous;
     for (var i = 0; i < _items.length; i++) {
       final group = groups[i];
       if (group != previous) {
-        rows.add(_buildDayHeader(
-          group,
-          counts[group] ?? 0,
-          unreadCounts[group] ?? 0,
-          first: previous == null,
-        ));
+        rows.add(_buildDayHeader(group, first: previous == null));
         previous = group;
       }
       final item = _items[i];
@@ -471,38 +434,22 @@ class NotificationsScreenState extends State<NotificationsScreen>
     );
   }
 
-  Widget _buildDayHeader(int group, int count, int unread, {required bool first}) {
+  Widget _buildDayHeader(int group, {required bool first}) {
     return Padding(
       padding: EdgeInsets.fromLTRB(4, first ? 2 : 14, 4, 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.baseline,
-        textBaseline: TextBaseline.alphabetic,
-        children: [
-          Text(
-            _groupLabels[group],
-            style: const TextStyle(
-              color: _purple,
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.2,
-            ),
-          ),
-          const Spacer(),
-          if (unread > 0)
-            Text(
-              '$unread new',
-              style: const TextStyle(
-                color: Color(0xFFA23E18),
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-        ],
+      child: Text(
+        _groupLabels[group],
+        style: const TextStyle(
+          color: _purple,
+          fontSize: 16,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -0.2,
+        ),
       ),
     );
   }
 
-  // ── One notification card (icon + colors depend on the kind) ─────────────
+  // ── One notification card (balanced colors: not loud, not pale) ──────────
   Widget _buildItemCard(Map<String, dynamic> item, bool unread) {
     final timeAgo = item['time_ago']?.toString() ?? '';
     final message = item['message']?.toString() ?? '';
@@ -516,8 +463,8 @@ class NotificationsScreenState extends State<NotificationsScreen>
         boxShadow: unread
             ? const [
                 BoxShadow(
-                  color: Color(0x0D3C2143),
-                  blurRadius: 16,
+                  color: Color(0x0A3C2143),
+                  blurRadius: 14,
                   spreadRadius: -2,
                   offset: Offset(0, 4),
                 ),
@@ -536,8 +483,8 @@ class NotificationsScreenState extends State<NotificationsScreen>
               children: [
                 // Left accent bar in the kind's color (softer once read)
                 Container(
-                  width: 5,
-                  color: unread ? kind.fg : kind.fg.withAlpha(90),
+                  width: 4,
+                  color: unread ? kind.fg.withAlpha(210) : kind.fg.withAlpha(80),
                 ),
                 Expanded(
                   child: Padding(
@@ -671,7 +618,9 @@ class NotificationsScreenState extends State<NotificationsScreen>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Notification kinds: each one has its own icon, label and color set.
+// Notification kinds: each one has its own icon, label and color. The colors
+// are muted (earthy, a little grayed) so they are easy to tell apart without
+// being too bright.
 //
 // The kind is guessed from the notification's title first, then its
 // type/category/kind field (if the API sends one), then its message.
@@ -693,68 +642,75 @@ class _NoteStyle {
     this.cardBg = Colors.white,
   });
 
+  // Muted terracotta
   static const delivery = _NoteStyle(
     label: 'DELIVERY',
     icon: Icons.local_shipping_outlined,
-    fg: Color(0xFFC85A32),
-    dark: Color(0xFFA23E18),
-    bg: Color(0xFFFFF3EC),
-    border: Color(0x33C85A32),
+    fg: Color(0xFFB5694A),
+    dark: Color(0xFF8A4A30),
+    bg: Color(0xFFFBEFE8),
+    border: Color(0xFFF0D9CC),
   );
 
+  // Muted ochre
   static const pickup = _NoteStyle(
     label: 'PICKUP',
     icon: Icons.inventory_2_outlined,
-    fg: Color(0xFFD97706),
-    dark: Color(0xFF92400E),
-    bg: Color(0xFFFFF8E7),
-    border: Color(0x4DF59E0B),
+    fg: Color(0xFFB58A3E),
+    dark: Color(0xFF7F5F25),
+    bg: Color(0xFFFAF3E3),
+    border: Color(0xFFEBDDBC),
   );
 
+  // Muted plum
   static const linehaul = _NoteStyle(
     label: 'LINEHAUL',
     icon: Icons.route_rounded,
-    fg: Color(0xFF815488),
-    dark: Color(0xFF3C2143),
-    bg: Color(0xFFF2EAF5),
-    border: Color(0x33815488),
+    fg: Color(0xFF8A6291),
+    dark: Color(0xFF4F2F57),
+    bg: Color(0xFFF3EBF5),
+    border: Color(0xFFE2D3E6),
   );
 
+  // Muted sage green
   static const delivered = _NoteStyle(
     label: 'DELIVERED',
     icon: Icons.check_circle_outline_rounded,
-    fg: Color(0xFF059669),
-    dark: Color(0xFF047857),
-    bg: Color(0xFFECFDF5),
-    border: Color(0x4D34D399),
+    fg: Color(0xFF4F8F72),
+    dark: Color(0xFF2F6A50),
+    bg: Color(0xFFEBF5EF),
+    border: Color(0xFFD3E7DB),
   );
 
+  // Dusty rose-red
   static const alert = _NoteStyle(
     label: 'ALERT',
     icon: Icons.warning_amber_rounded,
-    fg: Color(0xFFE11D48),
-    dark: Color(0xFF9F1239),
-    bg: Color(0xFFFFF1F2),
-    border: Color(0x4DFB7185),
-    cardBg: Color(0xFFFFF7F8),
+    fg: Color(0xFFC0605B),
+    dark: Color(0xFF8C3A36),
+    bg: Color(0xFFFBEDEC),
+    border: Color(0xFFF0D0CE),
+    cardBg: Color(0xFFFEF8F7),
   );
 
+  // Muted teal
   static const earnings = _NoteStyle(
     label: 'EARNINGS',
     icon: Icons.account_balance_wallet_outlined,
-    fg: Color(0xFF0E7490),
-    dark: Color(0xFF155E75),
-    bg: Color(0xFFECFEFF),
-    border: Color(0x4D22D3EE),
+    fg: Color(0xFF4A8794),
+    dark: Color(0xFF2C616D),
+    bg: Color(0xFFEAF4F6),
+    border: Color(0xFFD1E5E9),
   );
 
+  // Vendo purple
   static const general = _NoteStyle(
     label: 'UPDATE',
     icon: Icons.notifications_active_outlined,
-    fg: Color(0xFF3C2143),
+    fg: Color(0xFF6E4A76),
     dark: Color(0xFF3C2143),
     bg: Color(0xFFF2EAF5),
-    border: Color(0x143C2143),
+    border: Color(0xFFE1D3E6),
   );
 
   static bool _has(String s, List<String> words) =>

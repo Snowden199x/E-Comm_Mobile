@@ -37,6 +37,7 @@ dependencies:
   # Same packages the Rider app uses: the Vendo API, secure token storage and
   # camera/gallery document uploads for the licence and valid ID.
   http: ^1.6.0
+  google_sign_in: ^7.2.0
   flutter_secure_storage: ^10.3.4
   image_picker: ^1.1.2
   # Camera reader for the load scan before dispatch.
@@ -52,6 +53,17 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
+
+# Launcher icon: the driver app's truck badge. Run `dart run flutter_launcher_icons`
+# after changing assets/images/driver_logo.png or its padded foreground.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/images/driver_logo_icon.png
+  remove_alpha_ios: true
+  adaptive_icon_background: "#FEF8E8"
+  adaptive_icon_foreground: assets/images/driver_logo_icon.png
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

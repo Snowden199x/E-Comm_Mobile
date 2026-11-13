@@ -7,6 +7,7 @@ import 'package:vendo_driver/core/data/driver_store.dart';
 import 'package:vendo_driver/core/theme/vendo_theme.dart';
 import 'package:vendo_driver/core/utils/date_labels.dart';
 import 'package:vendo_driver/features/auth/screens/driver_login_screen.dart';
+import 'package:vendo_driver/features/notifications/screens/driver_notifications_screen.dart';
 import 'package:vendo_driver/features/shared/widgets/driver_ui.dart';
 import 'package:vendo_driver/features/trips/screens/driver_manifest_screen.dart';
 import 'package:vendo_driver/features/trips/screens/driver_scan_screen.dart';
@@ -49,6 +50,17 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
     super.dispose();
   }
 
+  /// The bell opens its own screen and reloads the list, so a notification that
+  /// arrived while the app sat in the background is not missed.
+  void _openNotifications() {
+    DriverStore.instance.refreshNotifications();
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const DriverNotificationsScreen(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final store = DriverStore.instance;
@@ -86,7 +98,10 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
       value: SystemUiOverlayStyle.light,
       child: RefreshIndicator(
         color: VColors.brique,
-        onRefresh: store.refreshTrips,
+        onRefresh: () => Future.wait([
+          store.refreshTrips(),
+          store.refreshNotifications(),
+        ]),
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: EdgeInsets.zero,
@@ -102,6 +117,8 @@ class _DriverHomeScreenState extends State<DriverHomeScreen>
               initials: profile.initials,
               dateText: fullDateLabel(now),
               vehicleText: '${profile.vehicle} · ${profile.plate}',
+              unreadNotifications: store.unreadNotifications,
+              onOpenNotifications: _openNotifications,
               onOpenProfile: () => widget.onOpenTab(4),
             ),
             Padding(
@@ -205,6 +222,8 @@ class _AnimatedHeader extends StatelessWidget {
     required this.initials,
     required this.dateText,
     required this.vehicleText,
+    required this.unreadNotifications,
+    required this.onOpenNotifications,
     required this.onOpenProfile,
   });
 
@@ -216,6 +235,8 @@ class _AnimatedHeader extends StatelessWidget {
   final String initials;
   final String dateText;
   final String vehicleText;
+  final int unreadNotifications;
+  final VoidCallback onOpenNotifications;
   final VoidCallback onOpenProfile;
 
   @override
@@ -310,7 +331,12 @@ class _AnimatedHeader extends StatelessWidget {
                           ],
                         ),
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 12),
+                      _NotificationBell(
+                        unreadCount: unreadNotifications,
+                        onTap: onOpenNotifications,
+                      ),
+                      const SizedBox(width: 10),
                       Tooltip(
                         message: 'Open profile',
                         child: GestureDetector(
@@ -444,6 +470,81 @@ class _Particle {
   final double x, phase, size;
   final int speed;
   final Color color;
+}
+
+/// Bell in the header with the unread count the server reported.
+class _NotificationBell extends StatelessWidget {
+  const _NotificationBell({required this.unreadCount, required this.onTap});
+
+  final int unreadCount;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: unreadCount == 0
+          ? 'Notifications'
+          : '$unreadCount unread notifications',
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: 48,
+          height: 48,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0x1AFFFFFF),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0x26FFFFFF)),
+                ),
+                child: Icon(
+                  unreadCount == 0
+                      ? Icons.notifications_none_rounded
+                      : Icons.notifications_rounded,
+                  color: Colors.white,
+                  size: 19,
+                ),
+              ),
+              if (unreadCount > 0)
+                Positioned(
+                  top: 4,
+                  right: 4,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 1,
+                    ),
+                    constraints: const BoxConstraints(minWidth: 16),
+                    decoration: BoxDecoration(
+                      color: VColors.brique,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: const Color(0xFF6B3570),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Text(
+                      unreadCount > 9 ? '9+' : '$unreadCount',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _Avatar extends StatelessWidget {

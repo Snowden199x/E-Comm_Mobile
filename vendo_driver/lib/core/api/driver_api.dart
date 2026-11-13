@@ -173,6 +173,44 @@ class DriverApi {
       );
     }
 
+    await _saveSession(data, email);
+    return data;
+  }
+
+  /// Signs in with a Google ID token. The API verifies the token and answers
+  /// with the same session as [login], so an approved driver lands in the app
+  /// and a pending application gets the same "waiting for approval" error.
+  Future<Map<String, dynamic>> googleSignIn(String idToken) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/google'),
+          headers: _jsonHeaders,
+          body: jsonEncode({
+            'credential': idToken,
+            'device_name': 'Vendo Transport Driver mobile',
+          }),
+        )
+        .timeout(const Duration(seconds: 25));
+    final data = _decode(response);
+    if (response.statusCode >= 400) {
+      throw DriverApiException(
+        data['message']?.toString() ?? 'Could not sign in with Google.',
+        statusCode: response.statusCode,
+        applicationStatus: data['status']?.toString(),
+        reviewingHub: data['reviewing_hub']?.toString(),
+        rejectionReason: data['rejection_reason']?.toString(),
+      );
+    }
+
+    await _saveSession(
+      data,
+      (data['driver'] as Map)['email']?.toString() ?? '',
+    );
+    return data;
+  }
+
+  /// Keeps the signed-in driver exactly as the API described them.
+  Future<void> _saveSession(Map<String, dynamic> data, String email) async {
     await _storage.write(key: 'driver_token', value: data['token'] as String);
     await _storage.write(
       key: 'driver_name',
@@ -192,7 +230,6 @@ class DriverApi {
     );
     await saveProfile(data);
     await saveApplicationEmail(email);
-    return data;
   }
 
   /// Returns the application, or null when there is no application for the
@@ -244,14 +281,14 @@ class DriverApi {
 
   /// A signed-in POST. Used for the trip actions, which answer with a readable
   /// message when the server refuses them.
-  Future<Map<String, dynamic>> _authorizedPost(String path) async {
+  Future<Map<String, dynamic>> _authorizedPost(
+    String path, {
+    String fallbackMessage = 'Could not update this trip.',
+  }) async {
     final response = await http
         .post(Uri.parse('$baseUrl$path'), headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
-    return _authorizedBody(
-      response,
-      fallbackMessage: 'Could not update this trip.',
-    );
+    return _authorizedBody(response, fallbackMessage: fallbackMessage);
   }
 
   Future<Map<String, dynamic>> _authorizedBody(
@@ -275,6 +312,52 @@ class DriverApi {
   /// accepted, so the app can ask for a fresh sign-in.
   Future<List<Map<String, dynamic>>> trips() async {
     final data = await _authorizedGet('/trips');
+    final raw = data['trips'] as List? ?? const [];
+    return raw
+        .whereType<Map>()
+        .map((trip) => Map<String, dynamic>.from(trip))
+        .toList(growable: false);
+  }
+
+  /// The accrued per-stop shipping shares the web ledger credits to this
+  /// driver. Amounts are server-calculated; the app only displays them.
+  Future<Map<String, dynamic>> earnings() async {
+    return _authorizedGet(
+      '/earnings',
+      fallbackMessage: 'Could not load your earnings.',
+    );
+  }
+
+  /// Notifications the web addressed to this driver's account: trip
+  /// assignments, arrival records and the company's own updates.
+  Future<Map<String, dynamic>> notifications() async {
+    return _authorizedGet(
+      '/notifications',
+      fallbackMessage: 'Could not load your notifications.',
+    );
+  }
+
+  Future<void> markNotificationRead(int notificationId) async {
+    await _authorizedPost(
+      '/notifications/$notificationId/read',
+      fallbackMessage: 'Could not mark this notification as read.',
+    );
+  }
+
+  Future<void> markAllNotificationsRead() async {
+    await _authorizedPost(
+      '/notifications/read-all',
+      fallbackMessage: 'Could not mark your notifications as read.',
+    );
+  }
+
+  /// The trips the driver already closed, newest first. Kept apart from
+  /// [trips] because the board only carries scheduled and in-transit runs.
+  Future<List<Map<String, dynamic>>> tripHistory() async {
+    final data = await _authorizedGet(
+      '/trips/history',
+      fallbackMessage: 'Could not load your trip history.',
+    );
     final raw = data['trips'] as List? ?? const [];
     return raw
         .whereType<Map>()

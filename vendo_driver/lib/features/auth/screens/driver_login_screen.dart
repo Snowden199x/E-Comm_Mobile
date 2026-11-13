@@ -1,7 +1,10 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:vendo_driver/core/config/google_auth_config.dart';
 import 'package:vendo_driver/core/api/driver_api.dart';
 import 'package:vendo_driver/core/data/driver_store.dart';
 import 'package:vendo_driver/core/theme/vendo_theme.dart';
@@ -45,6 +48,8 @@ class _DriverLoginScreenState extends State<DriverLoginScreen>
   final _password = TextEditingController();
   bool _obscure = true;
   bool _busy = false;
+  bool _googleBusy = false;
+  Future<void>? _googleInitialized;
   String? _error;
   String? _pendingHub;
 
@@ -184,6 +189,110 @@ class _DriverLoginScreenState extends State<DriverLoginScreen>
     }
   }
 
+  /// Signs in with Google. The API checks the driver role, approval and hub,
+  /// then returns the same session as [_signIn], so a pending application gets
+  /// the same waiting banner instead of a token.
+  Future<void> _signInWithGoogle() async {
+    if (_googleBusy || _busy) return;
+    if (defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.iOS &&
+        defaultTargetPlatform != TargetPlatform.macOS) {
+      setState(() {
+        _error =
+            'Google sign-in is available on Android, iOS, and macOS. Use email and password here.';
+        _pendingHub = null;
+      });
+      return;
+    }
+    const serverClientId = GoogleAuthConfig.webClientId;
+    const iosClientId = GoogleAuthConfig.iosClientId;
+    const macosClientId = GoogleAuthConfig.macosClientId;
+    if (defaultTargetPlatform == TargetPlatform.android &&
+        serverClientId.isEmpty) {
+      setState(() {
+        _error =
+            'This build has no Google web client ID, so Google cannot issue a token. Rebuild with --dart-define=GOOGLE_WEB_CLIENT_ID=<web client id>.';
+        _pendingHub = null;
+      });
+      return;
+    }
+    setState(() {
+      _googleBusy = true;
+      _error = null;
+      _pendingHub = null;
+    });
+    try {
+      final nativeClientId = defaultTargetPlatform == TargetPlatform.macOS
+          ? macosClientId
+          : iosClientId;
+      _googleInitialized ??= GoogleSignIn.instance.initialize(
+        serverClientId: serverClientId.isEmpty ? null : serverClientId,
+        clientId: nativeClientId.isEmpty ? null : nativeClientId,
+      );
+      await _googleInitialized;
+      final account = await GoogleSignIn.instance.authenticate();
+      final idToken = account.authentication.idToken;
+      if (idToken == null || idToken.isEmpty) {
+        throw const DriverApiException(
+          'Google did not return a verified sign-in token. Check the app OAuth client configuration.',
+        );
+      }
+      final session = await DriverApi.instance.googleSignIn(idToken);
+      DriverStore.instance.applySession(session);
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute<void>(builder: (_) => const DriverShell()),
+      );
+    } on DriverApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.message;
+        _pendingHub = error.isRejected ? null : error.reviewingHub;
+      });
+    } on GoogleSignInException catch (e) {
+      if (e.code == GoogleSignInExceptionCode.canceled) return;
+      debugPrint('Google sign-in failed: $e');
+      if (!mounted) return;
+      setState(() {
+        _error = _googleFailureMessage(e);
+        _pendingHub = null;
+      });
+    } catch (e) {
+      debugPrint('Google sign-in failed: $e');
+      if (!mounted) return;
+      setState(() {
+        _error =
+            'Google sign-in could not start on this device. Try again, or sign in with your email and password.';
+        _pendingHub = null;
+      });
+    } finally {
+      if (mounted) setState(() => _googleBusy = false);
+    }
+  }
+
+  /// A wrong OAuth client or a client ID the build does not have is a setup
+  /// problem, so the message says what to fix instead of blaming the sign-in.
+  String _googleFailureMessage(GoogleSignInException e) {
+    switch (e.code) {
+      case GoogleSignInExceptionCode.clientConfigurationError:
+      case GoogleSignInExceptionCode.providerConfigurationError:
+        return 'Google does not recognise this app build. Register an Android '
+            'OAuth client for com.example.vendo_driver with the SHA-1 of this build '
+            'in the same Google Cloud project, and check GOOGLE_WEB_CLIENT_ID '
+            'matches the server.';
+      case GoogleSignInExceptionCode.canceled:
+        return 'Google sign-in was cancelled.';
+      case GoogleSignInExceptionCode.interrupted:
+      case GoogleSignInExceptionCode.uiUnavailable:
+        return 'Google sign-in was interrupted. Try again.';
+      default:
+        final detail = e.description;
+        return detail == null || detail.isEmpty
+            ? 'Google sign-in failed (${e.code.name}). Try again.'
+            : 'Google sign-in failed (${e.code.name}): $detail';
+    }
+  }
+
   /// Opens password recovery. Returns true when the password was changed, so
   /// the screen can name the address that is ready to sign in.
   Future<void> _openResetSheet() async {
@@ -272,7 +381,9 @@ class _DriverLoginScreenState extends State<DriverLoginScreen>
                                   onToggle: () =>
                                       setState(() => _obscure = !_obscure),
                                   onSignIn: _signIn,
+                                  onGoogle: _signInWithGoogle,
                                   busy: _busy,
+                                  googleBusy: _googleBusy,
                                   error: _error,
                                   pendingHub: _pendingHub,
                                   onForgot: _openResetSheet,
@@ -665,7 +776,9 @@ class _FormCard extends StatelessWidget {
   final bool obscure;
   final VoidCallback onToggle;
   final VoidCallback onSignIn;
+  final VoidCallback onGoogle;
   final bool busy;
+  final bool googleBusy;
   final String? error;
   final String? pendingHub;
   final VoidCallback onForgot;
@@ -678,7 +791,9 @@ class _FormCard extends StatelessWidget {
     required this.obscure,
     required this.onToggle,
     required this.onSignIn,
+    required this.onGoogle,
     required this.busy,
+    required this.googleBusy,
     required this.error,
     required this.pendingHub,
     required this.onForgot,
@@ -892,6 +1007,48 @@ class _FormCard extends StatelessWidget {
           ),
           const SizedBox(height: 20),
 
+          // Google button
+          SizedBox(
+            width: double.infinity,
+            height: 54,
+            child: OutlinedButton(
+              onPressed: busy || googleBusy ? null : onGoogle,
+              style: OutlinedButton.styleFrom(
+                backgroundColor: Colors.white,
+                side: const BorderSide(color: VColors.border, width: 1.5),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(_radius),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (googleBusy)
+                    const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: VColors.raisin,
+                      ),
+                    )
+                  else
+                    const _GoogleLogo(),
+                  const SizedBox(width: 10),
+                  Text(
+                    googleBusy ? 'Signing in…' : 'Continue with Google',
+                    style: const TextStyle(
+                      color: VColors.ink,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
           // Application status
           SizedBox(
             width: double.infinity,
@@ -987,6 +1144,73 @@ class _FormCard extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 // Small widgets
 // ─────────────────────────────────────────────────────────────────────────────
+class _GoogleLogo extends StatelessWidget {
+  const _GoogleLogo();
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(size: const Size(24, 24), painter: _GoogleLogoPainter());
+  }
+}
+
+class _GoogleLogoPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final r = size.width / 2;
+    final sw = size.width * 0.18;
+    final rect = Rect.fromCircle(center: Offset(cx, cy), radius: r - sw / 2);
+
+    void arc(double start, double sweep, Color color) {
+      canvas.drawArc(
+        rect,
+        start,
+        sweep,
+        false,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = sw
+          ..strokeCap = StrokeCap.butt,
+      );
+    }
+
+    arc(-1.5708, 1.5708, const Color(0xFFEA4335));
+    arc(0, 1.5708, const Color(0xFFFBBC05));
+    arc(1.5708, 1.5708, const Color(0xFF34A853));
+    arc(3.14159, 1.5708, const Color(0xFF4285F4));
+
+    canvas.drawCircle(
+      Offset(cx, cy),
+      r - sw,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.fill,
+    );
+
+    canvas.drawRect(
+      Rect.fromLTWH(cx - 0.5, cy - sw * 0.45, r - sw * 0.3, sw * 0.9),
+      Paint()
+        ..color = const Color(0xFF4285F4)
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawArc(
+      rect,
+      -0.45,
+      0.45,
+      false,
+      Paint()
+        ..color = const Color(0xFF4285F4)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = sw,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
 class _Label extends StatelessWidget {
   final String text;
 
