@@ -949,6 +949,9 @@ class _DeliveryCard extends StatelessWidget {
         ? (window['scheduled_for_label']?.toString().trim() ?? '')
         : '';
     final tracking = order['tracking_number']?.toString() ?? 'Assigned parcel';
+    // When the hub handed this parcel over, so the rider can see how long it
+    // has been waiting in the list.
+    final assignedAgo = riderAssignedAgo(order);
 
     return Container(
       decoration: BoxDecoration(
@@ -1049,6 +1052,31 @@ class _DeliveryCard extends StatelessWidget {
                     ),
                   ],
                 ),
+                if (assignedAgo.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.schedule_rounded,
+                        size: 14,
+                        color: _C.muted,
+                      ),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          'Assigned $assignedAgo',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: _C.muted,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 if (scheduledFor.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Container(
