@@ -1,9 +1,9 @@
 # Vendo Driver app
 
 **Status:** Registration, application status, sign-in, session restore, password reset, the trip board (`GET /trips`, load scan, depart, arrive), the accrued earnings ledger (`GET /earnings`), driver notifications and completed-trip history are connected to the web API.
-**Updated:** 13 November 2026
+**Updated:** 14 November 2026
 
-`vendo_driver/` is the Flutter app for the Transport Driver — the person in charge of the trucks and vans that move parcels between Stations and Province Hubs. It uses the same Vendo palette and Material 3 language as the Rider app, but it has its own screens and a separate bottom navigation widget.
+`vendo_rider/lib/driver/` holds the screens for the Transport Driver — the person in charge of the trucks and vans that move parcels between Stations and Province Hubs. It uses the same Vendo palette and Material 3 language as the Rider app, but it has its own screens and a separate bottom navigation widget; the rider screens live beside it in `vendo_rider/lib/rider/`. Driver accounts sign in on the shared Rider login screen, which routes them to this five-tab shell and reopens a saved driver session through `GET /me`; the driver app's own login screen was removed when the two apps were merged, so the login, registration and session rules below apply to that shared screen.
 
 ## Scope
 
