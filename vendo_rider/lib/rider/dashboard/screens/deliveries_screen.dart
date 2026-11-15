@@ -44,7 +44,11 @@ const double _cardRadius = 20;
 const List<String> _monoFallback = ['monospace', 'Courier'];
 
 class DeliveriesScreen extends StatefulWidget {
-  const DeliveriesScreen({super.key});
+  const DeliveriesScreen({super.key, this.onOpenHome});
+
+  /// Called when a parcel's details ask to go back to the Home tab, e.g. after
+  /// the station hub received it.
+  final VoidCallback? onOpenHome;
 
   @override
   State<DeliveriesScreen> createState() => DeliveriesScreenState();
@@ -192,9 +196,37 @@ class DeliveriesScreenState extends State<DeliveriesScreen>
   /// assignment notification arrives.
   Future<void> refreshAssignments() => _refresh();
 
-  List<Map<String, dynamic>> get _visible => _assignments
-      .where((order) => riderSupportsAssignment(order, _vehicleType))
-      .toList();
+  /// The parcels this Rider's vehicle can carry, newest assignment first and
+  /// the oldest at the bottom, so the parcel that just reached the Rider is the
+  /// one at the top of the list. A parcel the server sent without a usable
+  /// `assigned_at` keeps the order it arrived in, after the timed ones.
+  List<Map<String, dynamic>> get _visible {
+    final orders = _assignments
+        .where((order) => riderSupportsAssignment(order, _vehicleType))
+        .toList();
+    final times = {
+      for (var i = 0; i < orders.length; i++)
+        i: DateTime.tryParse(_assignedAtText(orders[i])),
+    };
+    final positions = List<int>.generate(orders.length, (i) => i);
+    positions.sort((a, b) {
+      final left = times[a];
+      final right = times[b];
+      if (left != null && right != null) {
+        final byTime = right.compareTo(left);
+        if (byTime != 0) return byTime;
+      } else if (left != null) {
+        return -1;
+      } else if (right != null) {
+        return 1;
+      }
+      return a.compareTo(b);
+    });
+    return [for (final position in positions) orders[position]];
+  }
+
+  static String _assignedAtText(Map<String, dynamic> order) =>
+      order['assigned_at']?.toString().trim() ?? '';
 
   int _countStage(List<Map<String, dynamic>> orders, Set<RiderStage> stages) =>
       orders.where((order) => stages.contains(riderStageOf(order))).length;
@@ -237,11 +269,17 @@ class DeliveriesScreenState extends State<DeliveriesScreen>
       orders.where((order) => _matchesFilter(order, filter)).length;
 
   Future<void> _openDetails(Map<String, dynamic> order) async {
-    await Navigator.push(
+    final result = await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => DeliveryDetailScreen(order: order)),
     );
-    if (mounted) await _refresh();
+    if (!mounted) return;
+    // "Back to home" on a parcel the station hub just received.
+    if (result == 'home') {
+      widget.onOpenHome?.call();
+      return;
+    }
+    await _refresh();
   }
 
   @override
@@ -949,9 +987,9 @@ class _DeliveryCard extends StatelessWidget {
         ? (window['scheduled_for_label']?.toString().trim() ?? '')
         : '';
     final tracking = order['tracking_number']?.toString() ?? 'Assigned parcel';
-    // When the hub handed this parcel over, so the rider can see how long it
-    // has been waiting in the list.
-    final assignedAgo = riderAssignedAgo(order);
+    // When the hub handed this parcel over and how long it has been waiting in
+    // the list, e.g. "12:04 PM · 5m ago".
+    final assignedAt = riderAssignedLabel(order);
 
     return Container(
       decoration: BoxDecoration(
@@ -1052,7 +1090,7 @@ class _DeliveryCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                if (assignedAgo.isNotEmpty) ...[
+                if (assignedAt.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Row(
                     children: [
@@ -1064,7 +1102,7 @@ class _DeliveryCard extends StatelessWidget {
                       const SizedBox(width: 6),
                       Flexible(
                         child: Text(
-                          'Assigned $assignedAgo',
+                          'Assigned $assignedAt',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(

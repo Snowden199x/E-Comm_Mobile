@@ -319,6 +319,16 @@ class DriverApi {
         .toList(growable: false);
   }
 
+  /// One trip as the hub sees it now. The receiving screen polls this, so the
+  /// station's arrival scans show up without reloading the whole board.
+  Future<Map<String, dynamic>> trip(int tripId) async {
+    final data = await _authorizedGet(
+      '/trips/$tripId',
+      fallbackMessage: 'Could not refresh this trip.',
+    );
+    return Map<String, dynamic>.from(data['trip'] as Map);
+  }
+
   /// The accrued per-stop shipping shares the web ledger credits to this
   /// driver. Amounts are server-calculated; the app only displays them.
   Future<Map<String, dynamic>> earnings() async {

@@ -338,14 +338,14 @@ class DriverStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Trips start as samples so an offline launch is not an empty board. The
-  /// first successful [refreshTrips] clears and refills this same list, so the
-  /// screens that hold on to it see the trips the hub assigned.
-  late final List<DriverTrip> trips = _seedTrips();
+  /// Only trips the hub actually assigned. The board starts empty and
+  /// [refreshTrips] fills it from `GET /trips`, so no invented trip is ever
+  /// shown while the first request is in flight.
+  final List<DriverTrip> trips = <DriverTrip>[];
 
   bool tripsLoading = false;
 
-  /// False while the board still shows the sample trips.
+  /// False until the first successful refresh answers with the hub's trips.
   bool tripsAreLive = false;
 
   DateTime? tripsSyncedAt;
@@ -463,6 +463,23 @@ class DriverStore extends ChangeNotifier {
       departedAt: instant(data['departed_at']),
       arrivedAt: instant(data['arrived_at']),
     );
+  }
+
+  /// Re-reads one trip from `GET /trips/{id}`. The destination handover screen
+  /// calls this on a timer, so the receiving count follows the station's scans
+  /// while it stays open. Returns false when the answer could not be applied,
+  /// leaving the previous counts on screen instead of clearing them.
+  Future<bool> refreshTrip(int tripId) async {
+    try {
+      _replaceWithApiTrip(await DriverApi.instance.trip(tripId));
+      sessionExpired = false;
+      return true;
+    } on DriverApiException catch (error) {
+      sessionExpired = error.isUnauthenticated;
+      return false;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Puts the trip the server just returned back on the board.
@@ -657,6 +674,11 @@ class DriverStore extends ChangeNotifier {
   /// The trips this driver already closed, newest first.
   List<DriverTripHistoryEntry> tripHistory = const [];
 
+  /// Closed trips with their loaded parcels kept intact, so the Manifest tab
+  /// can still show what was on the truck after the trip is finished. `trips`
+  /// only carries the runs the hub is still working.
+  List<DriverTrip> closedTrips = const [];
+
   bool tripHistoryLoading = false;
 
   String? tripHistoryError;
@@ -687,12 +709,14 @@ class DriverStore extends ChangeNotifier {
             text(vehicle?['type']),
             text(vehicle?['plate_number']),
           ].where((part) => part.isNotEmpty).join(' · '),
-          parcelCount: (trip['parcel_count'] as num?)?.toInt() ?? 0,
+          parcelCount: (trip['parcel_count'] as num?)?.toInt() ??
+              (trip['manifest'] as List? ?? const []).length,
           scheduledDeparture: instant(trip['scheduled_departure_at']),
           departedAt: instant(trip['departed_at']),
           completedAt: instant(trip['arrived_at']),
         );
       }).toList(growable: false);
+      closedTrips = raw.map(_tripFromApi).toList(growable: false);
       tripHistorySessionExpired = false;
     } on DriverApiException catch (error) {
       tripHistoryError = error.isUnauthenticated
@@ -710,6 +734,9 @@ class DriverStore extends ChangeNotifier {
 
   DriverTrip? tripByCode(String code) {
     for (final trip in trips) {
+      if (trip.code == code) return trip;
+    }
+    for (final trip in closedTrips) {
       if (trip.code == code) return trip;
     }
     return null;
@@ -951,6 +978,9 @@ class DriverStore extends ChangeNotifier {
         // Closing the trip can accrue the driver's per-stop credits, so reload
         // the ledger in the background instead of waiting for a manual pull.
         unawaited(refreshEarnings());
+        // The trip leaves the active board once it is complete, so pull the
+        // closed list straight away to keep its manifest readable.
+        unawaited(refreshTripHistory());
         return '';
       } on DriverApiException catch (error) {
         sessionExpired = error.isUnauthenticated;
@@ -977,78 +1007,4 @@ class DriverStore extends ChangeNotifier {
     trip.destinationScanned = trip.parcelCount;
     notifyListeners();
   }
-
-  List<DriverTrip> _seedTrips() {
-    final now = DateTime.now();
-    final start = DateTime(now.year, now.month, now.day, now.hour, now.minute);
-
-    DateTime at(int dayOffset, int hour, int minute) =>
-        DateTime(now.year, now.month, now.day + dayOffset, hour, minute);
-
-    final firstDeparture = start.add(const Duration(minutes: 45));
-    final secondDeparture = start.add(const Duration(hours: 3, minutes: 30));
-
-    return [
-      DriverTrip(
-        code: 'TRP-2406',
-        origin: 'Laguna Province Hub',
-        originArea: 'Calamba, Laguna',
-        destination: 'Santa Cruz Station',
-        destinationArea: 'Santa Cruz, Laguna',
-        scheduledDeparture: firstDeparture,
-        eta: firstDeparture.add(const Duration(hours: 1, minutes: 40)),
-        distanceKm: 34,
-        vehicle: 'Isuzu Elf 6-Wheeler',
-        plate: 'NBC 4821',
-        trackingNumbers: _trackingBatch(101, 12),
-        originScanned: 12,
-      ),
-      DriverTrip(
-        code: 'TRP-2407',
-        origin: 'Santa Cruz Station',
-        originArea: 'Santa Cruz, Laguna',
-        destination: 'Pagsanjan Station',
-        destinationArea: 'Pagsanjan, Laguna',
-        scheduledDeparture: secondDeparture,
-        eta: secondDeparture.add(const Duration(minutes: 50)),
-        distanceKm: 14,
-        vehicle: 'Isuzu Elf 6-Wheeler',
-        plate: 'NBC 4821',
-        trackingNumbers: _trackingBatch(207, 8),
-        originScanned: 6,
-      ),
-      DriverTrip(
-        code: 'TRP-2408',
-        origin: 'Laguna Province Hub',
-        originArea: 'Calamba, Laguna',
-        destination: 'Lucena Station',
-        destinationArea: 'Lucena, Quezon',
-        scheduledDeparture: at(1, 7, 30),
-        eta: at(1, 11, 0),
-        distanceKm: 96,
-        vehicle: 'Isuzu Elf 6-Wheeler',
-        plate: 'NBC 4821',
-        trackingNumbers: _trackingBatch(311, 20),
-        originScanned: 20,
-      ),
-    ];
-  }
-}
-
-List<String> _trackingBatch(int seed, int count) => List<String>.generate(
-  count,
-  (index) => _tracking(seed + index * 17),
-  growable: false,
-);
-
-/// Deterministic, ULID-looking tracking numbers so the demo lists stay stable.
-String _tracking(int seed) {
-  const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-  var state = (seed * 2654435761) & 0x7fffffff;
-  final out = StringBuffer('VND-01M');
-  for (var i = 0; i < 23; i++) {
-    state = (state * 1103515245 + 12345) & 0x7fffffff;
-    out.write(alphabet[(state >> 7) % alphabet.length]);
-  }
-  return out.toString();
 }

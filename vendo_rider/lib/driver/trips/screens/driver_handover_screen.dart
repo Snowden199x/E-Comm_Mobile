@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:vendo_rider/driver/core/data/driver_store.dart';
 import 'package:vendo_rider/driver/core/theme/vendo_theme.dart';
@@ -13,8 +15,70 @@ class DriverHandoverScreen extends StatefulWidget {
   State<DriverHandoverScreen> createState() => _DriverHandoverScreenState();
 }
 
-class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
+class _DriverHandoverScreenState extends State<DriverHandoverScreen>
+    with WidgetsBindingObserver {
+  /// How often the receiving count is re-read from the hub. The station scans
+  /// one parcel at a time, so a short interval lets the driver watch the list
+  /// shrink without hammering the API.
+  static const Duration _syncInterval = Duration(seconds: 10);
+
   bool _busy = false;
+  bool _syncing = false;
+  DateTime? _syncedAt;
+  Timer? _syncTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _syncTimer = Timer.periodic(_syncInterval, (_) => _sync());
+    _sync();
+  }
+
+  @override
+  void dispose() {
+    _syncTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Coming back from the background shows the hub's latest scans straight
+    // away instead of waiting for the next tick.
+    if (state == AppLifecycleState.resumed) _sync();
+  }
+
+  /// Re-reads this trip from the hub. Every parcel the destination station scans
+  /// carries an arrival scan on the server, so the receiving count and the list
+  /// of parcels still waiting follow those scans while this screen is open.
+  Future<void> _sync() async {
+    if (_syncing) return;
+    final trip = DriverStore.instance.tripByCode(widget.tripCode);
+    if (trip == null || !trip.isLive || trip.status == TripStatus.completed) {
+      return;
+    }
+    _syncing = true;
+    final updated = await DriverStore.instance.refreshTrip(trip.id!);
+    if (!mounted) {
+      _syncing = false;
+      return;
+    }
+    setState(() {
+      _syncing = false;
+      if (updated) _syncedAt = DateTime.now();
+    });
+  }
+
+  /// One line under the progress bar saying how fresh the hub's count is.
+  String get _syncLabel {
+    final at = _syncedAt;
+    if (at == null) return 'Checking with the hub';
+    final seconds = DateTime.now().difference(at).inSeconds;
+    if (seconds < 5) return 'Updated just now';
+    if (seconds < 60) return 'Updated ${seconds}s ago';
+    return 'Updated ${(seconds / 60).floor()}m ago';
+  }
 
   /// [reason] overrides the scan count when the server refused the close for
   /// another reason, so the sheet does not blame missing scans for a dropped
@@ -93,8 +157,8 @@ class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
             const SizedBox(height: 10),
             Text(
               trip.isLive
-                  ? 'Station staff scan every parcel at the destination. Pull '
-                        'to refresh and the count follows their scans; the trip '
+                  ? 'Station staff scan every parcel at the destination. This '
+                        'screen follows their scans as they happen; the trip '
                         'closes only when the last one is received.'
                   : 'Station staff scan every parcel. The trip closes only when '
                         'the last one is received — this build has no station '
@@ -221,8 +285,10 @@ class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
           return _CompletedView(trip: trip);
         }
 
+        // The station can scan parcels in any order, so the count alone cannot
+        // name them: ask each parcel whether its arrival scan is on record.
         final pending = trip.trackingNumbers
-            .skip(trip.destinationScanned)
+            .where((tracking) => !trip.destinationScanRecorded(tracking))
             .toList(growable: false);
         final progress = trip.parcelCount == 0
             ? 0.0
@@ -310,6 +376,41 @@ class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
                               backgroundColor: VColors.border,
                             ),
                           ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              if (_syncing)
+                                const SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1.8,
+                                    color: VColors.muted,
+                                  ),
+                                )
+                              else
+                                Icon(
+                                  trip.isLive
+                                      ? Icons.bolt_rounded
+                                      : Icons.bolt_outlined,
+                                  size: 14,
+                                  color: trip.isLive
+                                      ? VColors.green
+                                      : VColors.muted,
+                                ),
+                              const SizedBox(width: 5),
+                              Text(
+                                trip.isLive
+                                    ? '$_syncLabel \u00b7 checks the hub every 10s'
+                                    : 'Sample trip \u2014 station scans are '
+                                          'simulated',
+                                style: const TextStyle(
+                                  color: VColors.muted,
+                                  fontSize: 10.5,
+                                ),
+                              ),
+                            ],
+                          ),
                           if (pending.isNotEmpty) ...[
                             const SizedBox(height: 14),
                             Text(
@@ -321,7 +422,7 @@ class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
                               ),
                             ),
                             const SizedBox(height: 6),
-                            for (final tracking in pending.take(5))
+                            for (final tracking in pending)
                               Padding(
                                 padding: const EdgeInsets.symmetric(
                                   vertical: 4,
@@ -360,14 +461,14 @@ class _DriverHandoverScreenState extends State<DriverHandoverScreen> {
                                   ],
                                 ),
                               ),
-                            if (pending.length > 5)
+                            if (trip.isLive)
                               Padding(
                                 padding: const EdgeInsets.only(
                                   left: 13,
                                   top: 4,
                                 ),
                                 child: Text(
-                                  '+${pending.length - 5} more parcels',
+                                  'This list updates by itself every 10 seconds.',
                                   style: const TextStyle(
                                     color: VColors.muted,
                                     fontSize: 10.5,

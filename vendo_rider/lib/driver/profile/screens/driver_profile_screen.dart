@@ -224,8 +224,8 @@ class DriverProfileScreen extends StatelessWidget {
               const SizedBox(height: 14),
               const Center(
                 child: Text(
-                  'Vendo Driver · Build 1.0.0\nYour account, hub decision and sign-in come from the Vendo web. '
-                  'Trips and earnings on this build are sample data.',
+                  'Vendo Driver · Build 1.0.0\nYour account, hub decision, trips and earnings all come from '
+                  'the Vendo web.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: VColors.muted,

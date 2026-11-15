@@ -365,6 +365,18 @@ class RiderApi {
     return data;
   }
 
+  /// Accepts the pickup request the Station Hub assigned to this Rider. The
+  /// detail screen opens the map and the seller scan only after this answers.
+  Future<Map<String, dynamic>> acceptPickup(int orderId) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/assignments/$orderId/accept'),
+          headers: await _authHeaders(),
+        )
+        .timeout(const Duration(seconds: 25));
+    return _body(response);
+  }
+
   /// Parcels this Rider completed on [date] (`Y-m-d`); today when omitted.
   Future<Map<String, dynamic>> deliveryHistory({String? date}) async {
     final uri = Uri.parse('$baseUrl/deliveries/history').replace(

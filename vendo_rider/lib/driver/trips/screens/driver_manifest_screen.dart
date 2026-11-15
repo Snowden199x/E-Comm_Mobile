@@ -43,26 +43,35 @@ class _DriverManifestScreenState extends State<DriverManifestScreen> {
       final found = store.tripByCode(code);
       if (found != null) return found;
     }
-    return store.currentTrip;
+    // If a specific trip was selected (from trip code or selector), use it.
+    // Otherwise fall back to the current live trip, or the most recent closed trip
+    // so the driver can still see the parcels that were on their last trip.
+    return store.currentTrip ?? store.closedTrips.firstOrNull;
   }
 
-  List<DriverTrip> _selectableTrips(DriverStore store) {
-    final trips = store.trips
-        .where((trip) => trip.status != TripStatus.completed)
+  /// The trips offered in the selector: every active trip, plus the trip on
+  /// screen when it has already closed. Keeping the shown trip in the list
+  /// matters because a dropdown cannot carry a value that is missing from its
+  /// items, and a trip can close while the manifest is open.
+  List<DriverTrip> _selectableTrips(DriverStore store, DriverTrip trip) {
+    final active = store.trips
+        .where((item) => item.status != TripStatus.completed)
         .toList(growable: false);
-    if (trips.isEmpty) return trips;
-    final current = _trip(store);
-    if (current != null && !trips.any((trip) => trip.code == current.code)) {
-      return [current, ...trips];
-    }
-    return trips;
+    if (active.any((item) => item.code == trip.code)) return active;
+    return <DriverTrip>[trip, ...active];
   }
 
   @override
   Widget build(BuildContext context) {
     final store = DriverStore.instance;
     final trip = _trip(store);
-    final selectable = _selectableTrips(store);
+    final selectable = trip == null
+        ? const <DriverTrip>[]
+        : _selectableTrips(store, trip);
+    final title = trip == null ? 'No trip yet' : 'Parcels on board';
+    final subtitle = trip == null
+        ? 'A manifest appears when the hub assigns a trip.'
+        : '${trip.origin}  →  ${trip.destination}';
 
     return Scaffold(
       backgroundColor: VColors.background,
@@ -71,10 +80,8 @@ class _DriverManifestScreenState extends State<DriverManifestScreen> {
         children: [
           DriverHeader(
             eyebrow: widget.embedded ? 'Manifest' : 'Trip manifest',
-            title: trip == null ? 'No trip yet' : 'Parcels on board',
-            subtitle: trip == null
-                ? 'A manifest appears when the hub assigns a trip.'
-                : '${trip.origin}  →  ${trip.destination}',
+            title: title,
+            subtitle: subtitle,
             onBack: widget.embedded
                 ? null
                 : () => Navigator.of(context).maybePop(),
@@ -310,7 +317,9 @@ class _TripSelector extends StatelessWidget {
                       (trip) => DropdownMenuItem(
                         value: trip.code,
                         child: Text(
-                          '${trip.code} · ${trip.destination}',
+                          trip.status == TripStatus.completed
+                              ? '${trip.code} · ${trip.destination} · completed'
+                              : '${trip.code} · ${trip.destination}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),

@@ -618,7 +618,7 @@ class _HeaderChip extends StatelessWidget {
 // Sync strip
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Where the board stands: sample trips, a fresh load from the web, or a
+/// Where the board stands: still loading, a fresh load from the web, or a
 /// failure with a way to retry. Pulling the list down refreshes it too.
 class _SyncStrip extends StatelessWidget {
   const _SyncStrip({required this.store, required this.onSignIn});
@@ -645,28 +645,18 @@ class _SyncStrip extends StatelessWidget {
     if (!store.tripsAreLive) {
       return Row(
         children: [
-          if (store.tripsLoading)
-            const SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: VColors.brique,
-              ),
-            )
-          else
-            const Icon(
-              Icons.cloud_queue_rounded,
-              size: 16,
-              color: VColors.muted,
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: VColors.brique,
             ),
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              store.tripsLoading
-                  ? 'Loading the trips your hub assigned…'
-                  : 'These are sample trips. Pull down to load the trips your '
-                        'hub assigned to you.',
+              'Loading the trips your hub assigned…',
               style: const TextStyle(
                 color: VColors.muted,
                 fontSize: 11,

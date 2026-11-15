@@ -71,7 +71,10 @@ class _DashboardScreenState extends State<DashboardScreen>
       onOpenEarnings: () => _onTabSelected(_Tab.earnings),
       onOpenNotifications: () => _onTabSelected(_Tab.notifications),
     ),
-    DeliveriesScreen(key: _parcelsKey),
+    DeliveriesScreen(
+      key: _parcelsKey,
+      onOpenHome: () => _onTabSelected(_Tab.home),
+    ),
     NotificationsScreen(key: _notificationsKey),
     EarningsScreen(refreshSignal: _earningsRefresh),
     const ProfileScreen(),
@@ -228,11 +231,16 @@ class _DashboardScreenState extends State<DashboardScreen>
       return;
     }
 
-    await Navigator.push(
+    final result = await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => DeliveryDetailScreen(order: match!)),
     );
-    if (mounted) await _parcelsKey.currentState?.refreshAssignments();
+    if (!mounted) return;
+    if (result == 'home') {
+      _onTabSelected(_Tab.home);
+      return;
+    }
+    await _parcelsKey.currentState?.refreshAssignments();
   }
 
   @override

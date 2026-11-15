@@ -10,6 +10,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:vendo_rider/core/api/rider_api.dart';
 import 'package:vendo_rider/core/offline/offline_tiles.dart';
+import 'package:vendo_rider/driver/core/utils/date_labels.dart';
 import 'package:vendo_rider/rider/dashboard/screens/map_screen.dart';
 import 'package:vendo_rider/rider/scanner/screens/parcel_scanner_screen.dart';
 
@@ -40,6 +41,91 @@ class _C {
 }
 
 const double _radius = 16;
+
+/// The animated check that opens the hub-received screen: the mark pops in with
+/// an elastic scale while a ring spreads out of it and fades away.
+class _HubReceivedMark extends StatefulWidget {
+  const _HubReceivedMark();
+
+  @override
+  State<_HubReceivedMark> createState() => _HubReceivedMarkState();
+}
+
+class _HubReceivedMarkState extends State<_HubReceivedMark>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 850),
+  )..forward();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pop = CurvedAnimation(parent: _controller, curve: Curves.elasticOut);
+    final fade = CurvedAnimation(
+      parent: _controller,
+      curve: const Interval(0, 0.45, curve: Curves.easeOut),
+    );
+    final ring = CurvedAnimation(
+      parent: _controller,
+      curve: const Interval(0.2, 1, curve: Curves.easeOutCubic),
+    );
+    return SizedBox(
+      width: 168,
+      height: 168,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          AnimatedBuilder(
+            animation: ring,
+            builder: (context, child) => Opacity(
+              opacity: (1 - ring.value) * 0.55,
+              child: Container(
+                width: 116 + 48 * ring.value,
+                height: 116 + 48 * ring.value,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white.withAlpha(200),
+                    width: 2,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          FadeTransition(
+            opacity: fade,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: 0.4, end: 1).animate(pop),
+              child: Container(
+                width: 116,
+                height: 116,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withAlpha(38),
+                  border: Border.all(
+                    color: Colors.white.withAlpha(120),
+                    width: 2,
+                  ),
+                ),
+                child: const Icon(
+                  Icons.check_circle_rounded,
+                  color: Colors.white,
+                  size: 58,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Assignment helpers (shared with deliveries_screen.dart)
@@ -119,12 +205,19 @@ String riderStageBadge(RiderStage stage) => switch (stage) {
   RiderStage.other => 'Assigned',
 };
 
-/// How long ago this parcel was assigned to the Rider, from the server's
-/// `assigned_at`. Empty when the API sent no timestamp, so the card omits it.
-String riderAssignedAgo(Map<String, dynamic> order) {
-  final at = DateTime.tryParse(_text(order['assigned_at']));
+/// The clock time the hub assigned this parcel to the Rider, from the server's
+/// `assigned_at`: "12:04 PM · 5m ago" today, "Sat, 31 Oct, 12:04 PM" older.
+/// Empty when the API sent no timestamp, so the card omits it.
+String riderAssignedLabel(Map<String, dynamic> order) {
+  final at = DateTime.tryParse(_text(order['assigned_at']))?.toLocal();
   if (at == null) return '';
-  final elapsed = DateTime.now().difference(at.toLocal());
+  final day = dayLabel(at);
+  if (day != 'Today') return '$day, ${timeLabel(at)}';
+  return '${timeLabel(at)} · ${_assignedElapsed(at)}';
+}
+
+String _assignedElapsed(DateTime at) {
+  final elapsed = DateTime.now().difference(at);
   if (elapsed.inMinutes < 1) return 'just now';
   if (elapsed.inMinutes < 60) return '${elapsed.inMinutes}m ago';
   if (elapsed.inHours < 24) return '${elapsed.inHours}h ago';
@@ -252,6 +345,14 @@ String riderScanLabelFor(String type) => switch (type) {
   _ => 'Scan out for delivery',
 };
 
+/// A pickup the Station Hub just assigned starts with the Rider accepting the
+/// request: the map and the seller scan stay hidden until `accepted_at` comes
+/// back from the server.
+bool riderPickupNeedsAccept(Map<String, dynamic> order) =>
+    order['assignment'] == 'pickup' &&
+    order['status'] == 'ready_for_pickup' &&
+    _text(order['accepted_at']).isEmpty;
+
 /// The station hub that receives and scans the parcel on arrival. The scan at
 /// the origin hub belongs to that hub's staff, not to the Rider, so the app
 /// only waits for it.
@@ -283,6 +384,10 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   late Map<String, dynamic> _order;
   bool _busy = false;
   bool _finished = false;
+  // The station hub scanned the parcel in, which ends the Rider's pickup.
+  bool _hubReceived = false;
+  // Re-reads the assignment while the Rider waits for the hub to scan it in.
+  Timer? _hubPoll;
 
   // Map tiles can fail (no signal, or the tile server refusing the request).
   // The card then says so instead of showing the server's error image.
@@ -308,10 +413,12 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     RiderApi.instance.centerName().then((name) {
       if (mounted) setState(() => _logisticsName = name ?? '');
     });
+    _startHubPoll();
   }
 
   @override
   void dispose() {
+    _hubPoll?.cancel();
     _recipient.dispose();
     _cash.dispose();
     super.dispose();
@@ -332,15 +439,85 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         }
       }
       if (!mounted) return;
+      // A pickup that just left the list was scanned in by the station hub,
+      // which is the end of the Rider's part of that job.
+      final handedToHub =
+          _order['assignment'] == 'pickup' &&
+          riderScanTypeFor(_order) == 'origin_arrival';
       setState(() {
         if (match != null) {
           _order = match;
+          _hubReceived = false;
         } else {
           _finished = true;
+          _hubReceived = handedToHub;
         }
       });
+      if (_finished) _hubPoll?.cancel();
     } catch (_) {
       // Keep the last server-confirmed state; the scan result was already shown.
+    }
+  }
+
+  /// While the Rider waits for the station hub to scan the parcel in, re-read
+  /// the assignment every 20 seconds so this screen can say the hub received it
+  /// without the Rider having to leave the page.
+  void _startHubPoll() {
+    _hubPoll ??= Timer.periodic(const Duration(seconds: 20), (_) {
+      if (!mounted || _busy || _finished) return;
+      if (riderScanTypeFor(_order) != 'origin_arrival') return;
+      _refreshOrder();
+    });
+  }
+
+  // ── Accepting a pickup request ──────────────────────────────────
+  Future<void> _acceptPickup() async {
+    if (_busy) return;
+    final orderId = int.tryParse('${_order['order_id']}') ?? 0;
+    if (orderId <= 0) return;
+    setState(() => _busy = true);
+    final api = RiderApi.instance;
+    try {
+      final result = await api.acceptPickup(orderId);
+      if (!mounted) return;
+      setState(() {
+        _order = {
+          ..._order,
+          'acceptance_required': false,
+          'accepted_at': _text(result['accepted_at']).isEmpty
+              ? DateTime.now().toIso8601String()
+              : result['accepted_at'],
+        };
+      });
+      final message = _text(result['message']);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            message.isEmpty
+                ? 'Pickup accepted. Open the map, then scan the parcel when the seller hands it to you.'
+                : message,
+          ),
+        ),
+      );
+      await _refreshOrder();
+    } on RiderApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+      if (error.statusCode == 409) await _refreshOrder();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No connection. Accept the pickup when you are back online.',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -835,11 +1012,15 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
   // ── Screen ───────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    // The hub's scan ends the Rider's pickup, so it gets a screen of its own
+    // instead of a small note sitting above the route of a finished job.
+    if (_finished && _hubReceived) return _buildHubReceivedScreen();
     final stage = riderStageOf(_order);
     final scanType = riderScanTypeFor(_order);
     final scanTarget = _map(_map(_order['planned_route'])['scan_target']);
     final task = _map(_order['task']);
     final taskFailed = task['status'] == 'failed';
+    final needsAccept = !_finished && riderPickupNeedsAccept(_order);
     final canReportIssue =
         !_finished &&
         task.isNotEmpty &&
@@ -887,8 +1068,12 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                     const SizedBox(height: 24),
                     _buildStopSection(),
                     const SizedBox(height: 24),
+                    // The map is part of the pickup the Rider accepted; before
+                    // that there is nothing to navigate to yet.
                     if (!_finished &&
+                        !needsAccept &&
                         (_order['assignment'] == 'delivery' ||
+                            _order['assignment'] == 'pickup' ||
                             (_order['assignment'] == 'return' &&
                                 _text(_map(_order['return'])['status']) ==
                                     'pending_pickup'))) ...[
@@ -899,7 +1084,12 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
                       _buildProofSection(),
                       const SizedBox(height: 24),
                     ],
-                    _buildActionSection(scanType, scanTarget, taskFailed),
+                    _buildActionSection(
+                      scanType,
+                      scanTarget,
+                      taskFailed,
+                      needsAccept,
+                    ),
                     if (canReportIssue) ...[
                       const SizedBox(height: 8),
                       Align(
@@ -919,7 +1109,12 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
             ],
           ),
         ),
-        bottomNavigationBar: _buildBottomBar(scanType, scanTarget, taskFailed),
+        bottomNavigationBar: _buildBottomBar(
+          scanType,
+          scanTarget,
+          taskFailed,
+          needsAccept,
+        ),
       ),
     );
   }
@@ -1252,6 +1447,161 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     );
   }
 
+  // ── The station hub received the parcel ─────────────────────────
+  /// Full-screen outcome of a finished pickup: the hub scanned the parcel in,
+  /// so the Rider's part is over and the only way on is back to Home. Green,
+  /// not the Vendo purple, because this is a success state.
+  Widget _buildHubReceivedScreen() {
+    const greenDeep = Color(0xFF0F5132);
+    const green = Color(0xFF1B7A4B);
+    final hub = _text(_order['pickup_center']);
+    final hubName = hub.isEmpty ? 'The station hub' : hub;
+    final tracking = _text(_order['tracking_number']);
+    final seller = _text(_order['seller_name']);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
+        backgroundColor: greenDeep,
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [greenDeep, green],
+            ),
+          ),
+          child: SafeArea(
+            child: Column(
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: IconButton(
+                    onPressed: () => Navigator.pop(context, 'home'),
+                    tooltip: 'Back to home',
+                    icon: const Icon(
+                      Icons.arrow_back_rounded,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                    child: Column(
+                      children: [
+                        const _HubReceivedMark(),
+                        const SizedBox(height: 20),
+                        const Text(
+                          'PICKUP COMPLETE',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.8,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          '$hubName received\nthe parcel',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 25,
+                            fontWeight: FontWeight.w800,
+                            height: 1.2,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        Text(
+                          'The hub scanned the parcel in when it arrived, so\nthis pickup is done. Logistics has the next step.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white.withAlpha(215),
+                            fontSize: 14,
+                            height: 1.5,
+                          ),
+                        ),
+                        const SizedBox(height: 28),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withAlpha(20),
+                            borderRadius: BorderRadius.circular(_radius),
+                            border: Border.all(
+                              color: Colors.white.withAlpha(45),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'PARCEL',
+                                style: TextStyle(
+                                  color: Colors.white.withAlpha(190),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 1.4,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                tracking.isEmpty ? 'Tracking number' : tracking,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                              if (seller.isNotEmpty) ...[
+                                const SizedBox(height: 10),
+                                Text(
+                                  'Collected from $seller',
+                                  style: TextStyle(
+                                    color: Colors.white.withAlpha(200),
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
+                  child: SizedBox(
+                    width: double.infinity,
+                    height: 54,
+                    child: FilledButton.icon(
+                      onPressed: () => Navigator.pop(context, 'home'),
+                      icon: const Icon(Icons.home_rounded, size: 20),
+                      label: const Text('Back to home'),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: greenDeep,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        textStyle: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildFinishedCard() {
     return Container(
       width: double.infinity,
@@ -1476,6 +1826,12 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
 
   // ── Delivery map ─────────────────────────────────────────────────
   Widget _buildMapSection() {
+    // A pickup (and the seller leg of a return) ends at the Seller, so its pin
+    // is the Seller's. Everything else ends at the Buyer's delivery pin.
+    final toSeller =
+        _order['assignment'] == 'pickup' ||
+        (_order['assignment'] == 'return' &&
+            _text(_map(_order['return'])['status']) == 'picked_up');
     final stop = _map(_order['stop']);
     final address = _text(stop['address']);
     final latitude = double.tryParse(_text(stop['latitude']));
@@ -1487,7 +1843,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const _SectionTitle('Delivery location'),
+        _SectionTitle(toSeller ? 'Pickup location' : 'Delivery location'),
         const SizedBox(height: 12),
         if (point == null)
           _Card(
@@ -1496,9 +1852,11 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
               children: [
                 const Icon(Icons.location_off_outlined, color: _C.muted),
                 const SizedBox(width: 10),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'The buyer did not share a map pin for this delivery. Use the address above and the call or message buttons to reach them.',
+                    toSeller
+                        ? 'The seller did not share a map pin for this pickup. Use the address above and the call or message buttons to reach them.'
+                        : 'The buyer did not share a map pin for this delivery. Use the address above and the call or message buttons to reach them.',
                     style: TextStyle(color: _C.muted, height: 1.35),
                   ),
                 ),
@@ -1901,6 +2259,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     String? scanType,
     Map<String, dynamic> scanTarget,
     bool taskFailed,
+    bool needsAccept,
   ) {
     if (_finished) return const SizedBox.shrink();
     final hub = _text(_order['pickup_center']);
@@ -1911,6 +2270,9 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     if (taskFailed) {
       message =
           'Paused: Logistics needs to review this task before you can scan.';
+    } else if (needsAccept) {
+      message =
+          'Accept this pickup request first. The map and the seller scan open once you accept.';
     } else if (_order['status'] == 'delivered' ||
         _order['status'] == 'completed') {
       message =
@@ -1958,6 +2320,8 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
               Icon(
                 taskFailed
                     ? Icons.error_outline_rounded
+                    : needsAccept
+                    ? Icons.assignment_turned_in_outlined
                     : scanType == 'origin_arrival'
                     ? Icons.hourglass_top_rounded
                     : Icons.qr_code_scanner_rounded,
@@ -1987,6 +2351,7 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
     String? scanType,
     Map<String, dynamic> scanTarget,
     bool taskFailed,
+    bool needsAccept,
   ) {
     final Widget? primary;
     if (_finished) {
@@ -1994,6 +2359,13 @@ class _DeliveryDetailScreenState extends State<DeliveryDetailScreen> {
         onPressed: () => Navigator.pop(context, true),
         icon: const Icon(Icons.arrow_back_rounded, size: 20),
         label: const Text('Back to deliveries'),
+        style: _buttonStyle,
+      );
+    } else if (needsAccept && !taskFailed) {
+      primary = FilledButton.icon(
+        onPressed: _busy ? null : _acceptPickup,
+        icon: const Icon(Icons.check_circle_outline_rounded, size: 20),
+        label: const Text('Accept pickup request'),
         style: _buttonStyle,
       );
     } else if (scanType == 'origin_arrival' && !taskFailed) {

@@ -22,9 +22,12 @@ class _DriverShellState extends State<DriverShell> {
   @override
   void initState() {
     super.initState();
-    // The profile is already loaded by the start screen; the trips and the
-    // earnings ledger come next so the first renders are not the sample board.
+    // The profile is already loaded by the start screen; the trips, earnings
+    // ledger and notifications follow so the first renders carry live data.
     DriverStore.instance.refreshTrips();
+    // Closed trips are loaded too, so the Manifest tab can show the parcels
+    // that were on the truck even when no trip is open.
+    DriverStore.instance.refreshTripHistory();
     DriverStore.instance.refreshEarnings();
     DriverStore.instance.refreshNotifications();
   }
