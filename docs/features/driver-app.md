@@ -1,9 +1,9 @@
 # Vendo Driver app
 
 **Status:** Registration, application status, sign-in, session restore, password reset, the trip board (`GET /trips`, load scan, depart, arrive), the accrued earnings ledger (`GET /earnings`), driver notifications and completed-trip history are connected to the web API.
-**Updated:** 13 November 2026
+**Updated:** 14 November 2026
 
-`vendo_driver/` is the Flutter app for the Transport Driver — the person in charge of the trucks and vans that move parcels between Stations and Province Hubs. It uses the same Vendo palette and Material 3 language as the Rider app, but it has its own screens and a separate bottom navigation widget.
+`vendo_rider/lib/driver/` holds the screens for the Transport Driver — the person in charge of the trucks and vans that move parcels between Stations and Province Hubs. It uses the same Vendo palette and Material 3 language as the Rider app, but it has its own screens and a separate bottom navigation widget; the rider screens live beside it in `vendo_rider/lib/rider/`. Driver accounts sign in on the shared Rider login screen, which routes them to this five-tab shell and reopens a saved driver session through `GET /me`; the driver app's own login screen was removed when the two apps were merged, so the login, registration and session rules below apply to that shared screen.
 
 ## Scope
 
@@ -35,12 +35,12 @@ After submitting, the success sheet names the hub that reviews the application a
 
 ## Sign in and application status
 
-Sign-in calls `POST /api/v1/transport-drivers/login` with the email and password and keeps the token in secure storage. **Continue with Google** (13 November 2026) sends the Google ID token from `google_sign_in` to `POST /api/v1/transport-drivers/google`; the API verifies it and applies the same role, approval and hub checks, returning the same session payload, so an approved driver opens the trip board and a pending application shows the same waiting notice. Google does not replace the password of an unknown email: the API answers that no driver application uses that Google account, and the app says to apply first. `lib/core/config/google_auth_config.dart` defaults to the same public web client ID the website uses (also accepted through the web's `GOOGLE_ALLOWED_CLIENT_IDS`) and still accepts `--dart-define=GOOGLE_WEB_CLIENT_ID=...` for another project. The Android OAuth client for package `com.example.vendo_driver` with this build's signing SHA-1 must exist in that project, or Google rejects the request before the app sees a token. Google sign-in is unavailable on Windows/Linux desktop. Two states are explained instead of a generic failure:
+Sign-in calls `POST /api/v1/transport-drivers/login` with the email and password and keeps the token in secure storage. **Continue with Google** (13 November 2026) sends the Google ID token from `google_sign_in` to `POST /api/v1/transport-drivers/google`; the API verifies it and applies the same role, approval and hub checks, returning the same session payload, so an approved driver opens the trip board and a pending application shows the same waiting notice. Google does not replace the password of an unknown email: the API answers that no driver application uses that Google account, and the app says to apply first. `lib/core/config/google_auth_config.dart` defaults to the same public web client ID the website uses (also accepted through the web's `GOOGLE_ALLOWED_CLIENT_IDS`) and still accepts `--dart-define=GOOGLE_WEB_CLIENT_ID=...` for another project. The Android OAuth client for the merged app's package `vendoph.rider` with this build's signing SHA-1 must exist in that project, or Google rejects the request before the app sees a token. Google sign-in is unavailable on Windows/Linux desktop. Two states are explained instead of a generic failure:
 
 - **Waiting for approval** — the server answers `403` with the reviewing hub, so the screen says the application is still with that hub.
 - **Rejected** — the screen shows the reviewer's reason.
 
-**Check application status** opens a sheet that asks for the email and reads `POST /api/v1/transport-drivers/application-status`. It shows the decision, the apply scope, the linked Station Hub and the reviewer, so an applicant can check the decision without a password.
+`POST /api/v1/transport-drivers/application-status` still lets an applicant check a decision without a password, but the sheet that read it lived in the driver app's own login screen, which the merge removed; only the pending/rejected notices on sign-in remain in the app.
 
 Signing out revokes the token and clears the stored session.
 
@@ -50,7 +50,7 @@ The screen follows the Rider app's sign-in: a prune gradient header that names *
 
 ### Restoring a session
 
-The app opens on [`driver_start_screen.dart`](../../vendo_driver/lib/features/auth/screens/driver_start_screen.dart). With no stored token it goes straight to sign-in. With a token it calls `GET /api/v1/transport-drivers/me` first:
+The app opens on [`driver_start_screen.dart`](../../vendo_rider/lib/driver/auth/screens/driver_start_screen.dart). With no stored token it goes straight to sign-in. With a token it calls `GET /api/v1/transport-drivers/me` first:
 
 | Answer | What happens |
 | --- | --- |
@@ -62,34 +62,34 @@ The profile the API returns is what the Profile tab shows: name, email, mobile, 
 
 ### Password recovery
 
-**Forgot password?** on the sign-in screen opens [`forgot_password_screen.dart`](../../vendo_driver/lib/features/auth/screens/forgot_password_screen.dart), a three-step flow: email, the six-digit code the web emails, then the new password twice. It calls `POST /api/v1/transport-drivers/password/otp/send`, `/password/otp/verify` and `/password/reset`. The email already typed on the sign-in screen is carried over. A successful reset returns to sign-in with a confirmation, and every device signed in with the old password is signed out by the server. Recovery works for an applicant who is still waiting for approval: it changes the password only, not the decision.
+**Forgot password?** on the sign-in screen opens [`forgot_password_screen.dart`](../../vendo_rider/lib/driver/auth/screens/forgot_password_screen.dart), a three-step flow: email, the six-digit code the web emails, then the new password twice. It calls `POST /api/v1/transport-drivers/password/otp/send`, `/password/otp/verify` and `/password/reset`. The email already typed on the sign-in screen is carried over. A successful reset returns to sign-in with a confirmation, and every device signed in with the old password is signed out by the server. Recovery works for an applicant who is still waiting for approval: it changes the password only, not the decision.
 
 ## Screens
 
 | Screen | File | What it does |
 | --- | --- | --- |
-| Start | [`driver_start_screen.dart`](../../vendo_driver/lib/features/auth/screens/driver_start_screen.dart) | Checks a saved token against `GET /me` and opens the shell or sign-in. |
-| Sign in | [`driver_login_screen.dart`](../../vendo_driver/lib/features/auth/screens/driver_login_screen.dart) | API sign-in, pending/rejected states, application status sheet, forgot-password link, registration link. |
-| Reset password | [`forgot_password_screen.dart`](../../vendo_driver/lib/features/auth/screens/forgot_password_screen.dart) | Three steps: email, six-digit code, new password twice. |
-| Register | [`driver_register_screen.dart`](../../vendo_driver/lib/features/auth/screens/driver_register_screen.dart) | Four-step rider-style form: identity, email code, address (PSGC), vehicle and licence with uploads, Apply-to choice and review. Posts to the API. |
-| Registration widgets | [`register_widgets.dart`](../../vendo_driver/lib/features/auth/widgets/register_widgets.dart) | Header, step bar, labelled fields, dropdowns, uploads, choice cards, review rows, bottom bar and success sheet. |
-| API client | [`driver_api.dart`](../../vendo_driver/lib/core/api/driver_api.dart) | Hubs, PSGC locations, email code, register (multipart), login, session profile (`me`), password reset, application status, trips/scan/depart/arrive, earnings, notifications, trip history, token and profile storage. |
-| Shell | [`driver_shell.dart`](../../vendo_driver/lib/features/dashboard/screens/driver_shell.dart) | Five-tab `IndexedStack` shell. |
-| Bottom navigation | [`driver_bottom_nav.dart`](../../vendo_driver/lib/features/dashboard/widgets/driver_bottom_nav.dart) | Separate navigation widget: Home, Trips, Manifest, Earnings, Profile. Same floating frosted-glass bar and sliding jelly pill as the Rider app; icons only, with the active icon turning white under the pill. |
-| Home | [`driver_home_screen.dart`](../../vendo_driver/lib/features/dashboard/screens/driver_home_screen.dart) | Greeting with today's date and the vehicle/plate, notification bell with the unread count, tappable avatar that opens Profile, licence-expiry warning from 30 days out, sync strip, active trips and parcels onboard, quick actions (Manifest, Dispatch, Trip status), current trip card with scan progress, upcoming trips. Pull down to refresh trips and notifications. |
-| Trips | [`driver_trips_screen.dart`](../../vendo_driver/lib/features/dashboard/screens/driver_trips_screen.dart) | All/Scheduled/In transit/Completed filters, trip cards and a **Trip history** button. |
-| Trip history | [`driver_trip_history_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_trip_history_screen.dart) | Closed trips from `GET /trips/history` with route, completion time, parcels and vehicle, newest first; loading, empty and error states with a sign-in action. |
-| Notifications | [`driver_notifications_screen.dart`](../../vendo_driver/lib/features/notifications/screens/driver_notifications_screen.dart) | `GET /notifications` feed with unread marks, tap-to-read, mark-all-read, pull-to-refresh and honest empty/error states. |
-| Manifest | [`driver_manifest_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_manifest_screen.dart) | Parcel list with tracking numbers and statuses, search, origin/received counts, trip selector when embedded. |
-| Trip details | [`driver_trip_details_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_trip_details_screen.dart) | Route rail, schedule, vehicle, distance, scan progress, manifest shortcut, and a **Scan parcels** action instead of a dispatch button. |
-| Load scan | [`driver_scan_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_scan_screen.dart) | Camera reader plus a typed tracking number, single parcel or container labels that load several at once, the scanned count, a tick per parcel, and a **Confirm dispatch** that stays locked until the last parcel is scanned. |
-| Dispatch confirmation | [`driver_dispatch_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_dispatch_screen.dart) | The last step after the load scan: readiness checklist (vehicle, license, origin scans) and a Depart action that shows the server-style reason when blocked. |
-| Trip status | [`driver_trip_status_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_trip_status_screen.dart) | In-transit timeline, ETA, parcels onboard, receiving count, handover action. |
-| Destination handover | [`driver_handover_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_handover_screen.dart) | Receiving progress, pending tracking numbers, blocked reason, close-trip confirmation and a completed state that releases the vehicle. |
-| Earnings | [`driver_earnings_screen.dart`](../../vendo_driver/lib/features/earnings/screens/driver_earnings_screen.dart) | Accrued per-stop shipping credits from `GET /earnings`, with pull-to-refresh, loading/empty/error states and a plain statement that accrued credits are not a salary or payout. |
-| Profile | [`driver_profile_screen.dart`](../../vendo_driver/lib/features/profile/screens/driver_profile_screen.dart) | License and expiry, contact details, hub/company/vehicle, later features, sign out. |
+| Start | [`driver_start_screen.dart`](../../vendo_rider/lib/driver/auth/screens/driver_start_screen.dart) | Checks a saved token against `GET /me` and opens the shell or sign-in. |
+| Sign in | [`driver_login_screen.dart`](../../vendo_rider/lib/driver/auth/screens/driver_login_screen.dart) | API sign-in, pending/rejected states, application status sheet, forgot-password link, registration link. |
+| Reset password | [`forgot_password_screen.dart`](../../vendo_rider/lib/driver/auth/screens/forgot_password_screen.dart) | Three steps: email, six-digit code, new password twice. |
+| Register | [`driver_register_screen.dart`](../../vendo_rider/lib/driver/auth/screens/driver_register_screen.dart) | Four-step rider-style form: identity, email code, address (PSGC), vehicle and licence with uploads, Apply-to choice and review. Posts to the API. |
+| Registration widgets | [`register_widgets.dart`](../../vendo_rider/lib/driver/auth/widgets/register_widgets.dart) | Header, step bar, labelled fields, dropdowns, uploads, choice cards, review rows, bottom bar and success sheet. |
+| API client | [`driver_api.dart`](../../vendo_rider/lib/driver/core/api/driver_api.dart) | Hubs, PSGC locations, email code, register (multipart), login, session profile (`me`), password reset, application status, trips/scan/depart/arrive, earnings, notifications, trip history, token and profile storage. |
+| Shell | [`driver_shell.dart`](../../vendo_rider/lib/driver/dashboard/screens/driver_shell.dart) | Five-tab `IndexedStack` shell. |
+| Bottom navigation | [`driver_bottom_nav.dart`](../../vendo_rider/lib/driver/dashboard/widgets/driver_bottom_nav.dart) | Separate navigation widget: Home, Trips, Manifest, Earnings, Profile. Same floating frosted-glass bar and sliding jelly pill as the Rider app; icons only, with the active icon turning white under the pill. |
+| Home | [`driver_home_screen.dart`](../../vendo_rider/lib/driver/dashboard/screens/driver_home_screen.dart) | Greeting with today's date and the vehicle/plate, notification bell with the unread count, tappable avatar that opens Profile, licence-expiry warning from 30 days out, sync strip, active trips and parcels onboard, quick actions (Manifest, Dispatch, Trip status), current trip card with scan progress, upcoming trips. Pull down to refresh trips and notifications. |
+| Trips | [`driver_trips_screen.dart`](../../vendo_rider/lib/driver/dashboard/screens/driver_trips_screen.dart) | All/Scheduled/In transit/Completed filters, trip cards and a **Trip history** button. |
+| Trip history | [`driver_trip_history_screen.dart`](../../vendo_rider/lib/driver/trips/screens/driver_trip_history_screen.dart) | Closed trips from `GET /trips/history` with route, completion time, parcels and vehicle, newest first; loading, empty and error states with a sign-in action. |
+| Notifications | [`driver_notifications_screen.dart`](../../vendo_rider/lib/driver/notifications/screens/driver_notifications_screen.dart) | `GET /notifications` feed with unread marks, tap-to-read, mark-all-read, pull-to-refresh and honest empty/error states. |
+| Manifest | [`driver_manifest_screen.dart`](../../vendo_rider/lib/driver/trips/screens/driver_manifest_screen.dart) | Parcel list with tracking numbers and statuses, search, origin/received counts, trip selector when embedded. |
+| Trip details | [`driver_trip_details_screen.dart`](../../vendo_rider/lib/driver/trips/screens/driver_trip_details_screen.dart) | Route rail, schedule, vehicle, distance, scan progress, manifest shortcut, and a **Scan parcels** action instead of a dispatch button. |
+| Load scan | [`driver_scan_screen.dart`](../../vendo_rider/lib/driver/trips/screens/driver_scan_screen.dart) | Camera reader plus a typed tracking number, single parcel or container labels that load several at once, the scanned count, a tick per parcel, and a **Confirm dispatch** that stays locked until the last parcel is scanned. |
+| Dispatch confirmation | [`driver_dispatch_screen.dart`](../../vendo_rider/lib/driver/trips/screens/driver_dispatch_screen.dart) | The last step after the load scan: readiness checklist (vehicle, license, origin scans) and a Depart action that shows the server-style reason when blocked. |
+| Trip status | [`driver_trip_status_screen.dart`](../../vendo_rider/lib/driver/trips/screens/driver_trip_status_screen.dart) | In-transit timeline, ETA, parcels onboard, receiving count, handover action. |
+| Destination handover | [`driver_handover_screen.dart`](../../vendo_rider/lib/driver/trips/screens/driver_handover_screen.dart) | Receiving progress that follows the hub's scans every 10 seconds, the parcels still waiting for a destination scan, blocked reason, close-trip confirmation and a completed state that releases the vehicle. |
+| Earnings | [`driver_earnings_screen.dart`](../../vendo_rider/lib/driver/earnings/screens/driver_earnings_screen.dart) | Accrued per-stop shipping credits from `GET /earnings`, with pull-to-refresh, loading/empty/error states and a plain statement that accrued credits are not a salary or payout. |
+| Profile | [`driver_profile_screen.dart`](../../vendo_rider/lib/driver/profile/screens/driver_profile_screen.dart) | License and expiry, contact details, hub/company/vehicle, later features, sign out. |
 
-Shared pieces live in [`vendo_theme.dart`](../../vendo_driver/lib/core/theme/vendo_theme.dart) (palette and Material theme), [`driver_store.dart`](../../vendo_driver/lib/core/data/driver_store.dart) (trip board, profile, depart/arrive, accrued earnings, notifications, trip history) and [`driver_ui.dart`](../../vendo_driver/lib/features/shared/widgets/driver_ui.dart) (headers, cards, pills, route rail, bottom action bar).
+Shared pieces live in [`vendo_theme.dart`](../../vendo_rider/lib/driver/core/theme/vendo_theme.dart) (palette and Material theme), [`driver_store.dart`](../../vendo_rider/lib/driver/core/data/driver_store.dart) (trip board, profile, depart/arrive, accrued earnings, notifications, trip history) and [`driver_ui.dart`](../../vendo_rider/lib/driver/shared/widgets/driver_ui.dart) (headers, cards, pills, route rail, bottom action bar).
 
 ## Navigation
 
@@ -99,7 +99,7 @@ The Home bell and the Trips **Trip history** button push their screens on top of
 
 ## Trips from the web
 
-[`driver_store.dart`](../../vendo_driver/lib/core/data/driver_store.dart) loads the board with `GET /api/v1/transport-drivers/trips`, which returns the driver's scheduled and in-transit trips, in-transit first:
+[`driver_store.dart`](../../vendo_rider/lib/driver/core/data/driver_store.dart) loads the board with `GET /api/v1/transport-drivers/trips`, which returns the driver's scheduled and in-transit trips, in-transit first:
 
 | Field | Use in the app |
 | --- | --- |
@@ -111,9 +111,9 @@ The Home bell and the Trips **Trip history** button push their screens on top of
 | `manifest` | Tracking numbers only, plus an `origin_scanned` / `destination_scanned` flag per parcel: no addresses, buyer details, prices or COD amounts. The flag is what ticks one parcel on the scan screen. |
 | `origin_scanned`, `destination_scanned` | How many manifest parcels carry the origin departure scan and the destination arrival scan. These are the same scans the workflow checks before it lets a trip depart or close, so the progress bars show real counts. |
 
-The board refreshes on three occasions: when the shell opens, when the driver pulls the Home list down, and when **Refresh** is tapped. The strip under the greeting says where the data came from — *Updated 2 min ago from Vendo*, *Loading the trips your hub assigned…*, or *These are sample trips* — and a failure shows a red notice with **Retry**. When the server answers `401` the stored session is cleared and the notice offers **Sign in**, which drops the token and opens the sign-in screen.
+The board refreshes on three occasions: when the shell opens, when the driver pulls the Home list down, and when **Refresh** is tapped. The strip under the greeting says where the data came from — *Updated 2 min ago from Vendo* or *Loading the trips your hub assigned…* — and a failure shows a red notice with **Retry**. When the server answers `401` the stored session is cleared and the notice offers **Sign in**, which drops the token and opens the sign-in screen.
 
-**Departing and arriving** call `POST /trips/{id}/depart` and `POST /trips/{id}/arrive` on live trips and keep the answer the server returns in place of the local trip, so the status, scans and ETA follow the web. A refusal (an unscanned parcel, an open exception, a dropped connection) is shown in the blocked sheet with the server's own reason. Local rules stay for the sample trips, which are only used before the first successful load and are kept on screen when the network is down.
+**Departing and arriving** call `POST /trips/{id}/depart` and `POST /trips/{id}/arrive` on live trips and keep the answer the server returns in place of the local trip, so the status, scans and ETA follow the web. A refusal (an unscanned parcel, an open exception, a dropped connection) is shown in the blocked sheet with the server's own reason. The board itself starts empty and shows only trips the hub assigned, so a first launch or a failed refresh shows the empty state and the notice instead of an invented trip.
 
 ### Scanning the load before dispatch
 
@@ -124,31 +124,27 @@ A scheduled trip no longer opens on a dispatch button. The trip details action a
 3. A repeated label is ignored for three seconds; a parcel that already carries the scan comes back as *already scanned*; a number that is not on the manifest, a parcel not routed through the origin hub, or a trip that already left are reported in the red answer under the field without failing the rest of the label.
 4. **Confirm dispatch** stays disabled until every parcel is scanned. When the last one lands, the button opens the dispatch confirmation screen.
 
-### Container labels
-
 One scan can load several parcels, which is what a container label is for: the QR carries a list of tracking numbers instead of one. The app accepts the list separated by commas, semicolons, pipes, spaces or line breaks, optionally behind a scheme prefix (`VENDO-CONTAINER:` and similar), as a JSON list or as `{"tracking_numbers": [...]}`, and treats the trip's own QR code (`TRP-00042`) as the whole manifest. Codes shorter than five characters or containing anything other than letters, digits and dashes are ignored, duplicates are dropped, and at most 100 parcels travel in one request. Every parcel on the label is ticked at once, and the counter and progress bar jump by the number of parcels the label carried.
 
 The server still enforces the same gate, so a trip cannot leave from another device or the web while a parcel is unscanned. Scans are also written as a `facility_scan_events` row attributed to the driver and a status note on the order, so the hub's parcel timeline shows who confirmed the load.
 
+### Receiving at the destination
+
+While the destination handover screen is open it keeps its own reading of one trip: `GET /api/v1/transport-drivers/trips/{id}` (through `DriverApi.trip` and `DriverStore.refreshTrip`) is called on open, every 10 seconds, and again when the app returns to the foreground. Every parcel the destination hub scans writes an arrival scan on the server, so each poll moves the receiving count and drops that parcel out of the *Awaiting station scan* list — the driver watches the checklist shrink without pulling anything down. The list is built from each manifest parcel's own `destination_scanned` flag rather than from the count, because the hub can scan in any order, and a line under the progress bar says when the count last came from the server. A failed poll leaves the last count on screen; it never clears progress or claims a parcel is received.
+
 ### Earnings from the web
 
-The Earnings tab reads `GET /api/v1/transport-drivers/earnings` through [`driver_store.dart`](../../vendo_driver/lib/core/data/driver_store.dart) (`refreshEarnings`), which the shell calls after sign-in and the screen calls on pull-to-refresh. The API's `summary.accrued_total` and `summary.hub_credits` fill the summary card, and each `earnings` row becomes one credit line: the order number, the hub name, the route position, the amount and the earned date. The app only displays the server amounts; it never computes or edits a credit, and closing a live trip reloads the ledger in the background so new credits appear without a manual pull. A rejected token shows the same **Sign in** action as Home, an empty ledger shows an empty state, and a network failure keeps the notice with **Retry** instead of inventing amounts. The legacy demo credits and the `LegacyCredit` model were removed, so no sample peso figures appear on this tab.
+The Earnings tab reads `GET /api/v1/transport-drivers/earnings` through [`driver_store.dart`](../../vendo_rider/lib/driver/core/data/driver_store.dart) (`refreshEarnings`), which the shell calls after sign-in and the screen calls on pull-to-refresh. The API's `summary.accrued_total` and `summary.hub_credits` fill the summary card, and each `earnings` row becomes one credit line: the order number, the hub name, the route position, the amount and the earned date. The app only displays the server amounts; it never computes or edits a credit, and closing a live trip reloads the ledger in the background so new credits appear without a manual pull. A rejected token shows the same **Sign in** action as Home, an empty ledger shows an empty state, and a network failure keeps the notice with **Retry** instead of inventing amounts. The legacy demo credits and the `LegacyCredit` model were removed, so no sample peso figures appear on this tab.
 
 ### Notifications and trip history
 
-The bell in the Home header opens [`driver_notifications_screen.dart`](../../vendo_driver/lib/features/notifications/screens/driver_notifications_screen.dart), which reads `GET /api/v1/transport-drivers/notifications`. The same list is loaded when the shell opens and when Home is pulled down. The badge uses the server's `unread_count`, never a local guess: tapping a row calls `POST /notifications/{id}/read` and turns the row read at once, and **Mark all as read** calls `POST /notifications/read-all`. If either call fails the app puts the row back and resyncs, so the badge cannot drift from the web. A row that belongs to another account is refused with 404 by the API, and a rejected token shows the same **Sign in** action as the other tabs.
+The bell in the Home header opens [`driver_notifications_screen.dart`](../../vendo_rider/lib/driver/notifications/screens/driver_notifications_screen.dart), which reads `GET /api/v1/transport-drivers/notifications`. The same list is loaded when the shell opens and when Home is pulled down. The badge uses the server's `unread_count`, never a local guess: tapping a row calls `POST /notifications/{id}/read` and turns the row read at once, and **Mark all as read** calls `POST /notifications/read-all`. If either call fails the app puts the row back and resyncs, so the badge cannot drift from the web. A row that belongs to another account is refused with 404 by the API, and a rejected token shows the same **Sign in** action as the other tabs.
 
-The **Trip history** button on the Trips screen opens [`driver_trip_history_screen.dart`](../../vendo_driver/lib/features/trips/screens/driver_trip_history_screen.dart), which reads `GET /api/v1/transport-drivers/trips/history`: the driver's completed trips, newest first, with the route, completion time, parcel count and vehicle. It is a separate endpoint because the board only carries scheduled and in-transit trips, so a closed trip never disappears without a record. History loads when the screen opens and on pull-to-refresh.
+The **Trip history** button on the Trips screen opens [`driver_trip_history_screen.dart`](../../vendo_rider/lib/driver/trips/screens/driver_trip_history_screen.dart), which reads `GET /api/v1/transport-drivers/trips/history`: the driver's completed trips, newest first, with the route, completion time, parcel count and vehicle. It is a separate endpoint because the board only carries scheduled and in-transit trips, so a closed trip never disappears without a record. History loads when the screen opens and on pull-to-refresh.
 
-### Sample trips
+### No sample trips
 
-[`driver_store.dart`](../../vendo_driver/lib/core/data/driver_store.dart) still seeds three trips for an offline first launch:
-
-- **TRP-2406** — 12 of 12 parcels scanned at the Laguna Province Hub. Departing moves it to In Transit.
-- **TRP-2407** — only 6 of 8 parcels scanned at Santa Cruz Station, so dispatch is deliberately blocked and its reason is shown.
-- **TRP-2408** — 20 parcels, scheduled for tomorrow.
-
-Only these sample trips get the **Demo: simulate station scans** action on the handover screen; it is hidden for a live trip, whose counts come from the station's real scans. The Home strip always labels the sample board so sample counts are never mistaken for real ones.
+The board carries only what `GET /trips` returns. Earlier builds seeded three demo trips (TRP-2406, TRP-2407 and TRP-2408) so an offline first launch was not empty. Those seeds were removed on 14 November 2026: they appeared on Home and on the Trips tab for the moment before the first request answered and then vanished when the server returned none, which read as the app losing data. A driver with no assigned trip now sees the empty state — *The hub has not assigned a trip to this device yet* — and the Home strip stays on *Loading the trips your hub assigned…* until the first answer arrives.
 
 ## Configuration
 
@@ -162,12 +158,7 @@ flutter run --dart-define=VENDO_API_BASE_URL=http://<server>:8001
 
 ## Launcher icon and launch splash
 
-Both come from [`assets/images/driver_logo.png`](../../vendo_driver/assets/images/driver_logo.png), the truck-and-lightning badge drawn on its cream `#FEF8E8` background.
-
-- **Launcher icon** — the icon uses [`assets/images/driver_logo_icon.png`](../../vendo_driver/assets/images/driver_logo_icon.png), the same artwork scaled to 78% on a softened copy of its own background, because full-bleed artwork read as too zoomed in on a home screen. `flutter_launcher_icons` is configured in `pubspec.yaml`; re-run `dart run flutter_launcher_icons` after replacing the image. It writes the Android `mipmap-*` icons, the Android adaptive icon (cream background, the padded logo as the full-bleed foreground) and the iOS `AppIcon` set with alpha removed. The padding lives in the image, so `mipmap-anydpi-v26/ic_launcher.xml` draws the foreground without the tool's default 16% inset; a re-run restores that inset, so remove it again if you regenerate.
-- **Launch splash** — `drawable/launch_background.xml` and `drawable-v21/launch_background.xml` show `drawable-*/launch_image.png` centred on `@color/launch_background` (`#FEF8E8`), and `values-v31/styles.xml` gives Android 12+ the same cream background and logo through `windowSplashScreenBackground` / `windowSplashScreenAnimatedIcon`. iOS uses the cream background in `LaunchScreen.storyboard` with `LaunchImage.png`, `@2x` and `@3x` in `LaunchImage.imageset`.
-
-The splash images are plain resizes of the logo (144 dp on Android, 144 pt on iOS), so replacing the artwork means regenerating those PNGs as well as the launcher icons.
+The merged app keeps the Rider launcher icon and launch splash. The driver artwork and its per-platform resources were deleted with the standalone project on 14 November 2026.
 
 ## Design notes
 

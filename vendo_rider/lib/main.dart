@@ -1,8 +1,9 @@
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:vendo_rider/core/offline/offline_tiles.dart';
+import 'package:vendo_rider/driver/core/theme/vendo_theme.dart';
 import 'package:vendo_rider/core/push/rider_push_service.dart';
-import 'package:vendo_rider/features/splash/splash_screen.dart';
+import 'package:vendo_rider/rider/splash/splash_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,10 +22,9 @@ class VendoRiderApp extends StatelessWidget {
     return MaterialApp(
       title: 'Vendo Rider',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        fontFamily: 'Poppins',
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF3B1F52)),
-      ),
+      // The driver screens that now live in this app use the same palette and
+      // Poppins text, so one theme covers both roles.
+      theme: VendoTheme.light(),
       home: const SplashScreen(),
     );
   }
