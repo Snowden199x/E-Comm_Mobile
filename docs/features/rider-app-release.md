@@ -10,7 +10,7 @@
 | Application ID / namespace | `vendoph.rider` | Permanent. Changing it later makes a different app in Play and on phones. |
 | Launcher label | Vendo Rider | Was "Vendo Xpress". |
 | Version | `1.0.0+2` in `pubspec.yaml` | `versionCode` is the `+2`; increment it on every release. |
-| Launcher icon | `assets/images/app_icon.png` + `app_icon_foreground.png` | Generated from the web brand icon `E-Comm_Web/public/images/logo/vendo-icon.png` and applied with `flutter_launcher_icons` (legacy + adaptive, white background). |
+| Launcher icon | `assets/images/app_icon.png` + `app_icon_foreground.png` | Generated from the web brand icon `E-Comm_Web/public/images/logo/vendo-express.png` and applied with `flutter_launcher_icons` (legacy + adaptive, white background). The transparent source is kept at `assets/images/vendo_express_logo.png`. |
 | Min / target SDK | 24 / 36 | Android 7.0 and newer. `flutter build` fails without Android SDK 36 installed. |
 
 `MainActivity.kt` lives at `android/app/src/main/kotlin/vendoph/rider/MainActivity.kt` and declares `package vendoph.rider`.

@@ -7,6 +7,25 @@
   "client": [
     {
       "client_info": {
+        "mobilesdk_app_id": "1:515568012007:android:9e2ad4328a4d3d67f7b042",
+        "android_client_info": {
+          "package_name": "vendoph.buyer"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA26-ntOhzFr1Ox24rIlToZkSjpgmdtoGc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:515568012007:android:199757ac0480ab3ef7b042",
         "android_client_info": {
           "package_name": "vendoph.rider"

@@ -47,5 +47,7 @@ app.*.map.json
 # Local build tooling (JDK 21 for Gradle 8.14); not part of the app.
 .tooling/
 
-# Firebase Android config (project-specific; supply your own for local builds).
-/android/app/google-services.json
+# Firebase Android config. Tracked on purpose, like the Buyer app's copy: the
+# com.google.gms.google-services plugin fails the Gradle build when
+# android/app/google-services.json is missing, so a fresh clone could not build
+# the Rider app without it.
