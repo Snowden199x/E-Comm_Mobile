@@ -391,9 +391,10 @@ class _LoginScreenState extends State<LoginScreen>
       case GoogleSignInExceptionCode.clientConfigurationError:
       case GoogleSignInExceptionCode.providerConfigurationError:
         return 'Google does not recognise this app build. Register an Android '
-            'OAuth client for vendoph.rider with the SHA-1 of this build in the '
-            'same Google Cloud project, and check GOOGLE_WEB_CLIENT_ID matches '
-            'the server.';
+            'OAuth client for vendoph.rider with the SHA-1 of the certificate '
+            'that signed it (a release build carries the upload key, not the '
+            'debug key) in the same Google Cloud project, and check '
+            'GOOGLE_WEB_CLIENT_ID matches the server.';
       case GoogleSignInExceptionCode.canceled:
         return 'Google sign-in was cancelled.';
       case GoogleSignInExceptionCode.interrupted:

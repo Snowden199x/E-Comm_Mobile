@@ -87,7 +87,27 @@ Notes:
 
 - The repository must stay **public** for anonymous downloads. A private repository would require the reader to sign in to GitHub.
 - Direct APKs do not auto-update; riders download each new version again until the app is in Play.
+- Check the signer before publishing: `/home/Snowden/android-sdk/build-tools/<v>/apksigner verify --print-certs vendo-rider.apk`. A build made on a machine with `vendo_rider/android/key.properties` is signed with the upload key, not the shared debug key, and the two produce different Google identities (see below).
 - To move to Play later, change the web app's `RIDER_APP_DOWNLOAD_URL` (or `config/services.php`) to the Play listing. No new QR is needed.
+
+## Signing key and Google sign-in
+
+Google binds an Android OAuth client to one package name plus one signing certificate. The released `vendo-rider.apk` (`rider-v1.0.0`, `vendoph.rider`, versionCode 2) is signed with the project upload key:
+
+```
+CN=Vendo Rider, OU=Vendo, O=Vendo, L=Manila, ST=Metro Manila, C=PH
+SHA-1  C9:86:6E:DA:E3:7E:3B:7C:ED:AE:19:2B:AC:A1:77:46:DE:32:4F:5A
+SHA-256 54:42:5A:6B:D5:8F:55:2D:49:37:DA:49:90:F8:03:CD:72:95:67:F5:7E:C1:92:70:3D:29:0D:82:D9:DF:10:2B
+```
+
+That is **not** the shared debug key `DC:3B:DF:…:C9` the Console entry for `vendoph.rider` was created with, so tapping **Continue with Google** on a phone with that APK is refused by Google before the app receives a token; the login screen then reports that the app build is not registered for an OAuth client. Nothing in the app or the API can compensate for the missing registration.
+
+Owner steps, once, in Google Cloud project `468116080938` (the project that owns the web client the app sends as `serverClientId`) — APIs & Services → Credentials → Create credentials → OAuth client ID → Android:
+
+1. Package name `vendoph.rider`, SHA-1 `C9:86:6E:DA:E3:7E:3B:7C:ED:AE:19:2B:AC:A1:77:46:DE:32:4F:5A`. A second Android client for the same package with a different certificate is allowed and keeps the existing debug-key entry working for local builds.
+2. Add the new client ID to the web API's production `GOOGLE_ANDROID_CLIENT_ID` (comma-separated; `GOOGLE_ALLOWED_CLIENT_IDS`, when set, must list it too), then run `php artisan config:clear`. The token carries the web client as `aud` and this Android client as `azp`, and the verifier rejects an `azp` that is not allow-listed — the same failure the Buyer app hit with `468116080938-v78hid0srlr7ke21rlpo1c3j5ot8jjk7`.
+
+No rebuild is needed for the installed APK: the certificate is already what is on the phone. Every later build must use the same key to keep that registration valid, so always verify the signer above before publishing a release.
 
 ## Login behaviour
 
@@ -101,7 +121,7 @@ The separate "Transport Driver" link on the sign-in screen still works and goes 
 ## Known gaps
 
 - Google Play is not set up ($25 one-time; personal accounts need a 12-tester / 14-day closed test first; organization accounts with a D-U-N-S number are exempt).
-- Google sign-in is not enabled for the release certificate until its SHA-1 is registered.
+- Google sign-in for the released APK waits on the Console registration in **Signing key and Google sign-in**; the debug-key client alone does not cover the upload-key certificate.
 - No auto-update, no crash reporting, no staged rollout.
 - iOS build is untested; only icons were regenerated.
 - The 107 MB universal APK is heavy on mobile data; prefer the 46.6 MB arm64 file when the phone is known to be 64-bit.
