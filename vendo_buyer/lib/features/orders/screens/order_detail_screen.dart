@@ -51,6 +51,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   /// Set when the page came from the device instead of Vendo.
   DateTime? _offlineSince;
 
+  /// The Buyer's token for the private packed-item photo, read once per screen.
+  Future<Map<String, String>>? _pickupPhotoHeaders;
+
   @override
   void initState() {
     super.initState();
@@ -609,6 +612,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             _noteCard(detail.buyerNote!),
           if (detail.seller != null) _soldByCard(detail.seller!),
           if (detail.tracking != null) _trackingCard(detail.tracking!),
+          if (detail.hasPickupPhoto) _packedPhotoCard(),
           ..._returnSection(detail),
           if (order.status == 'delivered') _confirmReceivedCard(),
           if (order.canCancel) _cancelButton(),
@@ -1462,6 +1466,78 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               ),
             ),
         ],
+      ],
+    );
+  }
+
+  /// The Seller's photo of the packed parcel, like the web order page's card.
+  /// The file is private, so the Buyer's token travels with the image request.
+  Widget _packedPhotoCard() {
+    final headers = _pickupPhotoHeaders ??= BuyerApi.instance.mediaHeaders();
+    return _card(
+      title: 'Photo of your packed item',
+      children: [
+        FutureBuilder<Map<String, String>>(
+          future: headers,
+          builder: (context, snapshot) {
+            final authHeaders = snapshot.data;
+            if (authHeaders == null) {
+              return SizedBox(
+                height: 200,
+                child: Center(
+                  child: snapshot.hasError
+                      ? const Text(
+                          'The packed-item photo could not be loaded.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 12.5, color: _C.muted),
+                        )
+                      : const CircularProgressIndicator(),
+                ),
+              );
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.network(
+                    BuyerApi.instance.orderPickupPhotoUrl(widget.orderId),
+                    headers: authHeaders,
+                    height: 240,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    loadingBuilder: (context, child, progress) =>
+                        progress == null
+                        ? child
+                        : const SizedBox(
+                            height: 240,
+                            child: Center(child: CircularProgressIndicator()),
+                          ),
+                    errorBuilder: (context, error, stackTrace) => Container(
+                      height: 240,
+                      alignment: Alignment.center,
+                      color: _C.soft,
+                      child: const Text(
+                        'The packed-item photo could not be loaded.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(fontSize: 12.5, color: _C.muted),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'The seller took this before handing it to the rider.',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    height: 1.35,
+                    color: _C.muted,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
       ],
     );
   }
