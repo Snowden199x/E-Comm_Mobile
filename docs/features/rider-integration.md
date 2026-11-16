@@ -3,6 +3,10 @@
 **Status:** Rider auth/registration, API-backed assigned-work screens, in-app notifications, COD cash-on-hand, inline delivery proof, buyer map, call/SMS shortcuts, and the daily delivery window with reschedule are connected; owner verification is pending
 **Updated:** 14 November 2026
 
+## App icon
+
+The launcher icon is the Vendo Express mark from the website, `E-Comm_Web/public/images/logo/vendo-express.png`: trimmed of its white margin and centred on white in `assets/images/app_icon.png` (legacy icon) and `assets/images/app_icon_foreground.png` (adaptive foreground, inside the mask's safe zone, background `#FFFFFF`). `flutter_launcher_icons` generates every `res/mipmap-*/ic_launcher.png`, the `mipmap-anydpi-v26` adaptive XML and the iOS `AppIcon` set from those two files, so changing the mark means replacing them and re-running `dart run flutter_launcher_icons`. The app's own screens keep their drawn branding — the splash wordmark and the **Vendo Xpress** header — and do not display a logo image.
+
 ## Registration
 
 Phone input is numeric-only and limited to 11 digits. Before continuing, registration requires Philippine mobile format `09` followed by 9 digits; the Laravel Rider and Transport Driver registration APIs enforce the same rule.
