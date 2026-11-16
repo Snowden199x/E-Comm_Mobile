@@ -1,0 +1,38 @@
+# This repository holds two Flutter apps. Each app has its own .gitignore for
+# Flutter/Dart output; the rules below cover what is shared or lives at the root.
+
+# Signing material. android-keys/vendo-debug.keystore is committed on purpose:
+# Google Sign-In and Firebase pin an Android OAuth client to the certificate
+# SHA-1, so every build machine must sign with that same public debug key. A
+# release keystore and its passwords must never be added.
+*.jks
+key.properties
+!android-keys/vendo-debug.keystore
+
+# Gradle output that sits outside each app's own /build/ rule.
+**/android/build/
+**/android/.gradle/
+**/android/local.properties
+**/android/captures/
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+
+# Flutter/Dart tool output.
+**/.dart_tool/
+**/.flutter-plugins-dependencies
+**/.packages
+**/build/
+**/.pub-cache/
+
+# Release binaries. Attach APKs to a GitHub release instead of committing them.
+*.apk
+*.aab
+
+# Editor, OS and local noise.
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+*.log
+.vscode/

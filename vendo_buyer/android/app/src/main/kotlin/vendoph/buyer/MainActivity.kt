@@ -1,4 +1,4 @@
-package com.example.vendo_buyer
+package vendoph.buyer
 
 import io.flutter.embedding.android.FlutterActivity
 
