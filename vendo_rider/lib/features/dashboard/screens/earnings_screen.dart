@@ -255,27 +255,43 @@ class _EarningsScreenState extends State<EarningsScreen> {
                         const SizedBox(height: 6),
                         Text(_money(_summary['accrued_total']), style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w800, color: _purple)),
                         const SizedBox(height: 6),
-                        Text('${_summary['hub_credits'] ?? 0} completed credits · accrued from completed deliveries', style: const TextStyle(color: _muted)),
+                        Text(
+                          '${_summary['hub_credits'] ?? 0} delivery credits'
+                          '${(_summary['return_pickups'] ?? 0) > 0 ? ' · ${_summary['return_pickups']} return pickups' : ''}'
+                          ' · accrued from completed work',
+                          style: const TextStyle(color: _muted),
+                        ),
                         const SizedBox(height: 10),
                         const Text('Accrued amounts are not a cash or bank payout. Vendo does not process payouts yet.', style: TextStyle(color: _muted, height: 1.35)),
                       ])),
                     ..._cashWidgets(),
                     if (_error == null) ...[
                       const SizedBox(height: 18),
-                      const Text('Recent hub earnings', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _purple)),
+                      const Text('Recent earnings', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _purple)),
                       const SizedBox(height: 8),
                       if (_earnings.isEmpty)
-                        _card(const Text('No completed hub credits yet.', textAlign: TextAlign.center, style: TextStyle(color: _muted)))
+                        _card(const Text('No earnings yet. Deliveries and return pickups appear here.', textAlign: TextAlign.center, style: TextStyle(color: _muted)))
                       else
-                        ..._earnings.map((row) => _card(Row(children: [
-                          const Icon(Icons.hub_outlined, color: _purple),
-                          const SizedBox(width: 12),
-                          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(row['hub']?.toString() ?? 'Route hub', style: const TextStyle(fontWeight: FontWeight.w700, color: _purple)),
-                            Text('${row['order_number'] ?? 'Order'} · Hub ${row['route_position'] ?? ''}', style: const TextStyle(fontSize: 12, color: _muted)),
-                          ])),
-                          Text(_money(row['amount']), style: const TextStyle(fontWeight: FontWeight.w800, color: _purple)),
-                        ]))),
+                        ..._earnings.map((row) {
+                          final isReturn = row['type']?.toString() == 'return_pickup';
+                          return _card(Row(children: [
+                            Icon(isReturn ? Icons.assignment_return_outlined : Icons.hub_outlined, color: _purple),
+                            const SizedBox(width: 12),
+                            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text(
+                                isReturn ? 'Return pickup' : (row['hub']?.toString() ?? 'Route hub'),
+                                style: const TextStyle(fontWeight: FontWeight.w700, color: _purple),
+                              ),
+                              Text(
+                                isReturn
+                                    ? '${row['order_number'] ?? 'Order'} · Collected from the buyer'
+                                    : '${row['order_number'] ?? 'Order'} · Hub ${row['route_position'] ?? ''}',
+                                style: const TextStyle(fontSize: 12, color: _muted),
+                              ),
+                            ])),
+                            Text(_money(row['amount']), style: const TextStyle(fontWeight: FontWeight.w800, color: _purple)),
+                          ]));
+                        }),
                     ],
                   ],
                 ),

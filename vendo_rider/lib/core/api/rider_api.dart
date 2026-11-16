@@ -35,17 +35,23 @@ class RiderApi {
   RiderApi._();
 
   static final RiderApi instance = RiderApi._();
+  static const String _productionBaseUrl = 'https://vendo-ph.app/api/v1/rider';
+
   static String get baseUrl {
     const configuredUrl = String.fromEnvironment('VENDO_API_BASE_URL');
     if (configuredUrl.isNotEmpty) {
-      return configuredUrl.replaceFirst(RegExp(r'/+$'), '');
+      final url = configuredUrl.replaceFirst(RegExp(r'/+$'), '');
+      if (kReleaseMode && !url.startsWith('https://')) {
+        return _productionBaseUrl;
+      }
+      return url;
     }
 
     if (kDebugMode && defaultTargetPlatform == TargetPlatform.linux) {
       return 'http://127.0.0.1:8000/api/v1/rider';
     }
 
-    return 'https://vendo-ph.app/api/v1/rider';
+    return _productionBaseUrl;
   }
 
   static String get transportDriverBaseUrl =>

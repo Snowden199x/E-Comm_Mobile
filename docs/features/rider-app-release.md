@@ -52,6 +52,8 @@ flutter build apk --release --split-per-abi
 # → app-arm64-v8a-release.apk, app-armeabi-v7a-release.apk, app-x86_64-release.apk
 ```
 
+These commands use the production API (`https://vendo-ph.app/api/v1/rider`) by default. A release build ignores a non-HTTPS `VENDO_API_BASE_URL` override and falls back to production, so a distributed APK works on mobile data or any Wi-Fi without the developer's local server.
+
 Sizes from the 10 November 2026 build (ML Kit OCR + barcode scanner are the bulk):
 
 | File | Size | Use |

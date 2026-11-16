@@ -1,7 +1,7 @@
 # Vendo Driver app
 
 **Status:** Registration, application status, sign-in, session restore, password reset, the trip board (`GET /trips`, load scan, depart, arrive), the accrued earnings ledger (`GET /earnings`), driver notifications and completed-trip history are connected to the web API.
-**Updated:** 13 November 2026
+**Updated:** 16 November 2026
 
 `vendo_driver/` is the Flutter app for the Transport Driver — the person in charge of the trucks and vans that move parcels between Stations and Province Hubs. It uses the same Vendo palette and Material 3 language as the Rider app, but it has its own screens and a separate bottom navigation widget.
 
@@ -158,7 +158,7 @@ The API base comes from `VENDO_API_BASE_URL`:
 flutter run --dart-define=VENDO_API_BASE_URL=http://<server>:8001
 ```
 
-`DriverApi` appends `/api/v1/transport-drivers`, and also accepts a URL that already points at another v1 API (for example `/api/v1/rider`) by switching the last segment. A Linux debug build defaults to `http://127.0.0.1:8000/api/v1/transport-drivers`.
+`DriverApi` appends `/api/v1/transport-drivers`, and also accepts a URL that already points at another v1 API (for example `/api/v1/rider`) by switching the last segment. The release default is `https://vendo-ph.app/api/v1/transport-drivers`; a release build ignores a non-HTTPS override and falls back to that production URL. A Linux debug build defaults to `http://127.0.0.1:8000/api/v1/transport-drivers`.
 
 ## Launcher icon and launch splash
 

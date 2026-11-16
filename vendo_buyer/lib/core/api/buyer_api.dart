@@ -72,17 +72,21 @@ class BuyerApi {
   /// badges (like the home header) never have to guess.
   static final ValueNotifier<int> cartItemCount = ValueNotifier<int>(0);
 
+  static const String _productionBaseUrl = 'https://vendo-ph.app/api/v1/buyer';
+
   static String get baseUrl {
     const configured = String.fromEnvironment('VENDO_BUYER_API_BASE_URL');
-    if (configured.isNotEmpty)
-      return configured.replaceFirst(RegExp(r'/+$'), '');
+    if (configured.isNotEmpty) {
+      final url = configured.replaceFirst(RegExp(r'/+$'), '');
+      if (kReleaseMode && !url.startsWith('https://')) {
+        return _productionBaseUrl;
+      }
+      return url;
+    }
     if (kDebugMode && defaultTargetPlatform == TargetPlatform.linux) {
       return 'http://127.0.0.1:8000/api/v1/buyer';
     }
-    if (kDebugMode) {
-      return 'http://192.168.1.17:8000/api/v1/buyer';
-    }
-    return 'https://vendo-ph.app/api/v1/buyer';
+    return _productionBaseUrl;
   }
 
   static const _storage = FlutterSecureStorage();

@@ -1,6 +1,6 @@
 # Rider Mobile Security
 
-**Reviewed:** 28 September 2026  
+**Reviewed:** 16 November 2026
 **Scope:** `vendo_rider/` and its connection to the Vendo Laravel Rider API. This is a code-based snapshot, not a mobile penetration test or release certification.
 
 ## Trust boundary
@@ -25,7 +25,7 @@ The Google Maps key in `android/app/src/main/AndroidManifest.xml` is currently t
 
 ## Build and environment rules
 
-- Production API traffic targets `https://vendo-ph.app/api/v1/rider`; use `VENDO_API_BASE_URL` only to point a development build at a deliberately reachable local/staging API.
+- Production API traffic targets `https://vendo-ph.app/api/v1/rider`; use `VENDO_API_BASE_URL` only to point a development build at a deliberately reachable local/staging API. A release build ignores a non-HTTPS override and falls back to the production URL.
 - `GOOGLE_WEB_CLIENT_ID` is the Google server client ID. Each app defaults it to the public web client in `lib/core/config/google_auth_config.dart`, and a build can override it with `--dart-define=GOOGLE_WEB_CLIENT_ID=...`; the ID must also be allowed by the web API's `GOOGLE_ALLOWED_CLIENT_IDS`. Register the Android OAuth client with the app's exact package name and signing SHA-1 fingerprints. These IDs are not secrets; never bundle a client secret.
 - Do not commit signing keys, Google Maps keys, production API credentials, device tokens, or real identity documents. Keep credentials out of logs and screenshots shared outside the team.
 - Debug HTTP settings are for local development only. A production build must use HTTPS and release signing credentials controlled by the project owner.

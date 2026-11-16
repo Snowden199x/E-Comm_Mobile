@@ -1,6 +1,6 @@
 # Mobile architecture
 
-**Reviewed:** 30 October 2026
+**Reviewed:** 16 November 2026
 
 `vendo_rider/` is a Flutter application. Its registration screen uploads rider details and verification photos to `POST /api/v1/rider/register`; it loads province/city options from `GET /api/v1/rider/locations` and barangays from `GET /api/v1/rider/locations/{cityCode}/barangays`. The Laravel server verifies all three address codes and selects a unique approved, active logistics hub. The mobile app never sends a logistics-center ID.
 
@@ -12,4 +12,4 @@ The five-tab Rider dashboard's Home, Parcels, and accrued Earnings data are API-
 
 The Rider app exposes seller pickup, origin Main Hub arrival, out-for-delivery, delivered, assigned Truck facility scans, and task issue reports. Truck scans share the Logistics facility workflow for origin departure, station arrival/sorting, and intermediate departure. Facility-routed delivery completion captures recipient name and photo through `POST /api/v1/rider/delivery-proofs`. A separate Transport Driver login receives only its assigned manifest and can depart/arrive only after required parcel scans. Legacy SOC-coded actions remain for historical routes and are not presented as physical facility arrivals. Buyer receipt confirmation remains separate. Rider and Transport Driver accrued earnings come from completed verified route stops; the API/app do not execute payouts. Truck route stops and the next eligible scan target come from the web API. Scans are assigned operator reports. Push notifications and broad offline scan queues remain separate future work. The app must not show stages as complete without server confirmation.
 
-The Android debug manifest permits cleartext HTTP for a local development endpoint. The release manifest does not enable cleartext, so production uses HTTPS.
+The Android debug manifests permit cleartext HTTP for a local development endpoint. Release manifests do not enable cleartext, so production uses HTTPS. Rider, Driver and Buyer release builds default to their `https://vendo-ph.app/api/v1/...` endpoint and ignore a non-HTTPS API override, so a downloaded APK does not depend on the developer's LAN.

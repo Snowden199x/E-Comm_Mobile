@@ -40,10 +40,16 @@ class DriverApi {
   /// Full base for the driver endpoints. A VENDO_API_BASE_URL that already
   /// points at another v1 API (for example `/api/v1/rider`) is switched over to
   /// `/api/v1/transport-drivers`.
+  static const String _productionBaseUrl =
+      'https://vendo-ph.app/api/v1/transport-drivers';
+
   static String get baseUrl {
     const configuredUrl = String.fromEnvironment('VENDO_API_BASE_URL');
     if (configuredUrl.isNotEmpty) {
       final trimmed = configuredUrl.replaceFirst(RegExp(r'/+$'), '');
+      if (kReleaseMode && !trimmed.startsWith('https://')) {
+        return _productionBaseUrl;
+      }
       if (trimmed.contains('/api/v1/')) {
         return '${trimmed.replaceFirst(RegExp(r'/(transport-drivers|rider)$'), '')}/transport-drivers';
       }
@@ -54,7 +60,7 @@ class DriverApi {
       return 'http://127.0.0.1:8000/api/v1/transport-drivers';
     }
 
-    return 'https://vendo-ph.app/api/v1/transport-drivers';
+    return _productionBaseUrl;
   }
 
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
