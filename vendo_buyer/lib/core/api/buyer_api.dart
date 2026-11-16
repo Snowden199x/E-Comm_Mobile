@@ -450,6 +450,9 @@ class BuyerApi {
   /// The rider's delivery photo for this order (bearer token required).
   String orderDeliveryProofUrl(int id) => '$baseUrl/orders/$id/delivery-proof';
 
+  /// The seller's packed-item photo for this order (bearer token required).
+  String orderPickupPhotoUrl(int id) => '$baseUrl/orders/$id/pickup-photo';
+
   String _chatPath({int? sellerId, int? orderId}) => orderId != null
       ? '$baseUrl/messages/orders/$orderId'
       : '$baseUrl/messages/sellers/$sellerId';

@@ -900,6 +900,9 @@ class ApiOrderDetail {
   final List<ApiOrderReason> cancelReasons;
   final ApiOrderReturn? returnRequest;
 
+  /// The Seller's packed-item photo, fetched with the Buyer's token.
+  final bool hasPickupPhoto;
+
   const ApiOrderDetail({
     required this.order,
     required this.items,
@@ -922,6 +925,7 @@ class ApiOrderDetail {
     this.returnReasons = const [],
     this.cancelReasons = const [],
     this.returnRequest,
+    this.hasPickupPhoto = false,
   });
 
   factory ApiOrderDetail.fromJson(Map<String, dynamic> json) => ApiOrderDetail(
@@ -962,6 +966,7 @@ class ApiOrderDetail {
             Map<String, dynamic>.from(json['return_request']),
           )
         : null,
+    hasPickupPhoto: _bool(json['has_pickup_photo']),
   );
 }
 
