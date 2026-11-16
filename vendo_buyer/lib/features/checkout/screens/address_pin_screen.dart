@@ -317,7 +317,7 @@ class _AddressPinScreenState extends State<AddressPinScreen> {
       children: [
         TileLayer(
           urlTemplate: config.tileUrl,
-          userAgentPackageName: 'com.example.vendo_buyer',
+          userAgentPackageName: 'vendoph.buyer',
           maxZoom: 19,
         ),
         if (pin != null)

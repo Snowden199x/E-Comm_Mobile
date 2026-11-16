@@ -174,7 +174,7 @@ class _LoginScreenState extends State<LoginScreen>
         _snack(
           'Google sign-in closed without an account. If you did not cancel it, '
           'this build is not registered in Google Cloud: add an Android OAuth '
-          'client for com.example.vendo_buyer with the SHA-1 of this build.',
+          'client for vendoph.buyer with the SHA-1 of this build.',
         );
         return;
       }
@@ -216,7 +216,7 @@ class _LoginScreenState extends State<LoginScreen>
       case GoogleSignInExceptionCode.clientConfigurationError:
       case GoogleSignInExceptionCode.providerConfigurationError:
         return 'Google does not recognise this app build. Register an Android '
-            'OAuth client for com.example.vendo_buyer with the SHA-1 of this build '
+            'OAuth client for vendoph.buyer with the SHA-1 of this build '
             'in the same Google Cloud project, and check GOOGLE_WEB_CLIENT_ID '
             'matches the server.';
       case GoogleSignInExceptionCode.canceled:

@@ -2,7 +2,7 @@
 ///
 /// [webClientId] is the same public client the website ships, and the server
 /// accepts it through `GOOGLE_ALLOWED_CLIENT_IDS`. Android signs the user in
-/// against that client through the `com.example.vendo_buyer` Android OAuth
+/// against that client through the `vendoph.buyer` Android OAuth
 /// client, so the package name and this build's SHA-1 must exist in the same
 /// Google Cloud project.
 ///

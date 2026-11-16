@@ -10,7 +10,7 @@
 | Application ID / namespace | `vendoph.rider` | Permanent. Changing it later makes a different app in Play and on phones. |
 | Launcher label | Vendo Rider | Was "Vendo Xpress". |
 | Version | `1.0.0+2` in `pubspec.yaml` | `versionCode` is the `+2`; increment it on every release. |
-| Launcher icon | `assets/images/app_icon.png` + `app_icon_foreground.png` | Generated from the web brand icon `E-Comm_Web/public/images/logo/vendo-icon.png` and applied with `flutter_launcher_icons` (legacy + adaptive, white background). |
+| Launcher icon | `assets/images/app_icon.png` + `app_icon_foreground.png` | Generated from the web brand icon `E-Comm_Web/public/images/logo/vendo-express.png` and applied with `flutter_launcher_icons` (legacy + adaptive, white background). The transparent source is kept at `assets/images/vendo_express_logo.png`. |
 | Min / target SDK | 24 / 36 | Android 7.0 and newer. `flutter build` fails without Android SDK 36 installed. |
 
 `MainActivity.kt` lives at `android/app/src/main/kotlin/vendoph/rider/MainActivity.kt` and declares `package vendoph.rider`.
@@ -70,10 +70,10 @@ Universal APK SHA-256 (build `1.0.0+2`): `f24bba197773c1318b0a3ad6490228aa2b388a
 The web landing page button and QR open `https://vendo-ph.app/logistics/get-the-app`, which redirects to:
 
 ```
-https://github.com/Snowden199x/E-Comm_Mobile/releases/latest/download/vendo-rider.apk
+https://github.com/Snowden199x/E-Comm_Mobile/releases/download/rider-v1.0.0/vendo-rider.apk
 ```
 
-That URL always serves the newest release, so **the asset must keep the exact name `vendo-rider.apk`** and each release must be published (not draft, not pre-release).
+The URL is pinned to the release tag, not to `releases/latest`: the Rider and Buyer apps share this repository, so GitHub's "latest" is whichever app was published last, and the other app's asset is missing from it. Publishing the Buyer release `buyer-v1.0.0` made `releases/latest/download/vendo-rider.apk` redirect to a tag holding only `vendo-buyer.apk`, so the Rider QR ended on a GitHub 404. Each Rider release therefore needs its tag added to `RIDER_APP_DOWNLOAD_URL` (or the `config/services.php` default in `E-Comm_Web`), and **the asset must keep the exact name `vendo-rider.apk`** and be published (not draft, not pre-release).
 
 Release steps:
 
@@ -87,7 +87,27 @@ Notes:
 
 - The repository must stay **public** for anonymous downloads. A private repository would require the reader to sign in to GitHub.
 - Direct APKs do not auto-update; riders download each new version again until the app is in Play.
+- Check the signer before publishing: `/home/Snowden/android-sdk/build-tools/<v>/apksigner verify --print-certs vendo-rider.apk`. A build made on a machine with `vendo_rider/android/key.properties` is signed with the upload key, not the shared debug key, and the two produce different Google identities (see below).
 - To move to Play later, change the web app's `RIDER_APP_DOWNLOAD_URL` (or `config/services.php`) to the Play listing. No new QR is needed.
+
+## Signing key and Google sign-in
+
+Google binds an Android OAuth client to one package name plus one signing certificate. The released `vendo-rider.apk` (`rider-v1.0.0`, `vendoph.rider`, versionCode 2) is signed with the project upload key:
+
+```
+CN=Vendo Rider, OU=Vendo, O=Vendo, L=Manila, ST=Metro Manila, C=PH
+SHA-1  C9:86:6E:DA:E3:7E:3B:7C:ED:AE:19:2B:AC:A1:77:46:DE:32:4F:5A
+SHA-256 54:42:5A:6B:D5:8F:55:2D:49:37:DA:49:90:F8:03:CD:72:95:67:F5:7E:C1:92:70:3D:29:0D:82:D9:DF:10:2B
+```
+
+That is **not** the shared debug key `DC:3B:DF:…:C9` the Console entry for `vendoph.rider` was created with, so tapping **Continue with Google** on a phone with that APK is refused by Google before the app receives a token; the login screen then reports that the app build is not registered for an OAuth client. Nothing in the app or the API can compensate for the missing registration.
+
+Owner steps, once, in Google Cloud project `468116080938` (the project that owns the web client the app sends as `serverClientId`) — APIs & Services → Credentials → Create credentials → OAuth client ID → Android:
+
+1. Package name `vendoph.rider`, SHA-1 `C9:86:6E:DA:E3:7E:3B:7C:ED:AE:19:2B:AC:A1:77:46:DE:32:4F:5A`. A second Android client for the same package with a different certificate is allowed and keeps the existing debug-key entry working for local builds.
+2. Add the new client ID to the web API's production `GOOGLE_ANDROID_CLIENT_ID` (comma-separated; `GOOGLE_ALLOWED_CLIENT_IDS`, when set, must list it too), then run `php artisan config:clear`. The token carries the web client as `aud` and this Android client as `azp`, and the verifier rejects an `azp` that is not allow-listed — the same failure the Buyer app hit with `468116080938-v78hid0srlr7ke21rlpo1c3j5ot8jjk7`.
+
+No rebuild is needed for the installed APK: the certificate is already what is on the phone. Every later build must use the same key to keep that registration valid, so always verify the signer above before publishing a release.
 
 ## Login behaviour
 
@@ -101,7 +121,7 @@ The separate "Transport Driver" link on the sign-in screen still works and goes 
 ## Known gaps
 
 - Google Play is not set up ($25 one-time; personal accounts need a 12-tester / 14-day closed test first; organization accounts with a D-U-N-S number are exempt).
-- Google sign-in is not enabled for the release certificate until its SHA-1 is registered.
+- Google sign-in for the released APK waits on the Console registration in **Signing key and Google sign-in**; the debug-key client alone does not cover the upload-key certificate.
 - No auto-update, no crash reporting, no staged rollout.
 - iOS build is untested; only icons were regenerated.
 - The 107 MB universal APK is heavy on mobile data; prefer the 46.6 MB arm64 file when the phone is known to be 64-bit.

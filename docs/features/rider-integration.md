@@ -3,6 +3,12 @@
 **Status:** Rider auth/registration, API-backed assigned-work screens, in-app notifications, COD cash-on-hand, inline delivery proof, buyer map, call/SMS shortcuts, and the daily delivery window with reschedule are connected; owner verification is pending
 **Updated:** 14 November 2026
 
+## App icon
+
+The launcher icon is the Vendo Express mark at `assets/images/vendo_express_logo.png`, which the owner chose as the icon source: it is copied unchanged to `assets/images/app_icon.png` (legacy icon) and trimmed, fitted to 820px, and centred on white in `assets/images/app_icon_foreground.png` (adaptive foreground, inside the mask's safe zone, background `#FFFFFF`). `flutter_launcher_icons` generates every `res/mipmap-*/ic_launcher.png`, the `mipmap-anydpi-v26` adaptive XML and the iOS `AppIcon` set from those two files, so changing the mark means replacing them and re-running `dart run flutter_launcher_icons`. The app's own screens keep their drawn branding — the splash wordmark and the **Vendo Xpress** header — and do not display a logo image.
+
+**Release signing and Google sign-in (16 November 2026).** `android/app/build.gradle.kts` signs a release build with the committed `android-keys/vendo-debug.keystore` whenever `android/key.properties` is absent, so an APK built on a machine without the upload key carries the certificate (SHA-1 `DC:3B:DF:…:8E:C9`) that the Rider Android OAuth client `468116080938-0uhu30n0…` was created for. Google then returns a token and sign-in completes without any Google Cloud change. Two consequences: a phone holding the upload-key release (`C9:86:…:4F:5A`) must uninstall it once, because Android refuses an update signed by a different key, and a Play upload still needs the real upload key. `version` is `1.0.0+3`, so the build replaces versionCode 2. Rider and Transport Driver sign-in share this one APK and are unchanged; the web API's `GOOGLE_ANDROID_CLIENT_ID` must list `468116080938-0uhu30n0…` in production as well as locally.
+
 ## Registration
 
 Phone input is numeric-only and limited to 11 digits. Before continuing, registration requires Philippine mobile format `09` followed by 9 digits; the Laravel Rider and Transport Driver registration APIs enforce the same rule.
