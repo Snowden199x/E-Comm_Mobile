@@ -70,10 +70,10 @@ Universal APK SHA-256 (build `1.0.0+2`): `f24bba197773c1318b0a3ad6490228aa2b388a
 The web landing page button and QR open `https://vendo-ph.app/logistics/get-the-app`, which redirects to:
 
 ```
-https://github.com/Snowden199x/E-Comm_Mobile/releases/latest/download/vendo-rider.apk
+https://github.com/Snowden199x/E-Comm_Mobile/releases/download/rider-v1.0.0/vendo-rider.apk
 ```
 
-That URL always serves the newest release, so **the asset must keep the exact name `vendo-rider.apk`** and each release must be published (not draft, not pre-release).
+The URL is pinned to the release tag, not to `releases/latest`: the Rider and Buyer apps share this repository, so GitHub's "latest" is whichever app was published last, and the other app's asset is missing from it. Publishing the Buyer release `buyer-v1.0.0` made `releases/latest/download/vendo-rider.apk` redirect to a tag holding only `vendo-buyer.apk`, so the Rider QR ended on a GitHub 404. Each Rider release therefore needs its tag added to `RIDER_APP_DOWNLOAD_URL` (or the `config/services.php` default in `E-Comm_Web`), and **the asset must keep the exact name `vendo-rider.apk`** and be published (not draft, not pre-release).
 
 Release steps:
 
