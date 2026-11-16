@@ -27,8 +27,6 @@ class _C {
 const String _fHead = 'Epilogue';
 const String _fBody = 'PlusJakartaSans';
 
-const double _freeShippingMin = 1000;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Data models
 // ─────────────────────────────────────────────────────────────────────────────
@@ -96,7 +94,6 @@ class _CartScreenState extends State<CartScreen> {
   List<_CartShop> _shops = [];
   bool _loading = true;
   String? _error;
-  bool _showHint = true;
   bool _editMode = false;
 
   final TextEditingController _couponCtrl = TextEditingController();
@@ -286,127 +283,122 @@ class _CartScreenState extends State<CartScreen> {
       backgroundColor: _C.bg,
       body: Stack(
         children: [
-      Column(
-        children: [
-          // ── Header ──────────────────────────────────────────────
-          _CartHeader(
-            totalItems: _totalItems,
-            editMode: _editMode,
-            onBack: () => Navigator.of(context).maybePop(),
-            onEdit: () => setState(() => _editMode = !_editMode),
-          ),
+          Column(
+            children: [
+              // ── Header ──────────────────────────────────────────────
+              _CartHeader(
+                totalItems: _totalItems,
+                editMode: _editMode,
+                onBack: () => Navigator.of(context).maybePop(),
+                onEdit: () => setState(() => _editMode = !_editMode),
+              ),
 
-          // ── List ────────────────────────────────────────────────
-          Expanded(
-            child: _loading
-                ? const Center(
-                    child: CircularProgressIndicator(color: _C.plum),
-                  )
-                : _error != null
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(28),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _error!,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontFamily: _fBody,
-                              color: _C.onSurfaceVar,
-                              fontSize: 14,
-                            ),
+              // ── List ────────────────────────────────────────────────
+              Expanded(
+                child: _loading
+                    ? const Center(
+                        child: CircularProgressIndicator(color: _C.plum),
+                      )
+                    : _error != null
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(28),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _error!,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  fontFamily: _fBody,
+                                  color: _C.onSurfaceVar,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              FilledButton(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: _C.plum,
+                                  shape: const StadiumBorder(),
+                                ),
+                                onPressed: _loadCart,
+                                child: const Text('Try again'),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 12),
-                          FilledButton(
-                            style: FilledButton.styleFrom(
-                              backgroundColor: _C.plum,
-                              shape: const StadiumBorder(),
+                        ),
+                      )
+                    : _shops.isEmpty
+                    ? const _EmptyCart()
+                    : ListView(
+                        padding: const EdgeInsets.fromLTRB(10, 8, 10, 16),
+                        children: [
+                          for (final shop in _shops) ...[
+                            _ShopCard(
+                              shop: shop,
+                              editMode: _editMode,
+                              onToggleShop: (v) => _toggleShop(shop, v),
+                              onToggleItem: (item, v) => _toggleItem(shop, item, v),
+                              onChangeQty: _changeQty,
+                              onTrash: (item) => _deleteItem(shop, item),
+                              onConfirmSwipe: _removeRemote,
+                              onSwiped: (item) => _removeLocal(shop, item),
                             ),
-                            onPressed: _loadCart,
-                            child: const Text('Try again'),
+                            const SizedBox(height: 8),
+                          ],
+                          _VendoVoucherCard(
+                            controller: _couponCtrl,
+                            onApply: () {
+                              FocusScope.of(context).unfocus();
+                              if (_couponCtrl.text.trim().isEmpty) return;
+                              _toast('Voucher codes are applied at checkout.');
+                            },
                           ),
                         ],
                       ),
-                    ),
-                  )
-                : _shops.isEmpty
-                ? const _EmptyCart()
-                : ListView(
-                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 16),
-                    children: [
-                      if (_showHint) ...[
-                        _SwipeHint(
-                          onClose: () => setState(() => _showHint = false),
-                        ),
-                        const SizedBox(height: 8),
-                      ],
-                      _FreeShippingCard(subtotal: _selectedTotal),
-                      const SizedBox(height: 8),
-                      for (final shop in _shops) ...[
-                        _ShopCard(
-                          shop: shop,
-                          editMode: _editMode,
-                          onToggleShop: (v) => _toggleShop(shop, v),
-                          onToggleItem: (item, v) => _toggleItem(shop, item, v),
-                          onChangeQty: _changeQty,
-                          onTrash: (item) => _deleteItem(shop, item),
-                          onConfirmSwipe: _removeRemote,
-                          onSwiped: (item) => _removeLocal(shop, item),
-                        ),
-                        const SizedBox(height: 8),
-                      ],
-                      _VendoVoucherCard(controller: _couponCtrl, onApply: () {
-                        FocusScope.of(context).unfocus();
-                        if (_couponCtrl.text.trim().isEmpty) return;
-                        _toast('Voucher codes are applied at checkout.');
-                      }),
-                    ],
-                  ),
+              ),
+
+              // ── Checkout bar ─────────────────────────────────────────
+              _CheckoutBar(
+                key: _barKey,
+                selectAll: _selectAll,
+                onSelectAll: _toggleAll,
+                total: _selectedTotal,
+                selectedCount: _selectedCount,
+                onCheckout: _checkout,
+                summaryOpen: _summaryOpen,
+                onShowSummary: _toggleSummary,
+              ),
+            ],
           ),
 
-          // ── Checkout bar ─────────────────────────────────────────
-          _CheckoutBar(
-            key: _barKey,
-            selectAll: _selectAll,
-            onSelectAll: _toggleAll,
-            total: _selectedTotal,
-            selectedCount: _selectedCount,
-            onCheckout: _checkout,
-            summaryOpen: _summaryOpen,
-            onShowSummary: _toggleSummary,
-          ),
-        ],
-      ),
-
-      // ── Payment summary: scrim + panel that sits ABOVE the checkout bar ──
-      if (_summaryOpen) ...[
-        Positioned(
-          left: 0,
-          right: 0,
-          top: 0,
-          bottom: _barHeight,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _toggleSummary,
-            child: Container(color: const Color(0x66120019)),
-          ),
-        ),
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: _barHeight,
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-            decoration: const BoxDecoration(
-              color: _C.bg,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          // ── Payment summary: scrim + panel that sits ABOVE the checkout bar ──
+          if (_summaryOpen) ...[
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              bottom: _barHeight,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _toggleSummary,
+                child: Container(color: const Color(0x66120019)),
+              ),
             ),
-            child: _PaymentSummary(total: _selectedTotal),
-          ),
-        ),
-      ],
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: _barHeight,
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                decoration: const BoxDecoration(
+                  color: _C.bg,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                ),
+                child: _PaymentSummary(total: _selectedTotal),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -507,135 +499,6 @@ class _CartHeader extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Swipe hint
-// ─────────────────────────────────────────────────────────────────────────────
-class _SwipeHint extends StatelessWidget {
-  final VoidCallback onClose;
-  const _SwipeHint({required this.onClose});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
-      decoration: BoxDecoration(
-        color: _C.tintHigh.withOpacity(0.6),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _C.outlineVar.withOpacity(0.3)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.swipe_left_alt_rounded, size: 16, color: _C.plum),
-          const SizedBox(width: 6),
-          const Expanded(
-            child: Text(
-              'Swipe any item left to delete',
-              style: TextStyle(
-                fontFamily: _fBody,
-                color: _C.onSurfaceVar,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          GestureDetector(
-            onTap: onClose,
-            behavior: HitTestBehavior.opaque,
-            child: const Padding(
-              padding: EdgeInsets.all(6),
-              child: Icon(Icons.close, size: 14, color: _C.outline),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Free shipping progress
-// ─────────────────────────────────────────────────────────────────────────────
-class _FreeShippingCard extends StatelessWidget {
-  final double subtotal;
-  const _FreeShippingCard({required this.subtotal});
-
-  @override
-  Widget build(BuildContext context) {
-    final unlocked = subtotal >= _freeShippingMin;
-    final progress = (subtotal / _freeShippingMin).clamp(0.0, 1.0);
-    final remaining = _freeShippingMin - subtotal;
-
-    return _Card(
-      padding: const EdgeInsets.all(10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.local_shipping_outlined, size: 20, color: _C.plum),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  unlocked ? 'Free Shipping Unlocked!' : 'Almost free shipping',
-                  style: const TextStyle(
-                    fontFamily: _fBody,
-                    color: _C.ink,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              Text(
-                'Min. ₱${_formatPrice(_freeShippingMin)} spend',
-                style: const TextStyle(
-                  fontFamily: _fBody,
-                  color: _C.onSurfaceVar,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(99),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 6,
-              backgroundColor: _C.tintHighest,
-              valueColor: const AlwaysStoppedAnimation(_C.plum),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              Icon(
-                unlocked ? Icons.check_circle : Icons.info_outline_rounded,
-                size: 14,
-                color: _C.plum,
-              ),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  unlocked
-                      ? 'Your order qualifies for nationwide free parcel delivery'
-                      : 'Add ₱${_formatPrice(remaining)} more to unlock free parcel delivery',
-                  style: const TextStyle(
-                    fontFamily: _fBody,
-                    color: _C.onSurfaceVar,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Shop card  (groups items from the same shop)
 // ─────────────────────────────────────────────────────────────────────────────
 class _ShopCard extends StatelessWidget {
@@ -687,7 +550,7 @@ class _ShopCard extends StatelessWidget {
                       fontFamily: _fBody,
                       color: _C.ink,
                       fontSize: 14,
-                      fontWeight: FontWeight.w800,
+                      fontWeight: FontWeight.w500,
                       letterSpacing: -0.2,
                     ),
                   ),
@@ -715,35 +578,6 @@ class _ShopCard extends StatelessWidget {
             if (i < shop.items.length - 1)
               const Divider(height: 1, color: _C.hairline),
           ],
-
-          // ── Store voucher banner ───────────────────────────────
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: _C.tint,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _C.border),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.sell_outlined, size: 18, color: _C.plum),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Add shop voucher code',
-                    style: TextStyle(
-                      fontFamily: _fBody,
-                      color: _C.ink,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                Icon(Icons.chevron_right, size: 18, color: _C.plum),
-              ],
-            ),
-          ),
         ],
       ),
     );
@@ -925,14 +759,32 @@ class _CartItemRow extends StatelessWidget {
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           alignment: Alignment.centerLeft,
-                          child: Text(
-                            '₱${_formatPrice(item.price)}',
-                            style: const TextStyle(
-                              fontFamily: _fHead,
-                              color: _C.ink,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -0.4,
+                          // Line total: unit price × quantity.
+                          child: Text.rich(
+                            TextSpan(
+                              children: [
+                                TextSpan(
+                                  text: '₱${_formatPrice(item.price * item.qty)}',
+                                  style: const TextStyle(
+                                    fontFamily: _fHead,
+                                    color: _C.ink,
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: -0.4,
+                                  ),
+                                ),
+                                if (item.qty > 1)
+                                  TextSpan(
+                                    text:
+                                        '  ₱${_formatPrice(item.price)} ea',
+                                    style: const TextStyle(
+                                      fontFamily: _fBody,
+                                      color: _C.onSurfaceVar,
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                         ),
@@ -1332,54 +1184,54 @@ class _CheckoutBar extends StatelessWidget {
                 child: Align(
                   alignment: Alignment.centerRight,
                   child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: onShowSummary,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Flexible(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            const Text(
-                              'Total Payment',
-                              style: TextStyle(
-                                fontFamily: _fBody,
-                                color: _C.onSurfaceVar,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                                height: 1.1,
-                              ),
-                            ),
-                            FittedBox(
-                              fit: BoxFit.scaleDown,
-                              alignment: Alignment.centerRight,
-                              child: Text(
-                                '₱${_formatPrice(total)}',
-                                style: const TextStyle(
-                                  fontFamily: _fHead,
-                                  color: _C.ink,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: -0.4,
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onShowSummary,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              const Text(
+                                'Total Payment',
+                                style: TextStyle(
+                                  fontFamily: _fBody,
+                                  color: _C.onSurfaceVar,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                  height: 1.1,
                                 ),
                               ),
-                            ),
-                          ],
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerRight,
+                                child: Text(
+                                  '₱${_formatPrice(total)}',
+                                  style: const TextStyle(
+                                    fontFamily: _fHead,
+                                    color: _C.ink,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: -0.4,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 2),
-                      Icon(
-                        summaryOpen
-                            ? Icons.keyboard_arrow_down_rounded
-                            : Icons.keyboard_arrow_up_rounded,
-                        size: 22,
-                        color: _C.plum,
-                      ),
-                    ],
+                        const SizedBox(width: 2),
+                        Icon(
+                          summaryOpen
+                              ? Icons.keyboard_arrow_down_rounded
+                              : Icons.keyboard_arrow_up_rounded,
+                          size: 22,
+                          color: _C.plum,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
                 ),
               ),
               const SizedBox(width: 8),

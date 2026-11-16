@@ -138,6 +138,13 @@ class _LoginScreenState extends State<LoginScreen>
         clientId: nativeClientId.isEmpty ? null : nativeClientId,
       );
       await _googleInitialized;
+      if (!GoogleSignIn.instance.supportsAuthenticate()) {
+        _snack(
+          'This device cannot open the Google account picker. Update Google Play '
+          'services, then try again.',
+        );
+        return;
+      }
       final account = await GoogleSignIn.instance.authenticate();
       final idToken = account.authentication.idToken;
       if (idToken == null || idToken.isEmpty) {
@@ -145,8 +152,12 @@ class _LoginScreenState extends State<LoginScreen>
           'Google did not return a verified sign-in token. Check the app OAuth client configuration.',
         );
       }
-      await BuyerApi.instance.googleSignIn(idToken);
+      final result = await BuyerApi.instance.googleSignIn(idToken);
       if (!mounted) return;
+      if (result['registration_required'] == true) {
+        _openGoogleRegistration(result);
+        return;
+      }
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const HomeScreen()),
@@ -154,9 +165,19 @@ class _LoginScreenState extends State<LoginScreen>
     } on BuyerApiException catch (e) {
       if (mounted) _snack(e.message);
     } on GoogleSignInException catch (e) {
-      if (e.code == GoogleSignInExceptionCode.canceled) return;
       debugPrint('Google sign-in failed: $e');
       if (!mounted) return;
+      // Android reports a misconfigured OAuth client (wrong package name or
+      // SHA-1) as a cancel, so this path must not be silent: swallowing it is
+      // what makes a setup error look like the person closing the sheet.
+      if (e.code == GoogleSignInExceptionCode.canceled) {
+        _snack(
+          'Google sign-in closed without an account. If you did not cancel it, '
+          'this build is not registered in Google Cloud: add an Android OAuth '
+          'client for com.example.vendo_buyer with the SHA-1 of this build.',
+        );
+        return;
+      }
       _snack(_googleFailureMessage(e));
     } catch (e) {
       debugPrint('Google sign-in failed: $e');
@@ -169,6 +190,23 @@ class _LoginScreenState extends State<LoginScreen>
     } finally {
       if (mounted) setState(() => _googleBusy = false);
     }
+  }
+
+  /// A Google email with no Buyer account yet. Buyer is the only account type
+  /// in this app, so the account the person picked goes straight into the
+  /// Buyer form: that address is filled in, locked, and already verified.
+  void _openGoogleRegistration(Map<String, dynamic> result) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RegisterScreen(
+          googleRegistrationToken: result['registration_token'] as String,
+          verifiedEmail: result['email']?.toString() ?? '',
+          googleFirstName: result['first_name']?.toString() ?? '',
+          googleLastName: result['last_name']?.toString() ?? '',
+        ),
+      ),
+    );
   }
 
   /// A wrong OAuth client or a client ID the build does not have is a setup

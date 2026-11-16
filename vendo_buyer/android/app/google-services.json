@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "515568012007",
+    "project_id": "vendorider",
+    "storage_bucket": "vendorider.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:515568012007:android:199757ac0480ab3ef7b042",
+        "android_client_info": {
+          "package_name": "vendoph.rider"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA26-ntOhzFr1Ox24rIlToZkSjpgmdtoGc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

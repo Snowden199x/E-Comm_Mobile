@@ -73,7 +73,20 @@ InputDecoration _decoration({
 }
 
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+  const RegisterScreen({
+    super.key,
+    this.googleRegistrationToken,
+    this.verifiedEmail,
+    this.googleFirstName = '',
+    this.googleLastName = '',
+  });
+
+  /// Set when registration started with Google: the API already proved the
+  /// address, so the form sends this instead of an emailed code.
+  final String? googleRegistrationToken;
+  final String? verifiedEmail;
+  final String googleFirstName;
+  final String googleLastName;
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -169,9 +182,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
     Icons.fact_check_outlined,
   ];
 
+  /// The Google address is already proven, so it is filled in, read-only and
+  /// marked verified instead of asking for a 6-digit code.
+  bool get _verifiedWithGoogle => widget.googleRegistrationToken != null;
+
   @override
   void initState() {
     super.initState();
+    _emailCtrl.text = widget.verifiedEmail ?? '';
+    _firstNameCtrl.text = widget.googleFirstName;
+    _lastNameCtrl.text = widget.googleLastName;
     _loadProvinces();
   }
 
@@ -212,7 +232,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   void _showSnack(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -281,7 +303,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     if (_currentStep < 2) {
       // Step 0→1: require email verified before advancing
-      if (_currentStep == 0 && _verificationToken == null) {
+      if (_currentStep == 0 &&
+          _verificationToken == null &&
+          !_verifiedWithGoogle) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Please verify your email before continuing.'),
@@ -306,7 +330,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       );
       return;
     }
-    if (_verificationToken == null) {
+    if (_verificationToken == null && !_verifiedWithGoogle) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -352,7 +376,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
           'zip_code': _zipCodeCtrl.text.trim(),
           'contact_number': _phoneCtrl.text.trim(),
           'agree_terms': '1',
-          'verification_token': _verificationToken!,
+          if (_verifiedWithGoogle)
+            'google_registration_token': widget.googleRegistrationToken!
+          else
+            'verification_token': _verificationToken!,
         },
         validIdPath: idPath,
         validId2Path: _idCategory == 'secondary' ? _secondaryId2Path : null,
@@ -705,18 +732,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
           children: [
             _buildLabel('Email', required: true),
             const Spacer(),
-            GestureDetector(
-              onTap: () => _showVerifyEmailModal(context),
-              behavior: HitTestBehavior.opaque,
-              child: const Text(
-                'Verify',
-                style: TextStyle(
-                  color: _C.raisin,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+            if (_verifiedWithGoogle)
+              const _VerifiedBadge(text: 'Verified with Google')
+            else if (_verificationToken != null)
+              const _VerifiedBadge(text: 'Verified')
+            else
+              GestureDetector(
+                onTap: () => _showVerifyEmailModal(context),
+                behavior: HitTestBehavior.opaque,
+                child: const Text(
+                  'Verify',
+                  style: TextStyle(
+                    color: _C.raisin,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
-            ),
           ],
         ),
         const SizedBox(height: 8),
@@ -726,6 +758,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
           hint: 'Enter email address',
           icon: Icons.mail_outline_rounded,
           keyboard: TextInputType.emailAddress,
+          readOnly: _verifiedWithGoogle,
+          suffix: _verifiedWithGoogle
+              ? const Icon(
+                  Icons.lock_outline_rounded,
+                  size: 18,
+                  color: _C.muted,
+                )
+              : null,
         ),
         _gap,
         _row2(
@@ -1101,10 +1141,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 value: fullName.isEmpty ? '—' : fullName,
               ),
               item2: _RC(label: 'Phone Number', value: val(_phoneCtrl.text)),
-              item3: _RC(
-                label: 'Province',
-                value: val(_province?.name ?? ''),
-              ),
+              item3: _RC(label: 'Province', value: val(_province?.name ?? '')),
               item4: _RC(
                 label: 'Street/House No.',
                 value: val(_streetCtrl.text),
@@ -1122,10 +1159,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             _ReviewRow4(
               item1: _RC(label: 'Email', value: val(_emailCtrl.text)),
               item2: _RC(label: 'Age', value: val(_ageCtrl.text)),
-              item3: _RC(
-                label: 'Barangay',
-                value: val(_barangay?.name ?? ''),
-              ),
+              item3: _RC(label: 'Barangay', value: val(_barangay?.name ?? '')),
               item4: _RC(
                 label: 'ID Category',
                 value: _idCategory == 'primary'
@@ -2801,4 +2835,31 @@ class _DecorPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _DecorPainter old) => false;
+}
+
+/// The **Verified with Google** mark beside the Email label. Same icon, size,
+/// spacing, colour and weight as the Rider and Driver registration forms.
+class _VerifiedBadge extends StatelessWidget {
+  const _VerifiedBadge({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.verified_rounded, color: _C.success, size: 17),
+        const SizedBox(width: 5),
+        Text(
+          text,
+          style: const TextStyle(
+            color: _C.success,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
 }

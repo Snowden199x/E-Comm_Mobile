@@ -175,9 +175,9 @@ class _LoginScreenState extends State<LoginScreen>
           return;
         } catch (_) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(error.message)),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text(error.message)));
           }
           return;
         }
@@ -239,6 +239,17 @@ class _LoginScreenState extends State<LoginScreen>
         clientId: nativeClientId.isEmpty ? null : nativeClientId,
       );
       await _googleInitialized;
+      if (!GoogleSignIn.instance.supportsAuthenticate()) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'This device cannot open the Google account picker. Update Google Play services, then try again.',
+            ),
+          ),
+        );
+        return;
+      }
       final account = await GoogleSignIn.instance.authenticate();
       final idToken = account.authentication.idToken;
       if (idToken == null || idToken.isEmpty) {
@@ -262,32 +273,20 @@ class _LoginScreenState extends State<LoginScreen>
           );
         } on DriverApiException {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(riderError.message)),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text(riderError.message)));
           }
         }
         return;
       }
       if (!mounted) return;
-      if (result['registration_required'] != true) {
-        await DriverApi.instance.clearSession();
-        if (!mounted) return;
-      }
       if (result['registration_required'] == true) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) => RegisterScreen(
-              googleRegistrationToken: result['registration_token'] as String,
-              verifiedEmail: result['email'] as String,
-              googleFirstName: result['first_name']?.toString() ?? '',
-              googleLastName: result['last_name']?.toString() ?? '',
-            ),
-          ),
-        );
+        await _chooseGoogleRegistration(result);
         return;
       }
+      await DriverApi.instance.clearSession();
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const DashboardScreen()),
@@ -299,12 +298,24 @@ class _LoginScreenState extends State<LoginScreen>
         ).showSnackBar(SnackBar(content: Text(error.message)));
       }
     } on GoogleSignInException catch (error) {
-      if (error.code == GoogleSignInExceptionCode.canceled) return;
       debugPrint('Google sign-in failed: $error');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_googleFailureMessage(error))),
-      );
+      // Android reports a misconfigured OAuth client (wrong package name or
+      // SHA-1) as a cancel, so this path must not be silent: swallowing it is
+      // what makes a setup error look like the person closing the sheet.
+      if (error.code == GoogleSignInExceptionCode.canceled) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Google sign-in closed without an account. If you did not cancel it, this build is not registered in Google Cloud: add an Android OAuth client for vendoph.rider with the SHA-1 of this build.',
+            ),
+          ),
+        );
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_googleFailureMessage(error))));
     } catch (error) {
       debugPrint('Google sign-in failed: $error');
       if (mounted) {
@@ -321,6 +332,41 @@ class _LoginScreenState extends State<LoginScreen>
     }
   }
 
+  /// A Google account with no Vendo account yet can become either a Rider or a
+  /// Transport Driver, so the person picks the role before the form opens.
+  /// Both forms start with the Google email filled in and already verified.
+  Future<void> _chooseGoogleRegistration(Map<String, dynamic> result) async {
+    final asDriver = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => _RegistrationRoleDialog(),
+    );
+    if (!mounted || asDriver == null) return;
+
+    final token = result['registration_token'] as String;
+    final email = result['email']?.toString() ?? '';
+    final firstName = result['first_name']?.toString() ?? '';
+    final lastName = result['last_name']?.toString() ?? '';
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => asDriver
+            ? DriverRegisterScreen(
+                googleRegistrationToken: token,
+                verifiedEmail: email,
+                googleFirstName: firstName,
+                googleLastName: lastName,
+              )
+            : RegisterScreen(
+                googleRegistrationToken: token,
+                verifiedEmail: email,
+                googleFirstName: firstName,
+                googleLastName: lastName,
+              ),
+      ),
+    );
+  }
+
   /// Registration is shared by riders and drivers, so the link asks which one
   /// before opening the matching form.
   Future<void> _chooseRegistration() async {
@@ -332,9 +378,8 @@ class _LoginScreenState extends State<LoginScreen>
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => asDriver
-            ? const DriverRegisterScreen()
-            : const RegisterScreen(),
+        builder: (_) =>
+            asDriver ? const DriverRegisterScreen() : const RegisterScreen(),
       ),
     );
   }
@@ -440,7 +485,8 @@ class _LoginScreenState extends State<LoginScreen>
                                   onTransportDriver: () => Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                      builder: (_) => const TransportDriverLoginScreen(),
+                                      builder: (_) =>
+                                          const TransportDriverLoginScreen(),
                                     ),
                                   ),
                                 ),

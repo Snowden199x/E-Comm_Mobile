@@ -10,7 +10,8 @@ plugins {
 }
 
 // The upload key is not committed. Without it (fresh clone), release builds fall
-// back to the debug key so `flutter run --release` still works during development.
+// back to the shared debug key so `flutter run --release` still works during
+// development.
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
@@ -40,6 +41,18 @@ android {
     }
 
     signingConfigs {
+        // Committed on purpose. Google Sign-In and Firebase tie an Android OAuth client
+        // to the signing certificate's SHA-1, so every machine and every collaborator
+        // must sign local builds with the same key or sign-in fails with
+        // DEVELOPER_ERROR. This is a public, debug-only key (alias androiddebugkey,
+        // password android); the shared file lives in ../android-keys of the repo.
+        create("vendoDebug") {
+            storeFile = rootProject.file("../../android-keys/vendo-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+
         create("release") {
             if (keystorePropertiesFile.exists()) {
                 keyAlias = keystoreProperties["keyAlias"] as String
@@ -51,11 +64,14 @@ android {
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("vendoDebug")
+        }
         release {
             signingConfig = if (keystorePropertiesFile.exists()) {
                 signingConfigs.getByName("release")
             } else {
-                signingConfigs.getByName("debug")
+                signingConfigs.getByName("vendoDebug")
             }
             isMinifyEnabled = false
             isShrinkResources = false
