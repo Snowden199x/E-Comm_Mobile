@@ -26,11 +26,28 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        // Committed on purpose. Google Sign-In and Firebase tie an Android OAuth client
+        // to the signing certificate's SHA-1, so every machine and every collaborator
+        // must sign local builds with the same key or sign-in fails with
+        // DEVELOPER_ERROR. This is a public, debug-only key (alias androiddebugkey,
+        // password android); the shared file lives in ../android-keys of the repo.
+        create("vendoDebug") {
+            storeFile = rootProject.file("../../android-keys/vendo-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("vendoDebug")
+        }
         release {
             // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Signed with the shared debug key for now, so `flutter run --release` works.
+            signingConfig = signingConfigs.getByName("vendoDebug")
         }
     }
 }

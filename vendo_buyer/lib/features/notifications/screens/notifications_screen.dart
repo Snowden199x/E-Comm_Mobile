@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:vendo_buyer/core/api/api_models.dart';
 import 'package:vendo_buyer/core/api/buyer_api.dart';
 import 'package:vendo_buyer/features/home/widgets/buyer_nav_bar.dart';
+import 'package:vendo_buyer/features/orders/screens/order_detail_screen.dart';
 import 'package:vendo_buyer/features/shared/offline_banner.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -64,15 +65,17 @@ IconData _kindIcon(String? type) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Parcel status
 //
-// Each parcel/order notification becomes its own card, and the card's status
-// label + color + progress step change as the order moves along:
+// One parcel = ONE card. Every update for the same parcel (placed, packed,
+// assigned to rider, shipped, out for delivery, delivered…) is folded into that
+// card, and only its status label + color + progress step change — like the
+// Shopee app. The older updates stay available under "History".
+//
 //   Order placed → Packed → Assigned to rider → Shipped → Out for delivery
 //   → Delivered   (or Cancelled / Returned)
 //
-// The status is derived from the notification's type/title/message text.
-// TODO(backend): once the API sends a dedicated field (for example
-// `parcelStatus`, `orderId`, `trackingNo`), read it in [_parcelStatusOf]
-// instead of matching text — it is more reliable.
+// The status comes from the order the notification belongs to (the API sends
+// its real `status` on each notification); only a notification with no order,
+// or an order status this app does not know yet, falls back to the wording.
 // ─────────────────────────────────────────────────────────────────────────────
 class _ParcelStatus {
   final String label;
@@ -94,9 +97,100 @@ const _trackerSteps = <String>[
   'Delivered',
 ];
 
+/// The card status for the order the notification belongs to. Null when the
+/// notification has no order (an announcement, a chat message) or carries a
+/// status this app does not know, so the caller can fall back to the wording.
+_ParcelStatus? _orderParcelStatus(ApiNotification item) {
+  switch ((item.orderStatus ?? '').toLowerCase()) {
+    case 'placed':
+      return const _ParcelStatus(
+        'Order placed',
+        Icons.receipt_long_outlined,
+        _C.statusInfo,
+        0,
+      );
+    case 'confirmed':
+    case 'preparing':
+    case 'ready_for_pickup':
+      return const _ParcelStatus(
+        'Packed',
+        Icons.inventory_2_outlined,
+        _C.statusInfo,
+        1,
+      );
+    case 'assigned_to_rider':
+      return const _ParcelStatus(
+        'Assigned to rider',
+        Icons.two_wheeler_outlined,
+        _C.statusInfo,
+        2,
+      );
+    case 'picked_up':
+    case 'at_sorting_center':
+    case 'sorted':
+    case 'to_soc5':
+    case 'to_soc6':
+    case 'in_transit_to_hub':
+    case 'at_destination_hub':
+      return const _ParcelStatus(
+        'Shipped',
+        Icons.local_shipping_outlined,
+        _C.statusTransit,
+        3,
+      );
+    case 'out_for_delivery':
+      return const _ParcelStatus(
+        'Out for delivery',
+        Icons.delivery_dining_outlined,
+        _C.statusTransit,
+        4,
+      );
+    case 'delivered':
+      return const _ParcelStatus(
+        'Delivered',
+        Icons.check_circle_outline_rounded,
+        _C.statusDone,
+        5,
+      );
+    case 'completed':
+      return const _ParcelStatus(
+        'Completed',
+        Icons.done_all_rounded,
+        _C.statusDone,
+        5,
+      );
+    case 'delivery_failed':
+      return const _ParcelStatus(
+        'Delivery failed',
+        Icons.error_outline_rounded,
+        _C.statusBad,
+        -1,
+      );
+    case 'cancelled':
+      return const _ParcelStatus(
+        'Cancelled',
+        Icons.cancel_outlined,
+        _C.statusBad,
+        -1,
+      );
+    case 'returned':
+      return const _ParcelStatus(
+        'Returned',
+        Icons.assignment_return_outlined,
+        _C.statusBad,
+        -1,
+      );
+    default:
+      return null;
+  }
+}
+
 /// Returns the parcel status, or null when this is not an order/parcel
 /// notification (announcements, messages, reviews, …).
 _ParcelStatus? _parcelStatusOf(ApiNotification item) {
+  final fromOrder = _orderParcelStatus(item);
+  if (fromOrder != null) return fromOrder;
+
   final type = (item.type ?? '').toLowerCase();
   final text = '$type ${item.title} ${item.message}'.toLowerCase();
 
@@ -125,6 +219,16 @@ _ParcelStatus? _parcelStatusOf(ApiNotification item) {
       Icons.assignment_return_outlined,
       _C.statusBad,
       -1,
+    );
+  }
+  // "VND-00026: Completed" — without this the completed order fell through to
+  // the "Order placed" default below.
+  if (text.contains('complete')) {
+    return const _ParcelStatus(
+      'Completed',
+      Icons.done_all_rounded,
+      _C.statusDone,
+      5,
     );
   }
   if (text.contains('delivered')) {
@@ -179,6 +283,9 @@ _ParcelStatus? _parcelStatusOf(ApiNotification item) {
 
 /// Short helper line shown under the title, like "Click to track your order".
 String _parcelHint(_ParcelStatus status) {
+  if (status.label == 'Completed') {
+    return 'Order completed. Tap to see the details.';
+  }
   switch (status.step) {
     case 5:
       return 'Your parcel has arrived. Tap to see the details.';
@@ -192,6 +299,80 @@ String _parcelHint(_ParcelStatus status) {
     default:
       return 'Tap to view your order.';
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Parcel grouping
+//
+// All notifications about the same parcel share one key, so they collapse into
+// a single card. The list from the API is newest first, so the first item of a
+// group is its current status.
+//
+// The key is the order id the API sends with the notification, so two orders of
+// the same product stay two cards and every update of one order lands in one.
+// Older payloads without an order fall back to the order reference in the text
+// ("#10234", "Order VND-10234"), then to the product (name + picture), and a
+// notification that gives none of those stays its own card.
+// ─────────────────────────────────────────────────────────────────────────────
+final _orderRefPattern = RegExp(
+  r'(?:#\s*|(?:order|parcel)\s*(?:no\.?|number|id)?\s*[:#]?\s*)((?=[A-Za-z0-9\-]*\d)[A-Za-z0-9\-]{3,})',
+  caseSensitive: false,
+);
+
+String? _parcelKeyOf(ApiNotification item) {
+  final orderId = item.orderId;
+  if (orderId != null) return 'order:$orderId';
+
+  final match = _orderRefPattern.firstMatch('${item.title} ${item.message}');
+  if (match != null) return 'order:${match.group(1)!.toUpperCase()}';
+
+  final name = item.productName;
+  if (name != null && name.isNotEmpty) {
+    return 'product:$name|${item.productImage ?? ''}';
+  }
+  return null;
+}
+
+/// One parcel and every notification about it, newest first.
+class _ParcelGroup {
+  final String key;
+  final List<ApiNotification> items;
+
+  const _ParcelGroup(this.key, this.items);
+
+  /// The most recent update: it decides the card's status.
+  ApiNotification get latest => items.first;
+
+  bool get unread => items.any((entry) => !entry.read);
+}
+
+/// Folds the flat notification list into entries: a [_ParcelGroup] for parcel
+/// notifications (one per parcel) or a plain [ApiNotification] for the rest.
+/// A group sits where its newest update was.
+List<Object> _buildEntries(List<ApiNotification> items) {
+  final buckets = <String, List<ApiNotification>>{};
+  final order = <Object>[];
+
+  for (final item in items) {
+    final isParcel = _parcelStatusOf(item) != null;
+    if (!isParcel) {
+      order.add(item);
+      continue;
+    }
+    final key = _parcelKeyOf(item) ?? 'single:${item.id}';
+    final bucket = buckets[key];
+    if (bucket == null) {
+      buckets[key] = [item];
+      order.add(key);
+    } else {
+      bucket.add(item);
+    }
+  }
+
+  return [
+    for (final entry in order)
+      entry is String ? _ParcelGroup(entry, buckets[entry]!) : entry,
+  ];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -258,9 +439,10 @@ class _ProductThumb extends StatelessWidget {
 /// through `POST /notifications/{id}/read`, "mark all" through
 /// `POST /notifications/read-all`.
 ///
-/// Order/parcel notifications are drawn as parcel cards: one card per parcel,
+/// Order/parcel notifications are drawn as parcel cards: ONE card per parcel,
 /// with a status chip (placed, packed, assigned to rider, shipped, out for
-/// delivery, delivered, cancelled…) and the product picture on the right.
+/// delivery, delivered, cancelled…) that changes as the parcel moves along, and
+/// the product picture on the right.
 ///
 /// The list refreshes when the screen opens, when it becomes the visible tab,
 /// on pull-to-refresh, and every [_pollEvery] while visible, so a status change
@@ -391,28 +573,65 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     _load();
   }
 
-  /// Opens the full message and marks the notification read for both apps.
+  /// Opens the order behind a notification and marks it read for both apps.
+  /// Notices that are not about an order (announcements, support replies,
+  /// reviews) still open the message sheet, since they have no order screen.
   Future<void> _open(ApiNotification item) async {
-    // TODO: for parcel notifications, navigate to the order tracking screen
-    // here instead of (or in addition to) the details sheet, e.g.
-    //   if (_parcelStatusOf(item) != null) { Navigator.push(... TrackOrder ...); }
+    unawaited(_markRead([item]));
+    final orderId = item.orderId;
+    if (orderId != null) {
+      await _openOrder(orderId);
+      return;
+    }
     _showDetails(item);
-    if (item.read) return;
+  }
 
+  /// Opens the order a parcel card stands for — no sheet in between — and marks
+  /// every update of that parcel read.
+  Future<void> _openParcel(_ParcelGroup group) async {
+    unawaited(_markRead(group.items));
+    final orderId = group.latest.orderId;
+    if (orderId != null) {
+      await _openOrder(orderId);
+      return;
+    }
+    // No order on the payload (an older server): keep the status and history.
+    _showDetails(group.latest, history: group.items);
+  }
+
+  /// The same screen the Orders tab opens, so the tapped card leads to the
+  /// order's status, items and tracking.
+  Future<void> _openOrder(int orderId) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => OrderDetailScreen(orderId: orderId)),
+    );
+    if (mounted) _load(silent: true);
+  }
+
+  /// Marks the given notifications read locally right away, then on Vendo.
+  Future<void> _markRead(List<ApiNotification> targets) async {
+    final unreadItems = targets.where((entry) => !entry.read).toList();
+    if (unreadItems.isEmpty) return;
+
+    final ids = unreadItems.map((entry) => entry.id).toSet();
     setState(() {
       _items = _items
           .map(
-            (entry) => entry.id == item.id ? entry.copyWith(read: true) : entry,
+            (entry) =>
+                ids.contains(entry.id) ? entry.copyWith(read: true) : entry,
           )
           .where((entry) => !_unreadOnly || !entry.read)
           .toList();
-      if (_unread > 0) _unread -= 1;
+      _unread = _unread >= ids.length ? _unread - ids.length : 0;
     });
 
     try {
-      final unread = await _api.markNotificationRead(item.id);
+      int? unread;
+      for (final entry in unreadItems) {
+        unread = await _api.markNotificationRead(entry.id);
+      }
       if (!mounted) return;
-      setState(() => _unread = unread);
+      if (unread != null) setState(() => _unread = unread!);
     } catch (_) {
       // Offline or rejected: the next refresh puts the server's truth back.
       if (mounted) _load(silent: true);
@@ -453,7 +672,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  void _showDetails(ApiNotification item) {
+  /// Details sheet for a notification with no order screen behind it. For a
+  /// parcel (an older payload), [history] holds every update of that parcel
+  /// (newest first) and is listed under the progress tracker.
+  void _showDetails(
+    ApiNotification item, {
+    List<ApiNotification> history = const [],
+  }) {
     final status = _parcelStatusOf(item);
 
     showModalBottomSheet<void>(
@@ -528,6 +753,20 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               if (status != null && status.step >= 0) ...[
                 const SizedBox(height: 16),
                 _ProgressTracker(step: status.step),
+              ],
+              if (history.length > 1) ...[
+                const SizedBox(height: 8),
+                const Divider(height: 24, color: Color(0x1ACEC3CC)),
+                const Text(
+                  'Updates',
+                  style: TextStyle(
+                    color: _C.primary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                for (final entry in history) _HistoryRow(item: entry),
               ],
               const SizedBox(height: 14),
               Text(
@@ -629,10 +868,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     }
 
     return [
-      for (final item in _items) ...[
-        _parcelStatusOf(item) != null
-            ? _ParcelCard(item: item, onTap: () => _open(item))
-            : _NotificationCard(item: item, onTap: () => _open(item)),
+      for (final entry in _buildEntries(_items)) ...[
+        if (entry is _ParcelGroup)
+          _ParcelCard(group: entry, onTap: () => _openParcel(entry))
+        else
+          _NotificationCard(
+            item: entry as ApiNotification,
+            onTap: () => _open(entry),
+          ),
         const SizedBox(height: 8),
       ],
       const _EndMarker(),
@@ -879,7 +1122,7 @@ class _StatusChip extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Parcel card: one card per parcel, status on the left, product picture right
+// Parcel card: ONE card per parcel. Its status chip follows the latest update.
 //
 //   ┌──────────────────────────────────────────┐
 //   │ [Out for delivery]                 ┌────┐│
@@ -889,14 +1132,16 @@ class _StatusChip extends StatelessWidget {
 //   └──────────────────────────────────────────┘
 // ─────────────────────────────────────────────────────────────────────────────
 class _ParcelCard extends StatelessWidget {
-  final ApiNotification item;
+  final _ParcelGroup group;
   final VoidCallback onTap;
 
-  const _ParcelCard({required this.item, required this.onTap});
+  const _ParcelCard({required this.group, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    final unread = !item.read;
+    // Everything on the card comes from the newest update of this parcel.
+    final item = group.latest;
+    final unread = group.unread;
     final status = _parcelStatusOf(item)!;
 
     return Material(
@@ -909,101 +1154,151 @@ class _ParcelCard extends StatelessWidget {
           decoration: _cardDecoration().copyWith(
             color: unread ? _C.unreadTint : _C.white,
           ),
-          child: Row(
+          child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _StatusChip(status: status),
-                        if (unread) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            width: 7,
-                            height: 7,
-                            decoration: const BoxDecoration(
-                              color: _C.primaryContainer,
-                              shape: BoxShape.circle,
+                        Row(
+                          children: [
+                            _StatusChip(status: status),
+                            if (unread) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                width: 7,
+                                height: 7,
+                                decoration: const BoxDecoration(
+                                  color: _C.primaryContainer,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          item.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: _C.primary,
+                            fontSize: 14,
+                            fontWeight: unread
+                                ? FontWeight.w700
+                                : FontWeight.w600,
+                            height: 1.3,
+                          ),
+                        ),
+                        if (item.productName != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            item.productName!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: _C.secondary,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              height: 1.4,
                             ),
                           ),
                         ],
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      item.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: _C.primary,
-                        fontSize: 14,
-                        fontWeight: unread ? FontWeight.w700 : FontWeight.w600,
-                        height: 1.3,
-                      ),
-                    ),
-                    if (item.productName != null) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        item.productName!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: _C.secondary,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          height: 1.4,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 4),
-                    Text(
-                      _parcelHint(status),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: _C.onSurfaceVariant,
-                        fontSize: 12,
-                        height: 1.5,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
+                        const SizedBox(height: 4),
                         Text(
-                          item.timeAgo ?? '',
+                          _parcelHint(status),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
-                            color: _C.outline,
-                            fontSize: 11,
+                            color: _C.onSurfaceVariant,
+                            fontSize: 12,
+                            height: 1.5,
                           ),
-                        ),
-                        const Spacer(),
-                        const Text(
-                          'History',
-                          style: TextStyle(
-                            color: _C.outline,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const Icon(
-                          Icons.chevron_right_rounded,
-                          size: 14,
-                          color: _C.outline,
                         ),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 12),
+                  // The parcel's product, so the buyer can tell which order this is.
+                  _ProductThumb(imageUrl: _productImageOf(item), size: 64),
+                ],
               ),
-              const SizedBox(width: 12),
-              // The parcel's product, so the buyer can tell which order this is.
-              _ProductThumb(imageUrl: _productImageOf(item), size: 64),
+              const SizedBox(height: 10),
+              // Footer spans the whole card: time on the left, History on the
+              // right corner.
+              Row(
+                children: [
+                  Text(
+                    item.timeAgo ?? '',
+                    style: const TextStyle(color: _C.outline, fontSize: 11),
+                  ),
+                  const Spacer(),
+                  const Text(
+                    'View order',
+                    style: TextStyle(
+                      color: _C.outline,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    size: 14,
+                    color: _C.outline,
+                  ),
+                ],
+              ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// One line of a parcel's history in the details sheet
+// ─────────────────────────────────────────────────────────────────────────────
+class _HistoryRow extends StatelessWidget {
+  final ApiNotification item;
+
+  const _HistoryRow({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    final status = _parcelStatusOf(item);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            status?.icon ?? Icons.circle_outlined,
+            size: 15,
+            color: status?.color ?? _C.outline,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              status?.label ?? item.title,
+              style: const TextStyle(
+                color: _C.onSurfaceVariant,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                height: 1.3,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            item.timeAgo ?? '',
+            style: const TextStyle(color: _C.outline, fontSize: 11),
+          ),
+        ],
       ),
     );
   }

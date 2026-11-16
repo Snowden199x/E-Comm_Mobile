@@ -190,13 +190,32 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _firstNameCtrl.text = widget.googleFirstName;
     _lastNameCtrl.text = widget.googleLastName;
     _allInputs = Listenable.merge([
-      _lastNameCtrl, _firstNameCtrl, _emailCtrl, _birthdayCtrl,
-      _passwordCtrl, _confirmPassCtrl, _plateNumberCtrl,
-      _dlLastNameCtrl, _dlFirstNameCtrl, _dlAddressCtrl, _dlLicenseNoCtrl,
-      _dlExpirationCtrl, _dlNationalityCtrl, _orCrMVFileNoCtrl,
-      _orCrPlateNoCtrl, _orCrMakeCtrl, _orCrBodyTypeCtrl, _orCrYearModelCtrl,
-      _orCrEngineNoCtrl, _orCrChassisNoCtrl, _orCrOwnerCtrl, _orCrAddressCtrl,
-      _orCrExpirationCtrl, _phoneCtrl, _streetCtrl, _zipCodeCtrl,
+      _lastNameCtrl,
+      _firstNameCtrl,
+      _emailCtrl,
+      _birthdayCtrl,
+      _passwordCtrl,
+      _confirmPassCtrl,
+      _plateNumberCtrl,
+      _dlLastNameCtrl,
+      _dlFirstNameCtrl,
+      _dlAddressCtrl,
+      _dlLicenseNoCtrl,
+      _dlExpirationCtrl,
+      _dlNationalityCtrl,
+      _orCrMVFileNoCtrl,
+      _orCrPlateNoCtrl,
+      _orCrMakeCtrl,
+      _orCrBodyTypeCtrl,
+      _orCrYearModelCtrl,
+      _orCrEngineNoCtrl,
+      _orCrChassisNoCtrl,
+      _orCrOwnerCtrl,
+      _orCrAddressCtrl,
+      _orCrExpirationCtrl,
+      _phoneCtrl,
+      _streetCtrl,
+      _zipCodeCtrl,
     ])..addListener(_onInputChanged);
     _loadLocations();
   }
@@ -443,16 +462,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
           'plate_number': _plateNumberCtrl.text.trim(),
           'logistics_company_id': ?_companyId,
         },
-        {
-          'drivers_license': _driversLicensePath!,
-          'or_cr': _orCrPath!,
-        },
+        {'drivers_license': _driversLicensePath!, 'or_cr': _orCrPath!},
       );
       if (!mounted) return;
       final company = result['logistics_company'];
       _matchedCenterName =
-          (company is Map ? company['name'] : (result['logistics_center'] as Map)['name'])
-          ?.toString();
+          (company is Map
+                  ? company['name']
+                  : (result['logistics_center'] as Map)['name'])
+              ?.toString();
       _showSuccessModal(context);
     } on RiderApiException catch (error) {
       if (mounted) _showError(error.message);
@@ -777,10 +795,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ]);
     } else if (step == 2) {
       checks.addAll([
-        (
-          'phone',
-          !RegExp(r'^09\d{9}$').hasMatch(_phoneCtrl.text.trim()),
-        ),
+        ('phone', !RegExp(r'^09\d{9}$').hasMatch(_phoneCtrl.text.trim())),
         ('province', _provinceCode == null),
         ('city', _cityCode == null),
         ('barangay', _barangayCode == null),
@@ -789,7 +804,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ('company', _companyId == null),
       ]);
     }
-    return [for (final c in checks) if (c.$2) c.$1];
+    return [
+      for (final c in checks)
+        if (c.$2) c.$1,
+    ];
   }
 
   // One key per field, so the page can scroll to the first red one
@@ -847,9 +865,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
       firstDate: first,
       lastDate: last,
       builder: (c, child) => Theme(
-        data: Theme.of(c).copyWith(
-          colorScheme: const ColorScheme.light(primary: _C.prune),
-        ),
+        data: Theme.of(
+          c,
+        ).copyWith(colorScheme: const ColorScheme.light(primary: _C.prune)),
         child: child!,
       ),
     );
@@ -952,6 +970,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
             icon: Icons.mail_outline_rounded,
             keyboard: TextInputType.emailAddress,
             readOnly: widget.googleRegistrationToken != null,
+            suffix: widget.googleRegistrationToken != null
+                ? const Icon(
+                    Icons.lock_outline_rounded,
+                    size: 18,
+                    color: _C.muted,
+                  )
+                : null,
             onChanged: widget.googleRegistrationToken != null
                 ? null
                 : (_) {
@@ -961,38 +986,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   },
           ),
           required: true,
-          trailing: widget.googleRegistrationToken != null ||
-                  _emailVerificationToken != null
-              ? null
+          trailing: widget.googleRegistrationToken != null
+              ? const _VerifiedBadge(text: 'Verified with Google')
+              : _emailVerificationToken != null
+              ? const _VerifiedBadge(text: 'Verified')
               : TextButton(
                   style: _linkStyle,
                   onPressed: () => _showVerifyEmailModal(context),
                   child: const Text('Verify'),
                 ),
         ),
-        const SizedBox(height: 10),
-        if (widget.googleRegistrationToken != null)
-          const Row(
-            children: [
-              Icon(Icons.verified, color: _C.success, size: 18),
-              SizedBox(width: 6),
-              Text('Verified with Google', style: TextStyle(color: _C.success)),
-            ],
-          )
-        else if (_emailVerificationToken != null)
-          const Row(
-            children: [
-              Icon(Icons.verified, color: _C.success, size: 18),
-              SizedBox(width: 6),
-              Text('Email verified', style: TextStyle(color: _C.success)),
-            ],
-          ),
         _gap,
 
         _row2(
           _col(
-          'birthday',
-          'Birthday',
+            'birthday',
+            'Birthday',
             _Field(
               controller: _birthdayCtrl,
               hint: 'mm/dd/yyyy',
@@ -1018,8 +1027,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
             required: true,
           ),
           _col(
-          'age',
-          'Age',
+            'age',
+            'Age',
             _Field(controller: _ageCtrl, hint: '--', readOnly: true),
             required: true,
           ),
@@ -1042,9 +1051,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
             hint: 'Create a password',
             icon: Icons.lock_outline_rounded,
             obscure: _obscurePass,
-            forceError: _flagged.contains('password') && _passwordCtrl.text.isNotEmpty,
+            forceError:
+                _flagged.contains('password') && _passwordCtrl.text.isNotEmpty,
             errorText: 'Password must be at least 8 characters.',
-            
+
             suffix: GestureDetector(
               onTap: () => setState(() => _obscurePass = !_obscurePass),
               behavior: HitTestBehavior.opaque,
@@ -1077,9 +1087,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
             hint: 'Confirm your password',
             icon: Icons.lock_outline_rounded,
             obscure: _obscureConfirm,
-            forceError: _flagged.contains('confirm') && _confirmPassCtrl.text.isNotEmpty,
+            forceError:
+                _flagged.contains('confirm') &&
+                _confirmPassCtrl.text.isNotEmpty,
             errorText: 'Passwords do not match.',
-            
+
             suffix: GestureDetector(
               onTap: () => setState(() => _obscureConfirm = !_obscureConfirm),
               behavior: HitTestBehavior.opaque,
@@ -1189,14 +1201,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
         _row2(
           _col(
-          'dlLast',
-          'Last Name',
+            'dlLast',
+            'Last Name',
             _Field(controller: _dlLastNameCtrl, hint: 'Last name on license'),
             required: true,
           ),
           _col(
-          'dlFirst',
-          'First Name',
+            'dlFirst',
+            'First Name',
             _Field(controller: _dlFirstNameCtrl, hint: 'First name on license'),
             required: true,
           ),
@@ -1224,14 +1236,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
         _row2(
           _col(
-          'dlLicenseNo',
-          'License No.',
+            'dlLicenseNo',
+            'License No.',
             _Field(controller: _dlLicenseNoCtrl, hint: 'e.g. N01-23-456789'),
             required: true,
           ),
           _col(
-          'dlExpiration',
-          'Expiration Date',
+            'dlExpiration',
+            'Expiration Date',
             _futureDateField(_dlExpirationCtrl),
             required: true,
           ),
@@ -1240,16 +1252,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
         _row2(
           _col(
-          'dlNationality',
-          'Nationality',
+            'dlNationality',
+            'Nationality',
             _Field(controller: _dlNationalityCtrl, hint: 'e.g. Filipino'),
             required: true,
           ),
           _col(
-          'bloodType',
-          'Blood Type',
+            'bloodType',
+            'Blood Type',
             _Dropdown(
-              value: _dlBloodTypeCtrl.text.isEmpty ? null : _dlBloodTypeCtrl.text,
+              value: _dlBloodTypeCtrl.text.isEmpty
+                  ? null
+                  : _dlBloodTypeCtrl.text,
               hint: 'Select',
               options: const ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'],
               onChanged: (v) => setState(() => _dlBloodTypeCtrl.text = v ?? ''),
@@ -1310,14 +1324,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
         _row2(
           _col(
-          'mvFile',
-          'MV File No.',
+            'mvFile',
+            'MV File No.',
             _Field(controller: _orCrMVFileNoCtrl, hint: 'e.g. 1234567890'),
             required: true,
           ),
           _col(
-          'orPlate',
-          'Plate No.',
+            'orPlate',
+            'Plate No.',
             _Field(controller: _orCrPlateNoCtrl, hint: 'e.g. ABC 1234'),
             required: true,
           ),
@@ -1326,14 +1340,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
         _row2(
           _col(
-          'make',
-          'Make',
+            'make',
+            'Make',
             _Field(controller: _orCrMakeCtrl, hint: 'e.g. Honda, Yamaha'),
             required: true,
           ),
           _col(
-          'series',
-          'Series / Model',
+            'series',
+            'Series / Model',
             _Field(controller: _orCrSeriesCtrl, hint: 'e.g. Click 125i'),
           ),
         ),
@@ -1341,14 +1355,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
         _row2(
           _col(
-          'body',
-          'Body Type',
+            'body',
+            'Body Type',
             _Field(controller: _orCrBodyTypeCtrl, hint: 'e.g. Motorcycle'),
             required: true,
           ),
           _col(
-          'color',
-          'Color',
+            'color',
+            'Color',
             _Field(controller: _orCrColorCtrl, hint: 'e.g. Black'),
           ),
         ),
@@ -1356,8 +1370,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
         _row2(
           _col(
-          'year',
-          'Year Model',
+            'year',
+            'Year Model',
             _Field(
               controller: _orCrYearModelCtrl,
               hint: 'e.g. 2022',
@@ -1366,8 +1380,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
             required: true,
           ),
           _col(
-          'engine',
-          'Engine No.',
+            'engine',
+            'Engine No.',
             _Field(controller: _orCrEngineNoCtrl, hint: 'Engine number'),
             required: true,
           ),
@@ -1451,7 +1465,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
         _gap,
 
-        KeyedSubtree(key: _k('province'), child: _label('Province', required: true)),
+        KeyedSubtree(
+          key: _k('province'),
+          child: _label('Province', required: true),
+        ),
         const SizedBox(height: 8),
         if (_loadingLocations)
           const Padding(
@@ -1507,7 +1524,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
         _gap,
 
-        KeyedSubtree(key: _k('city'), child: _label('Municipality / City', required: true)),
+        KeyedSubtree(
+          key: _k('city'),
+          child: _label('Municipality / City', required: true),
+        ),
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
           key: ValueKey(_provinceCode),
@@ -1562,7 +1582,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
         _gap,
 
-        KeyedSubtree(key: _k('barangay'), child: _label('Barangay', required: true)),
+        KeyedSubtree(
+          key: _k('barangay'),
+          child: _label('Barangay', required: true),
+        ),
         const SizedBox(height: 8),
         if (_loadingBarangays)
           const Padding(
@@ -1599,9 +1622,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 horizontal: 16,
                 vertical: 16,
               ),
-              border: _border(barangayError ? _C.error : _C.border, barangayError ? 1.6 : 1.2),
-              enabledBorder: _border(barangayError ? _C.error : _C.border, barangayError ? 1.6 : 1.2),
-              disabledBorder: _border(barangayError ? _C.error : _C.border, barangayError ? 1.6 : 1.2),
+              border: _border(
+                barangayError ? _C.error : _C.border,
+                barangayError ? 1.6 : 1.2,
+              ),
+              enabledBorder: _border(
+                barangayError ? _C.error : _C.border,
+                barangayError ? 1.6 : 1.2,
+              ),
+              disabledBorder: _border(
+                barangayError ? _C.error : _C.border,
+                barangayError ? 1.6 : 1.2,
+              ),
               focusedBorder: _border(barangayError ? _C.error : _C.prune, 1.6),
             ),
             menuStyle: const MenuStyle(
@@ -1680,7 +1712,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
             padding: const EdgeInsets.only(top: 8, left: 2),
             child: Text(
               'Your application goes to ${_selectedCompanyStation!} for review.',
-              style: const TextStyle(color: _C.muted, fontSize: 12, height: 1.4),
+              style: const TextStyle(
+                color: _C.muted,
+                fontSize: 12,
+                height: 1.4,
+              ),
             ),
           ),
 
@@ -3070,7 +3106,9 @@ class _DecorPainter extends CustomPainter {
       final x = _hash(i * 3 + 1) * w;
       final y = _hash(i * 3 + 2) * h * 0.92;
       final r = 0.7 + _hash(i * 3 + 3) * 1.2;
-      star.color = Colors.white.withAlpha((25 + 105 * _hash(i * 3 + 4)).round());
+      star.color = Colors.white.withAlpha(
+        (25 + 105 * _hash(i * 3 + 4)).round(),
+      );
       canvas.drawCircle(Offset(x, y), r, star);
     }
   }
@@ -3689,6 +3727,33 @@ class _VerifyEmailModalState extends State<_VerifyEmailModal> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The **Verified with Google** mark beside the Email label. Same icon, size,
+/// spacing, colour and weight as the Buyer and Driver registration forms.
+class _VerifiedBadge extends StatelessWidget {
+  const _VerifiedBadge({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.verified_rounded, color: _C.success, size: 17),
+        const SizedBox(width: 5),
+        Text(
+          text,
+          style: const TextStyle(
+            color: _C.success,
+            fontSize: 12.5,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 }

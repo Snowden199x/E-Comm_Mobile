@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vendo_buyer/core/api/api_models.dart';
 import 'package:vendo_buyer/core/api/buyer_api.dart';
-import 'package:vendo_buyer/features/cart/screens/cart_screen.dart';
 import 'package:vendo_buyer/features/seller_page/screens/api_seller_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -25,6 +24,9 @@ class _C {
   static const outline = Color(0xFFE5E7EB);
   static const green = Color(0xFF1A9B5A);
 }
+
+/// How many characters of the description are shown before "See more".
+const int _descriptionPreviewChars = 600;
 
 /// Product page backed by `GET /api/v1/buyer/products/{id}`.
 ///
@@ -157,22 +159,26 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
     }
   }
 
-  void _share() {
-    final name = _detail?.product.name ?? widget.title;
-    if (name == null || name.isEmpty) return;
-    Clipboard.setData(ClipboardData(text: name));
-    _toast('Product name copied.');
+  /// "2024-03-05 14:20:00" -> "Mar 2024". Falls back to the raw text if it
+  /// is not a parseable date (e.g. the API already sends "March 2024").
+  String _monthYear(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return 'Unknown';
+    final parsed = DateTime.tryParse(raw.trim());
+    if (parsed == null) return raw;
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final d = parsed.toLocal();
+    return '${months[d.month - 1]} ${d.year}';
   }
 
-  void _openShop(ApiProduct product) {
-    if (product.shopId == 0) return;
+  void _openShop(int sellerId, String name) {
+    if (sellerId == 0) return;
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ApiSellerScreen(
-          sellerId: product.shopId,
-          name: product.shop,
-        ),
+        builder: (_) => ApiSellerScreen(sellerId: sellerId, name: name),
       ),
     );
   }
@@ -184,53 +190,63 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
   // ── Build ─────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _C.bg,
-      appBar: AppBar(
-        backgroundColor: _C.white,
-        foregroundColor: _C.ink,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        systemOverlayStyle: SystemUiOverlayStyle.dark,
-        title: Text(
-          widget.title ?? _detail?.product.name ?? 'Product',
-          style: const TextStyle(
-            fontSize: 14.5,
-            fontWeight: FontWeight.w600,
-            color: _C.ink,
-          ),
-          overflow: TextOverflow.ellipsis,
-        ),
-        actions: [
-          IconButton(
-            onPressed: _share,
-            tooltip: 'Share',
-            icon: const Icon(Icons.share_outlined, size: 22),
-          ),
-          IconButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const CartScreen()),
-            ),
-            tooltip: 'Cart',
-            icon: const Icon(Icons.shopping_cart_outlined, size: 22),
-          ),
-          const SizedBox(width: 4),
-        ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(height: 1, color: _C.line),
-        ),
+    final topInset = MediaQuery.of(context).padding.top;
+
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      // White status bar with dark time / battery / signal icons.
+      value: SystemUiOverlayStyle.dark.copyWith(
+        statusBarColor: _C.white,
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator(color: _C.rich))
-          : _error != null
-              ? _errorState()
-              : _content(),
-      bottomNavigationBar: _detail == null || _loading || _error != null
-          ? null
-          : _bottomBar(),
+      child: Scaffold(
+        backgroundColor: _C.bg,
+        body: Column(
+          children: [
+            // Clear white space for the phone's time, battery and signal.
+            Container(height: topInset, color: _C.white),
+            Expanded(
+              child: Stack(
+                children: [
+                  _loading
+                      ? const Center(
+                          child: CircularProgressIndicator(color: _C.rich),
+                        )
+                      : _error != null
+                          ? _errorState()
+                          : _content(),
+                  // Back button floating on top of the product photo.
+                  Positioned(
+                    left: 10,
+                    top: 10,
+                    child: IconButton(
+                      onPressed: () => Navigator.maybePop(context),
+                      tooltip: 'Back',
+                      icon: const Icon(
+                        Icons.arrow_back_rounded,
+                        size: 22,
+                        weight: 700,
+                        shadows: [
+                          Shadow(color: Color(0x33FFFFFF), blurRadius: 2),
+                        ],
+                      ),
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.white.withValues(alpha: 0.5),
+                        foregroundColor: Colors.black,
+                        fixedSize: const Size(36, 36),
+                        padding: EdgeInsets.zero,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: _detail == null || _loading || _error != null
+            ? null
+            : _bottomBar(),
+      ),
     );
   }
 
@@ -268,6 +284,7 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
         detail.description != null && detail.description!.trim().isNotEmpty;
 
     return ListView(
+      padding: EdgeInsets.zero,
       children: [
         // ── Hero gallery ────────────────────────────────────────────
         SizedBox(
@@ -310,7 +327,7 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
                       '${_imageIndex + 1}/${images.length}',
                       style: const TextStyle(
                         color: _C.ink,
-                        fontSize: 11,
+                        fontSize: 11.5,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -330,34 +347,41 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Flexible(
-                    child: Text(
-                      _price,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w900,
-                        color: _C.rich,
-                      ),
+                  // Left side: price (+ old price)
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            _price,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w700,
+                              color: _C.rich,
+                            ),
+                          ),
+                        ),
+                        if (product.compareAtPrice != null) ...[
+                          const SizedBox(width: 8),
+                          Text(
+                            product.compareAtPrice!,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: _C.hint,
+                              decoration: TextDecoration.lineThrough,
+                              decorationColor: _C.hint,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
-                  if (product.compareAtPrice != null) ...[
-                    const SizedBox(width: 8),
-                    Text(
-                      product.compareAtPrice!,
-                      style: const TextStyle(
-                        fontSize: 12.5,
-                        color: _C.hint,
-                        decoration: TextDecoration.lineThrough,
-                        decorationColor: _C.hint,
-                      ),
-                    ),
-                  ],
-                  const Spacer(),
+                  // Far right: sold count + heart
                   Text(
                     '${product.sold} sold',
-                    style: const TextStyle(fontSize: 12, color: _C.muted),
+                    style: const TextStyle(fontSize: 12.5, color: _C.muted),
                   ),
                   const SizedBox(width: 12),
                   GestureDetector(
@@ -393,7 +417,7 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
                           '${product.stock} in stock',
                           style: const TextStyle(
                             color: _C.vivid,
-                            fontSize: 11,
+                            fontSize: 11.5,
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -412,8 +436,8 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
                             '${product.rating}',
                             style: const TextStyle(
                               color: _C.ink,
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w700,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ],
@@ -425,8 +449,8 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
               Text(
                 product.name,
                 style: const TextStyle(
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
                   color: _C.ink,
                   height: 1.4,
                 ),
@@ -434,6 +458,66 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
             ],
           ),
         ),
+
+        // ── Delivery + payment (same facts as the web product page) ─
+        if (detail.delivery != null)
+          _card(
+            margin: const EdgeInsets.only(top: 1),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _labelRow(
+                  'Delivery',
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (detail.delivery!.shipsFrom.trim().isNotEmpty)
+                        Text(
+                          'Ships from ${detail.delivery!.shipsFrom}',
+                          style: _factValueStyle,
+                        ),
+                      const SizedBox(height: 3),
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            const TextSpan(
+                              text: 'Shipping fee ',
+                              style: TextStyle(fontSize: 13, color: _C.muted),
+                            ),
+                            TextSpan(
+                              text: detail.delivery!.shippingFee,
+                              style: const TextStyle(
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w600,
+                                color: _C.rich,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (detail.delivery!.shippingNote.trim().isNotEmpty)
+                        ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            detail.delivery!.shippingNote,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: _C.muted,
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _labelRow(
+                  'Payment',
+                  Text(detail.delivery!.paymentMethod, style: _factValueStyle),
+                ),
+              ],
+            ),
+          ),
 
         // ── Variants (selectable) ───────────────────────────────────
         if (detail.variants.isNotEmpty)
@@ -449,13 +533,13 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
                       if (_variant != null)
                         TextSpan(
                           text: ': ${_variant!.label}',
-                          style: const TextStyle(fontWeight: FontWeight.w800),
+                          style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                     ],
                   ),
                   style: const TextStyle(
                     color: _C.ink,
-                    fontSize: 12.5,
+                    fontSize: 13.5,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -486,9 +570,9 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
                         child: Text(
                           '${variant.label} · ${variant.price}',
                           style: TextStyle(
-                            fontSize: 12.5,
+                            fontSize: 13,
                             fontWeight:
-                                selected ? FontWeight.w700 : FontWeight.w500,
+                                selected ? FontWeight.w600 : FontWeight.w400,
                             color: out
                                 ? _C.hint
                                 : selected
@@ -517,7 +601,7 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
                     'Color',
                     style: TextStyle(
                       color: _C.ink,
-                      fontSize: 12.5,
+                      fontSize: 13.5,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -535,7 +619,7 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
                     'Size',
                     style: TextStyle(
                       color: _C.ink,
-                      fontSize: 12.5,
+                      fontSize: 13.5,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -550,163 +634,56 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
             ),
           ),
 
-        // ── Share strip ─────────────────────────────────────────────
-        Container(
-          color: const Color(0xFF1F2937),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'Do you want to share this product?',
-                  style: TextStyle(color: Color(0xFFE5E7EB), fontSize: 12),
-                ),
-              ),
-              OutlinedButton(
-                onPressed: _share,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  side: const BorderSide(color: Color(0x99FFFFFF)),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 4,
-                  ),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                child: const Text(
-                  'Share',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        // ── Description + specifications (expandable) ───────────────
+        // ── Product specifications ─────────────────────────────────
         Container(
           color: _C.white,
+          margin: const EdgeInsets.only(top: 8),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _AccordionRow(
-                title: 'Description',
-                initiallyOpen: true,
-                child: Text(
-                  hasDescription
-                      ? detail.description!
-                      : 'No description was provided for this product.',
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    height: 1.55,
-                    color: _C.muted,
+              const _SectionBar('Product specifications'),
+              if (detail.specifications.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(14, 12, 14, 14),
+                  child: Text(
+                    'The seller has not listed details for this product.',
+                    style: TextStyle(fontSize: 13, color: _C.muted),
                   ),
-                ),
-              ),
-              if (detail.specifications.isNotEmpty) ...[
-                const Divider(height: 1, color: _C.line),
-                _AccordionRow(
-                  title: 'Specifications',
+                )
+              else
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
                   child: Column(
                     children: detail.specifications
-                        .map(
-                          (spec) => Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                SizedBox(
-                                  width: 120,
-                                  child: Text(
-                                    spec.name,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: _C.hint,
-                                    ),
-                                  ),
-                                ),
-                                Expanded(
-                                  child: Text(
-                                    spec.value,
-                                    style: const TextStyle(
-                                      fontSize: 12.5,
-                                      color: _C.ink,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        )
+                        .map(_specRow)
                         .toList(),
                   ),
                 ),
-              ],
             ],
           ),
         ),
 
-        // ── Shop card ───────────────────────────────────────────────
-        _card(
+        // ── Description (expandable) ────────────────────────────────
+        Container(
+          color: _C.white,
           margin: const EdgeInsets.only(top: 8),
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: _C.soft,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: _C.border),
-                ),
-                child: const Icon(
-                  Icons.storefront_rounded,
-                  color: _C.rich,
-                  size: 22,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  product.shop,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _C.ink,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              if (product.shopId != 0)
-                OutlinedButton(
-                  onPressed: () => _openShop(product),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: _C.rich),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 18,
-                      vertical: 6,
-                    ),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  ),
-                  child: const Text(
-                    'Visit',
-                    style: TextStyle(
-                      color: _C.rich,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-            ],
+          child: _AccordionRow(
+            title: 'Description',
+            initiallyOpen: true,
+            child: _ExpandableText(
+              text: hasDescription
+                  ? detail.description!
+                  : 'No description was provided for this product.',
+              previewChars: _descriptionPreviewChars,
+            ),
           ),
         ),
+
+        // ── Product ratings ─────────────────────────────────────────
+        _ratingsSection(detail),
+
+        // ── Shop card (same facts as the web shop card) ────────────
+        _shopCard(detail),
 
         // ── You may also like ───────────────────────────────────────
         if (detail.recommended.isNotEmpty) ...[
@@ -722,8 +699,8 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
                     style: TextStyle(
                       color: _C.ink,
                       fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.6,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.8,
                     ),
                   ),
                 ),
@@ -768,6 +745,467 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
     );
   }
 
+  static const _factLabelStyle = TextStyle(
+    fontSize: 13,
+    color: _C.muted,
+    height: 1.5,
+  );
+  static const _factValueStyle = TextStyle(
+    fontSize: 13.5,
+    color: _C.ink,
+    height: 1.5,
+  );
+
+  /// A fixed-width label column next to a value, like the web page's Delivery/Payment rows.
+  Widget _labelRow(String label, Widget child) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(width: 88, child: Text(label, style: _factLabelStyle)),
+        Expanded(child: child),
+      ],
+    );
+  }
+
+  Widget _specRow(ApiSpec spec) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(width: 124, child: Text(spec.name, style: _factLabelStyle)),
+          Expanded(child: Text(spec.value, style: _factValueStyle)),
+        ],
+      ),
+    );
+  }
+
+  // ── Seller card ───────────────────────────────────────────────────────────
+  Widget _shopCard(ApiProductDetail detail) {
+    final seller = detail.seller;
+    final shopName = (seller?.name ?? detail.product.shop).trim();
+    final shopId = seller?.id ?? detail.product.shopId;
+    final location = seller?.location ?? '';
+    final initial = seller?.initial ?? '';
+
+    return _card(
+      margin: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                  color: Color(0xFF805487),
+                  shape: BoxShape.circle,
+                ),
+                child: initial.isNotEmpty
+                    ? Text(
+                        initial,
+                        style: const TextStyle(
+                          color: _C.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      )
+                    : const Icon(
+                        Icons.storefront_rounded,
+                        color: _C.white,
+                        size: 24,
+                      ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Shop name + View shop on the same line
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            shopName,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: _C.deep,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        if (shopId != 0) ...[
+                          const SizedBox(width: 8),
+                          _shopButton(
+                            icon: Icons.storefront_outlined,
+                            label: 'View shop',
+                            onTap: () => _openShop(shopId, shopName),
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (location.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Text(
+                          location,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            color: _C.muted,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (seller != null) ...[
+            const SizedBox(height: 16),
+            Container(height: 1, color: _C.line),
+            const SizedBox(height: 14),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _shopStat('Ratings', '${seller.ratingsCount ?? 0}'),
+                _shopStat(
+                  'Average rating',
+                  (seller.ratingsCount ?? 0) > 0 && seller.averageRating != null
+                      ? '${seller.averageRating!.toStringAsFixed(1)} / 5'
+                      : 'None yet',
+                ),
+                _shopStat('Products', '${seller.productsCount}'),
+                _shopStat('Joined', _monthYear(seller.joined)),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _shopButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 16, color: _C.rich),
+      label: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 12.5,
+          fontWeight: FontWeight.w500,
+          color: _C.deep,
+        ),
+      ),
+      style: OutlinedButton.styleFrom(
+        side: const BorderSide(color: _C.outline),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        minimumSize: const Size(0, 34),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+      ),
+    );
+  }
+
+  /// One stat column — label on top, value below, both centered.
+  Widget _shopStat(String label, String value) {
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 11.5, color: _C.muted),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              value,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: _C.ink,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Ratings ───────────────────────────────────────────────────────────────
+  Widget _ratingsSection(ApiProductDetail detail) {
+    final ratings = detail.ratings;
+    return Container(
+      color: _C.white,
+      margin: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _SectionBar('Product ratings'),
+          if (ratings.total > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 116,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 14,
+                      horizontal: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _C.light,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Column(
+                      children: [
+                        Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: ratings.average.toStringAsFixed(1),
+                                style: const TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.w600,
+                                  color: _C.rich,
+                                  height: 1.1,
+                                ),
+                              ),
+                              const TextSpan(
+                                text: ' out of 5',
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w400,
+                                  color: _C.muted,
+                                ),
+                              ),
+                            ],
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 6),
+                        _Stars(rating: ratings.average, size: 17),
+                        const SizedBox(height: 5),
+                        Text(
+                          '${ratings.total} ${ratings.total == 1 ? 'rating' : 'ratings'}',
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            color: _C.muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      children: ApiRatingSummary.stars
+                          .map((star) => _ratingBar(ratings, star))
+                          .toList(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (ratings.total > 0) const Divider(height: 1, color: _C.line),
+          if (detail.reviews.isNotEmpty)
+            ...detail.reviews.map(_reviewTile)
+          else if (ratings.total == 0)
+            const _NoRatingsState(),
+        ],
+      ),
+    );
+  }
+
+  Widget _ratingBar(ApiRatingSummary ratings, int star) {
+    final count = ratings.countFor(star);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.5),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 50,
+            child: Text(
+              '$star ${star == 1 ? 'star' : 'stars'}',
+              style: const TextStyle(fontSize: 11.5, color: _C.muted),
+            ),
+          ),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                value: ratings.total == 0 ? 0.0 : count / ratings.total,
+                minHeight: 7,
+                backgroundColor: const Color(0xFFF0E9F2),
+                valueColor: const AlwaysStoppedAnimation<Color>(
+                  Color(0xFFE0B84A),
+                ),
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 26,
+            child: Text(
+              '$count',
+              textAlign: TextAlign.right,
+              style: const TextStyle(fontSize: 11.5, color: _C.ink),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _reviewTile(ApiProductReview review) {
+    final hasComment =
+        review.comment != null && review.comment!.trim().isNotEmpty;
+    final hasReply =
+        review.replyBody != null && review.replyBody!.trim().isNotEmpty;
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: _C.line)),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              color: _C.rich,
+              shape: BoxShape.circle,
+            ),
+            child: Text(
+              review.initial.trim().isEmpty ? 'B' : review.initial,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  review.buyer,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                    color: _C.ink,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    _Stars(rating: review.rating.toDouble(), size: 13),
+                    if (review.date != null && review.date!.isNotEmpty)
+                      Text(
+                        review.date!,
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          color: _C.hint,
+                        ),
+                      ),
+                    if (review.verified)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEAF5EE),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Text(
+                          'Verified purchase',
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            color: Color(0xFF2E6B46),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                if (hasComment) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    review.comment!,
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      color: _C.ink,
+                      height: 1.55,
+                    ),
+                  ),
+                ],
+                if (hasReply) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                    decoration: const BoxDecoration(
+                      color: _C.light,
+                      border: Border(
+                        left: BorderSide(color: _C.rich, width: 2),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Seller response',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: _C.deep,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          review.replyBody!,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            color: _C.muted,
+                            height: 1.45,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _card({required Widget child, EdgeInsetsGeometry? margin}) {
     return Container(
       width: double.infinity,
@@ -790,8 +1228,8 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
         label,
         style: const TextStyle(
           color: _C.ink,
-          fontSize: 12.5,
-          fontWeight: FontWeight.w500,
+          fontSize: 13,
+          fontWeight: FontWeight.w400,
         ),
       ),
     );
@@ -844,7 +1282,10 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
                         : _adding
                             ? 'Adding…'
                             : 'Add to Cart',
-                    style: const TextStyle(fontWeight: FontWeight.w800),
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),
@@ -852,6 +1293,205 @@ class _ApiProductScreenState extends State<ApiProductScreen> {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Empty state for "No ratings yet"
+// ─────────────────────────────────────────────────────────────────────────────
+class _NoRatingsState extends StatelessWidget {
+  const _NoRatingsState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Star circle with little decorative dots
+            SizedBox(
+              width: 96,
+              height: 80,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFF1E4F9),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.star_outline_rounded,
+                      size: 32,
+                      color: _C.deep,
+                    ),
+                  ),
+                  // small purple dot, top-left
+                  const Positioned(
+                    left: 8,
+                    top: 8,
+                    child: _Dot(size: 6, color: Color(0xFFD3B8DE)),
+                  ),
+                  // gold dot, top-right
+                  const Positioned(
+                    right: 10,
+                    top: 4,
+                    child: _Dot(size: 9, color: Color(0xFFE9C46A)),
+                  ),
+                  // small purple dot, bottom-left
+                  const Positioned(
+                    left: 10,
+                    bottom: 8,
+                    child: _Dot(size: 5, color: Color(0xFFD3B8DE)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'No ratings yet',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: _C.deep,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Ratings appear here after buyers confirm\nthey received this product.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: _C.muted,
+                height: 1.45,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Dot extends StatelessWidget {
+  final double size;
+  final Color color;
+
+  const _Dot({required this.size, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Text that shows only the first N characters with a white fade and
+// a "See more" / "See less" button
+// ─────────────────────────────────────────────────────────────────────────────
+class _ExpandableText extends StatefulWidget {
+  final String text;
+  final int previewChars;
+
+  const _ExpandableText({required this.text, required this.previewChars});
+
+  @override
+  State<_ExpandableText> createState() => _ExpandableTextState();
+}
+
+class _ExpandableTextState extends State<_ExpandableText> {
+  bool _expanded = false;
+
+  static const _style = TextStyle(
+    fontSize: 13.5,
+    height: 1.6,
+    color: _C.muted,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final text = widget.text;
+    final isLong = text.length > widget.previewChars;
+
+    // Short text: show everything, no fade, no button.
+    if (!isLong) {
+      return Text(text, style: _style);
+    }
+
+    final preview = '${text.substring(0, widget.previewChars).trimRight()}…';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Stack(
+          children: [
+            Text(_expanded ? text : preview, style: _style),
+            // White fade at the bottom while collapsed
+            if (!_expanded)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: 64,
+                child: IgnorePointer(
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Color(0x00FFFFFF),
+                          Color(0xCCFFFFFF),
+                          Color(0xFFFFFFFF),
+                        ],
+                        stops: [0.0, 0.6, 1.0],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        GestureDetector(
+          onTap: () => setState(() => _expanded = !_expanded),
+          behavior: HitTestBehavior.opaque,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _expanded ? 'See less' : 'See more',
+                  style: const TextStyle(
+                    color: _C.rich,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 2),
+                Icon(
+                  _expanded
+                      ? Icons.keyboard_arrow_up_rounded
+                      : Icons.keyboard_arrow_down_rounded,
+                  color: _C.rich,
+                  size: 18,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -893,7 +1533,7 @@ class _AccordionRowState extends State<_AccordionRow> {
                     widget.title,
                     style: const TextStyle(
                       color: _C.ink,
-                      fontSize: 12.5,
+                      fontSize: 14,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -984,9 +1624,9 @@ class _RecommendedCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: _C.ink,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      height: 1.3,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w400,
+                      height: 1.35,
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -996,8 +1636,8 @@ class _RecommendedCard extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: _C.rich,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 14.5,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ],
@@ -1044,7 +1684,8 @@ class _QtyStepper extends StatelessWidget {
           Text(
             '$value',
             style: const TextStyle(
-              fontWeight: FontWeight.w700,
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
               color: _C.ink,
             ),
           ),
@@ -1056,6 +1697,59 @@ class _QtyStepper extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section bar + stars used by the specifications and ratings sections
+// ─────────────────────────────────────────────────────────────────────────────
+class _SectionBar extends StatelessWidget {
+  final String title;
+
+  const _SectionBar(this.title);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: _C.light,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      child: Text(
+        title,
+        style: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          color: _C.deep,
+        ),
+      ),
+    );
+  }
+}
+
+class _Stars extends StatelessWidget {
+  final double rating;
+  final double size;
+
+  const _Stars({required this.rating, this.size = 14});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(5, (index) {
+        final filled = rating >= index + 1;
+        final half = !filled && rating > index + 0.25;
+        return Icon(
+          filled
+              ? Icons.star_rounded
+              : half
+                  ? Icons.star_half_rounded
+                  : Icons.star_outline_rounded,
+          size: size,
+          color: const Color(0xFFE0B84A),
+        );
+      }),
     );
   }
 }

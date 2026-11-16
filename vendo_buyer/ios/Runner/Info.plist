@@ -45,5 +45,7 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Vendo uses your location to drop the delivery pin on the address when you place an order.</string>
 </dict>
 </plist>

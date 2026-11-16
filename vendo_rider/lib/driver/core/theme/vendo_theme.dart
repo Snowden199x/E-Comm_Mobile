@@ -25,6 +25,10 @@ class VColors {
 
   static const green = Color(0xFF2E7D32);
   static const greenSoft = Color(0xFFE7F3E8);
+
+  /// Same green the Buyer and Rider forms use for the **Verified with Google**
+  /// mark, so the badge reads the same in all three registration forms.
+  static const verified = Color(0xFF248A5A);
   static const red = Color(0xFFB3261E);
   static const redSoft = Color(0xFFFBE9E7);
 

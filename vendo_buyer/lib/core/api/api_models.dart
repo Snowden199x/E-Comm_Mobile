@@ -82,6 +82,27 @@ class ApiProduct {
   );
 }
 
+/// One top-level category and its subcategories, from `GET /categories`.
+class ApiCategory {
+  final int id;
+  final String name;
+  final List<ApiCategory> children;
+
+  const ApiCategory({
+    required this.id,
+    required this.name,
+    this.children = const [],
+  });
+
+  factory ApiCategory.fromJson(Map<String, dynamic> json) => ApiCategory(
+    id: _int(json['id']),
+    name: json['name']?.toString() ?? '',
+    children: (json['children'] as List? ?? [])
+        .map((e) => ApiCategory.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList(),
+  );
+}
+
 class ApiVariant {
   final int id;
   final String label;
@@ -110,6 +131,104 @@ class ApiSpec {
   final String name;
   final String value;
   const ApiSpec(this.name, this.value);
+
+  factory ApiSpec.fromJson(Map<String, dynamic> json) => ApiSpec(
+    (json['label'] ?? json['name'])?.toString() ?? '',
+    json['value']?.toString() ?? '',
+  );
+}
+
+/// Delivery + payment facts the web product page shows, sent as `product.delivery`.
+class ApiDelivery {
+  final String shipsFrom;
+  final String shippingFee;
+  final double shippingFeeValue;
+  final String shippingNote;
+  final String paymentMethod;
+
+  const ApiDelivery({
+    required this.shipsFrom,
+    required this.shippingFee,
+    required this.shippingFeeValue,
+    required this.shippingNote,
+    required this.paymentMethod,
+  });
+
+  factory ApiDelivery.fromJson(Map<String, dynamic> json) => ApiDelivery(
+    shipsFrom: json['ships_from']?.toString() ?? '',
+    shippingFee: json['shipping_fee']?.toString() ?? '',
+    shippingFeeValue: _num(json['shipping_fee_value']),
+    shippingNote: json['shipping_note']?.toString() ?? '',
+    paymentMethod: json['payment_method']?.toString() ?? '',
+  );
+}
+
+/// Published-review average plus the per-star counts drawn as bars.
+class ApiRatingSummary {
+  static const stars = [5, 4, 3, 2, 1];
+
+  final double average;
+  final int total;
+  final Map<int, int> counts;
+
+  const ApiRatingSummary({
+    this.average = 0,
+    this.total = 0,
+    this.counts = const {},
+  });
+
+  factory ApiRatingSummary.fromJson(Map<String, dynamic> json) {
+    final raw = json['counts'];
+    return ApiRatingSummary(
+      average: _num(json['average']),
+      total: _int(json['total']),
+      counts: {
+        for (final star in stars) star: _int(raw is Map ? raw['$star'] : null),
+      },
+    );
+  }
+
+  int countFor(int star) => counts[star] ?? 0;
+}
+
+/// One published rating, with the seller's reply when there is one.
+class ApiProductReview {
+  final int id;
+  final String buyer;
+  final String initial;
+  final int rating;
+  final String? date;
+  final bool verified;
+  final String? comment;
+  final String? replyBody;
+  final String? replySeller;
+
+  const ApiProductReview({
+    required this.id,
+    required this.buyer,
+    required this.initial,
+    required this.rating,
+    this.date,
+    this.verified = false,
+    this.comment,
+    this.replyBody,
+    this.replySeller,
+  });
+
+  factory ApiProductReview.fromJson(Map<String, dynamic> json) {
+    final reply = json['reply'];
+    return ApiProductReview(
+      id: _int(json['id']),
+      buyer: json['buyer']?.toString() ?? 'Buyer',
+      initial: json['initial']?.toString() ?? '',
+      rating: _int(json['rating']),
+      date: json['date']?.toString(),
+      verified: _bool(json['verified']),
+      comment: json['comment']?.toString(),
+      replyBody: _child(reply, 'body'),
+      replySeller: _child(reply, 'seller'),
+    );
+  }
 }
 
 class ApiSeller {
@@ -121,6 +240,12 @@ class ApiSeller {
   final String? municipality;
   final double? rating;
   final int productsCount;
+  final int? ratingsCount;
+  final double? averageRating;
+  final String? joined;
+  final String? banner;
+  final String? avatar;
+  final String? url;
 
   const ApiSeller({
     required this.id,
@@ -131,6 +256,12 @@ class ApiSeller {
     this.municipality,
     this.rating,
     this.productsCount = 0,
+    this.ratingsCount,
+    this.averageRating,
+    this.joined,
+    this.banner,
+    this.avatar,
+    this.url,
   });
 
   factory ApiSeller.fromJson(Map<String, dynamic> json) => ApiSeller(
@@ -142,7 +273,27 @@ class ApiSeller {
     municipality: json['municipality']?.toString(),
     rating: json['rating'] == null ? null : _num(json['rating']),
     productsCount: _int(json['products_count']),
+    ratingsCount: json['ratings_count'] == null
+        ? null
+        : _int(json['ratings_count']),
+    averageRating: json['average_rating'] == null
+        ? null
+        : _num(json['average_rating']),
+    joined: json['joined']?.toString(),
+    banner: json['banner']?.toString(),
+    avatar: json['avatar']?.toString(),
+    url: json['url']?.toString(),
   );
+
+  /// "Santa Cruz, Laguna" — where the shop ships from, as the web shop card shows it.
+  String get location => [
+    municipality,
+    province,
+  ].where((part) => part != null && part.trim().isNotEmpty).join(', ');
+
+  /// First letter of the shop name, shown in the round avatar when there is no photo.
+  String get initial =>
+      name.trim().isEmpty ? '' : name.trim().substring(0, 1).toUpperCase();
 }
 
 class ApiProductDetail {
@@ -152,6 +303,9 @@ class ApiProductDetail {
   final List<String> images;
   final List<ApiVariant> variants;
   final List<ApiSpec> specifications;
+  final ApiDelivery? delivery;
+  final ApiRatingSummary ratings;
+  final List<ApiProductReview> reviews;
   final ApiSeller? seller;
   final List<ApiProduct> recommended;
 
@@ -162,6 +316,9 @@ class ApiProductDetail {
     required this.specifications,
     this.description,
     this.category,
+    this.delivery,
+    this.ratings = const ApiRatingSummary(),
+    this.reviews = const [],
     this.seller,
     this.recommended = const [],
   });
@@ -178,7 +335,22 @@ class ApiProductDetail {
           .map((e) => ApiVariant.fromJson(Map<String, dynamic>.from(e as Map)))
           .toList(),
       specifications: (product['specifications'] as List? ?? [])
-          .map((e) => ApiSpec('${e['name']}', '${e['value']}'))
+          .whereType<Map>()
+          .map((e) => ApiSpec.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+      delivery: product['delivery'] is Map
+          ? ApiDelivery.fromJson(
+              Map<String, dynamic>.from(product['delivery'] as Map),
+            )
+          : null,
+      ratings: product['ratings'] is Map
+          ? ApiRatingSummary.fromJson(
+              Map<String, dynamic>.from(product['ratings'] as Map),
+            )
+          : const ApiRatingSummary(),
+      reviews: (product['reviews'] as List? ?? [])
+          .whereType<Map>()
+          .map((e) => ApiProductReview.fromJson(Map<String, dynamic>.from(e)))
           .toList(),
       seller: product['seller'] is Map
           ? ApiSeller.fromJson(
@@ -318,6 +490,60 @@ class ApiCart {
   }
 }
 
+/// One tab on My orders. The web's seven tabs come from the API, so both sides
+/// filter and count the same orders.
+class ApiOrderTab {
+  final String key;
+  final String label;
+  final int count;
+
+  const ApiOrderTab({required this.key, required this.label, this.count = 0});
+
+  factory ApiOrderTab.fromJson(Map<String, dynamic> json) => ApiOrderTab(
+    key: json['key']?.toString() ?? '',
+    label: json['label']?.toString() ?? '',
+    count: _int(json['count']),
+  );
+
+  static List<ApiOrderTab> list(Object? raw) => (raw as List? ?? [])
+      .whereType<Map>()
+      .map((e) => ApiOrderTab.fromJson(Map<String, dynamic>.from(e)))
+      .toList();
+}
+
+/// The return pill on an order card: pending, approved, rejected or done.
+class ApiOrderPill {
+  final String label;
+  final String tone;
+
+  const ApiOrderPill({required this.label, required this.tone});
+
+  factory ApiOrderPill.fromJson(Map<String, dynamic> json) => ApiOrderPill(
+    label: json['label']?.toString() ?? '',
+    tone: json['tone']?.toString() ?? '',
+  );
+}
+
+/// One page of My orders together with the tab counts above it.
+class ApiOrdersPage {
+  final List<ApiOrder> orders;
+  final List<ApiOrderTab> tabs;
+  final int page;
+  final int lastPage;
+  final int total;
+
+  const ApiOrdersPage({
+    required this.orders,
+    this.tabs = const [],
+    this.page = 1,
+    this.lastPage = 1,
+    this.total = 0,
+  });
+
+  /// The tab holds more orders than this page did.
+  bool get hasMore => page < lastPage;
+}
+
 class ApiOrder {
   final int id;
   final String number;
@@ -339,6 +565,16 @@ class ApiOrder {
   /// Completed order items that still need a review.
   final int reviewPending;
 
+  /// "you" or "the seller" when the order was cancelled, like the web header.
+  final String? cancelledBy;
+  final String? cancelReason;
+
+  /// Set when the order sits on the Returns tab for a reason other than its status.
+  final ApiOrderPill? returnPill;
+
+  /// The web's footer label: View details, Confirm receipt or View and rate.
+  final String actionLabel;
+
   const ApiOrder({
     required this.id,
     required this.number,
@@ -354,6 +590,10 @@ class ApiOrder {
     this.canCancel = false,
     this.shipmentGroup = '',
     this.reviewPending = 0,
+    this.cancelledBy,
+    this.cancelReason,
+    this.returnPill,
+    this.actionLabel = 'View details',
   });
 
   factory ApiOrder.fromJson(Map<String, dynamic> json) => ApiOrder(
@@ -371,59 +611,317 @@ class ApiOrder {
     canCancel: _bool(json['can_cancel']),
     shipmentGroup: json['shipment_group']?.toString() ?? '',
     reviewPending: _int(json['review_pending']),
+    cancelledBy: json['cancelled_by']?.toString(),
+    cancelReason: json['cancel_reason']?.toString(),
+    returnPill: json['return_pill'] is Map
+        ? ApiOrderPill.fromJson(
+            Map<String, dynamic>.from(json['return_pill'] as Map),
+          )
+        : null,
+    actionLabel: json['action_label']?.toString() ?? 'View details',
   );
+
+  /// What the status pill says: a cancelled order names who cancelled it, as on the web.
+  String get displayStatusLabel =>
+      cancelledBy == null ? statusLabel : 'Cancelled by $cancelledBy';
 }
 
 class ApiOrderItem {
   final int id;
+  final int productId;
   final String name;
   final String image;
   final int quantity;
   final String price;
+  final String lineTotal;
   final String? color;
   final String? size;
   final bool reviewed;
 
+  /// The review this Buyer already left on the item, with the seller's reply.
+  final ApiOrderReview? review;
+
   const ApiOrderItem({
     required this.id,
+    this.productId = 0,
     required this.name,
     required this.image,
     required this.quantity,
     required this.price,
+    this.lineTotal = '',
     this.color,
     this.size,
     this.reviewed = false,
+    this.review,
   });
 
   factory ApiOrderItem.fromJson(Map<String, dynamic> json) => ApiOrderItem(
     id: _int(json['id']),
+    productId: _int(json['product_id']),
     name: json['name']?.toString() ?? '',
     image: json['image']?.toString() ?? '',
     quantity: _int(json['quantity']),
     price: json['price']?.toString() ?? '',
+    lineTotal: json['line_total']?.toString() ?? '',
     color: json['color']?.toString(),
     size: json['size']?.toString(),
     reviewed: _bool(json['reviewed']),
+    review: json['review'] is Map
+        ? ApiOrderReview.fromJson(Map<String, dynamic>.from(json['review']))
+        : null,
   );
+}
+
+/// What the Buyer wrote about one item, and the seller's answer.
+class ApiOrderReview {
+  final int rating;
+  final String comment;
+  final bool hidden;
+  final String? reply;
+
+  const ApiOrderReview({
+    required this.rating,
+    required this.comment,
+    this.hidden = false,
+    this.reply,
+  });
+
+  factory ApiOrderReview.fromJson(Map<String, dynamic> json) => ApiOrderReview(
+    rating: _int(json['rating']),
+    comment: json['comment']?.toString() ?? '',
+    hidden: _bool(json['hidden']),
+    reply: json['reply']?.toString(),
+  );
+}
+
+/// One entry of the web page's "Order updates" card, newest first.
+class ApiOrderEvent {
+  final String status;
+  final String label;
+  final String? atLabel;
+  final String? note;
+
+  const ApiOrderEvent({
+    required this.status,
+    required this.label,
+    this.atLabel,
+    this.note,
+  });
+
+  factory ApiOrderEvent.fromJson(Map<String, dynamic> json) => ApiOrderEvent(
+    status: json['status']?.toString() ?? '',
+    label: json['label']?.toString() ?? '',
+    atLabel: json['at_label']?.toString(),
+    note: json['note']?.toString(),
+  );
+}
+
+/// One stop on the progress rail; the server decides which stops this parcel has.
+class ApiOrderStep {
+  final String status;
+  final String label;
+  final bool done;
+  final bool current;
+
+  const ApiOrderStep({
+    required this.status,
+    required this.label,
+    this.done = false,
+    this.current = false,
+  });
+
+  factory ApiOrderStep.fromJson(Map<String, dynamic> json) => ApiOrderStep(
+    status: json['status']?.toString() ?? '',
+    label: json['label']?.toString() ?? '',
+    done: _bool(json['done']),
+    current: _bool(json['current']),
+  );
+}
+
+class ApiOrderProgress {
+  final bool terminalIssue;
+  final String statusLabel;
+  final List<ApiOrderStep> steps;
+
+  const ApiOrderProgress({
+    this.terminalIssue = false,
+    this.statusLabel = '',
+    this.steps = const [],
+  });
+
+  factory ApiOrderProgress.fromJson(Map<String, dynamic> json) =>
+      ApiOrderProgress(
+        terminalIssue: _bool(json['terminal_issue']),
+        statusLabel: json['status_label']?.toString() ?? '',
+        steps: (json['steps'] as List? ?? [])
+            .map(
+              (e) => ApiOrderStep.fromJson(Map<String, dynamic>.from(e as Map)),
+            )
+            .toList(),
+      );
+}
+
+/// The shop behind the order, so the app can open its page and its chat.
+class ApiOrderSeller {
+  final int id;
+  final String name;
+
+  const ApiOrderSeller({required this.id, required this.name});
+
+  factory ApiOrderSeller.fromJson(Map<String, dynamic> json) => ApiOrderSeller(
+    id: _int(json['id']),
+    name: json['name']?.toString() ?? '',
+  );
+}
+
+class ApiOrderTracking {
+  final String number;
+  final String? carrier;
+  final String? carrierTracking;
+  final String? estimatedFromLabel;
+  final String? estimatedToLabel;
+  final int attempts;
+  final int maxAttempts;
+  final String? nextAttemptLabel;
+
+  /// The rider's delivery photo, fetched with the Buyer's token.
+  final bool hasDeliveryProof;
+
+  const ApiOrderTracking({
+    this.number = '',
+    this.carrier,
+    this.carrierTracking,
+    this.estimatedFromLabel,
+    this.estimatedToLabel,
+    this.attempts = 0,
+    this.maxAttempts = 0,
+    this.nextAttemptLabel,
+    this.hasDeliveryProof = false,
+  });
+
+  factory ApiOrderTracking.fromJson(Map<String, dynamic> json) =>
+      ApiOrderTracking(
+        number: json['number']?.toString() ?? '',
+        carrier: json['carrier']?.toString(),
+        carrierTracking: json['carrier_tracking']?.toString(),
+        estimatedFromLabel: json['estimated_from_label']?.toString(),
+        estimatedToLabel: json['estimated_to_label']?.toString(),
+        attempts: _int(json['attempts']),
+        maxAttempts: _int(json['max_attempts']),
+        nextAttemptLabel: json['next_attempt_label']?.toString(),
+        hasDeliveryProof: _bool(json['has_delivery_proof']),
+      );
+
+  /// "Nov 20, 2026 to Nov 22, 2026", or the one date the parcel has.
+  String? get estimatedLabel {
+    if (estimatedFromLabel != null && estimatedToLabel != null)
+      return '$estimatedFromLabel to $estimatedToLabel';
+    return estimatedFromLabel ?? estimatedToLabel;
+  }
+}
+
+/// The Seller's answer to a return request, as the web return card shows it.
+class ApiOrderReturn {
+  final String status;
+  final String statusLabel;
+  final String reasonLabel;
+  final String? decisionNote;
+  final String? refund;
+  final String? returnStatusLabel;
+  final String? pickedUpAtLabel;
+  final String? timeAgo;
+  final bool isPending;
+
+  const ApiOrderReturn({
+    required this.status,
+    required this.statusLabel,
+    required this.reasonLabel,
+    this.decisionNote,
+    this.refund,
+    this.returnStatusLabel,
+    this.pickedUpAtLabel,
+    this.timeAgo,
+    this.isPending = false,
+  });
+
+  factory ApiOrderReturn.fromJson(Map<String, dynamic> json) => ApiOrderReturn(
+    status: json['status']?.toString() ?? '',
+    statusLabel: json['status_label']?.toString() ?? '',
+    reasonLabel: json['reason_label']?.toString() ?? '',
+    decisionNote: json['decision_note']?.toString(),
+    refund: json['refund']?.toString(),
+    returnStatusLabel: json['return_status_label']?.toString(),
+    pickedUpAtLabel: json['picked_up_at_label']?.toString(),
+    timeAgo: json['time_ago']?.toString(),
+    isPending: _bool(json['is_pending']),
+  );
+
+  bool get approved => status == 'approved';
+  bool get rejected => status == 'rejected';
+}
+
+/// One choice of a server-supplied reason list (cancellation, return request).
+class ApiOrderReason {
+  final String key;
+  final String label;
+
+  const ApiOrderReason({required this.key, required this.label});
+
+  factory ApiOrderReason.fromJson(Map<String, dynamic> json) => ApiOrderReason(
+    key: json['key']?.toString() ?? '',
+    label: json['label']?.toString() ?? '',
+  );
+
+  static List<ApiOrderReason> list(dynamic raw) => (raw as List? ?? [])
+      .map((e) => ApiOrderReason.fromJson(Map<String, dynamic>.from(e as Map)))
+      .toList();
 }
 
 class ApiOrderDetail {
   final ApiOrder order;
   final List<ApiOrderItem> items;
+  final String itemsTotal;
   final String? shippingAddress;
   final String? moneyStatusLabel;
   final String? voucherCode;
   final String? voucherDiscount;
-  final List<String> timeline;
+  final List<ApiOrderEvent> timeline;
+  final ApiOrderProgress progress;
+  final ApiOrderSeller? seller;
+  final ApiOrderTracking? tracking;
+  final bool canComplete;
+  final bool cancelLocked;
+  final String? buyerNote;
+  final String paymentLabel;
+  final bool canRequestReturn;
+  final String? returnWindowClosesLabel;
+  final int? returnDaysLeft;
+  final List<ApiOrderReason> returnReasons;
+  final List<ApiOrderReason> cancelReasons;
+  final ApiOrderReturn? returnRequest;
 
   const ApiOrderDetail({
     required this.order,
     required this.items,
+    this.itemsTotal = '',
     this.shippingAddress,
     this.moneyStatusLabel,
     this.voucherCode,
     this.voucherDiscount,
     this.timeline = const [],
+    this.progress = const ApiOrderProgress(),
+    this.seller,
+    this.tracking,
+    this.canComplete = false,
+    this.cancelLocked = false,
+    this.buyerNote,
+    this.paymentLabel = '',
+    this.canRequestReturn = false,
+    this.returnWindowClosesLabel,
+    this.returnDaysLeft,
+    this.returnReasons = const [],
+    this.cancelReasons = const [],
+    this.returnRequest,
   });
 
   factory ApiOrderDetail.fromJson(Map<String, dynamic> json) => ApiOrderDetail(
@@ -431,13 +929,39 @@ class ApiOrderDetail {
     items: (json['items'] as List? ?? [])
         .map((e) => ApiOrderItem.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList(),
+    itemsTotal: json['items_total']?.toString() ?? '',
     shippingAddress: json['shipping_address']?.toString(),
     moneyStatusLabel: json['money_status_label']?.toString(),
     voucherCode: json['voucher_code']?.toString(),
     voucherDiscount: json['voucher_discount']?.toString(),
     timeline: (json['timeline'] as List? ?? [])
-        .map((e) => '${e['label']}')
+        .map((e) => ApiOrderEvent.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList(),
+    progress: json['progress'] is Map
+        ? ApiOrderProgress.fromJson(Map<String, dynamic>.from(json['progress']))
+        : const ApiOrderProgress(),
+    seller: json['seller'] is Map
+        ? ApiOrderSeller.fromJson(Map<String, dynamic>.from(json['seller']))
+        : null,
+    tracking: json['tracking'] is Map
+        ? ApiOrderTracking.fromJson(Map<String, dynamic>.from(json['tracking']))
+        : null,
+    canComplete: _bool(json['can_complete']),
+    cancelLocked: _bool(json['cancel_locked']),
+    buyerNote: json['buyer_note']?.toString(),
+    paymentLabel: json['payment_label']?.toString() ?? '',
+    canRequestReturn: _bool(json['can_request_return']),
+    returnWindowClosesLabel: json['return_window_closes_at_label']?.toString(),
+    returnDaysLeft: json['return_days_left'] == null
+        ? null
+        : _int(json['return_days_left']),
+    returnReasons: ApiOrderReason.list(json['return_reasons']),
+    cancelReasons: ApiOrderReason.list(json['cancel_reasons']),
+    returnRequest: json['return_request'] is Map
+        ? ApiOrderReturn.fromJson(
+            Map<String, dynamic>.from(json['return_request']),
+          )
+        : null,
   );
 }
 
@@ -460,6 +984,14 @@ class ApiNotification {
   final String? productName;
   final String? productImage;
 
+  /// The order behind an order/parcel notification, as the server reads it from
+  /// the notification's link: the record the card opens, and the real status the
+  /// card is labelled with. Null for announcements, messages and reviews.
+  final int? orderId;
+  final String? orderNumber;
+  final String? orderStatus;
+  final String? orderStatusLabel;
+
   const ApiNotification({
     required this.id,
     required this.title,
@@ -469,6 +1001,10 @@ class ApiNotification {
     this.type,
     this.productName,
     this.productImage,
+    this.orderId,
+    this.orderNumber,
+    this.orderStatus,
+    this.orderStatusLabel,
   });
 
   factory ApiNotification.fromJson(Map<String, dynamic> json) =>
@@ -481,6 +1017,10 @@ class ApiNotification {
         type: json['type']?.toString(),
         productName: _child(json['product'], 'name'),
         productImage: _child(json['product'], 'image'),
+        orderId: json['order'] is Map ? _int(json['order']['id']) : null,
+        orderNumber: _child(json['order'], 'number'),
+        orderStatus: _child(json['order'], 'status'),
+        orderStatusLabel: _child(json['order'], 'status_label'),
       );
 
   /// The same record after the server (or the screen) marked it read.
@@ -493,6 +1033,10 @@ class ApiNotification {
     type: type,
     productName: productName,
     productImage: productImage,
+    orderId: orderId,
+    orderNumber: orderNumber,
+    orderStatus: orderStatus,
+    orderStatusLabel: orderStatusLabel,
   );
 }
 
@@ -639,7 +1183,9 @@ class ApiReview {
     visibility: json['visibility']?.toString() ?? 'published',
     createdAtLabel: json['created_at_label']?.toString(),
     reply: json['reply'] is Map
-        ? ApiReviewReply.fromJson(Map<String, dynamic>.from(json['reply'] as Map))
+        ? ApiReviewReply.fromJson(
+            Map<String, dynamic>.from(json['reply'] as Map),
+          )
         : null,
   );
 }
@@ -679,7 +1225,9 @@ class ApiContentPage {
     title: json['title']?.toString() ?? '',
     updatedLabel: json['updated_label']?.toString(),
     blocks: (json['blocks'] as List? ?? [])
-        .map((e) => ApiContentBlock.fromJson(Map<String, dynamic>.from(e as Map)))
+        .map(
+          (e) => ApiContentBlock.fromJson(Map<String, dynamic>.from(e as Map)),
+        )
         .toList(),
   );
 }
@@ -765,6 +1313,77 @@ class ApiBarangay {
   );
 }
 
+/// Map tiles and defaults for the delivery-pin picker, served by the API so the
+/// Geoapify key stays on the server (the same tiles the web checkout draws).
+class ApiGeoMapConfig {
+  final String tileUrl;
+  final String attribution;
+  final double defaultLatitude;
+  final double defaultLongitude;
+
+  const ApiGeoMapConfig({
+    required this.tileUrl,
+    required this.attribution,
+    required this.defaultLatitude,
+    required this.defaultLongitude,
+  });
+
+  factory ApiGeoMapConfig.fromJson(Map<String, dynamic> json) =>
+      ApiGeoMapConfig(
+        tileUrl: json['tile_url']?.toString() ?? '',
+        attribution: json['attribution']?.toString() ?? '',
+        defaultLatitude:
+            double.tryParse('${json['default_latitude']}') ?? 12.8797,
+        defaultLongitude:
+            double.tryParse('${json['default_longitude']}') ?? 121.7740,
+      );
+}
+
+/// One Geoapify place: the pin coordinates, the written address and its parts
+/// with the PSGC codes the address form uses.
+class ApiGeoPlace {
+  final double latitude;
+  final double longitude;
+  final String formatted;
+  final String street;
+  final String barangay;
+  final String city;
+  final String? cityCode;
+  final String province;
+  final String? provinceCode;
+  final String postcode;
+
+  const ApiGeoPlace({
+    required this.latitude,
+    required this.longitude,
+    required this.formatted,
+    required this.street,
+    required this.barangay,
+    required this.city,
+    required this.province,
+    required this.postcode,
+    this.cityCode,
+    this.provinceCode,
+  });
+
+  /// "2nd Avenue, San Pablo Sur" — what the address line becomes.
+  String get line =>
+      [street, barangay].where((part) => part.isNotEmpty).join(', ');
+
+  factory ApiGeoPlace.fromJson(Map<String, dynamic> json) => ApiGeoPlace(
+    latitude: double.tryParse('${json['latitude']}') ?? 0,
+    longitude: double.tryParse('${json['longitude']}') ?? 0,
+    formatted: json['formatted']?.toString() ?? '',
+    street: json['street']?.toString() ?? '',
+    barangay: json['barangay']?.toString() ?? '',
+    city: json['city']?.toString() ?? '',
+    cityCode: json['city_code']?.toString(),
+    province: json['province']?.toString() ?? '',
+    provinceCode: json['province_code']?.toString(),
+    postcode: json['postcode']?.toString() ?? '',
+  );
+}
+
 class ApiVoucher {
   final String name;
   final String code;
@@ -772,6 +1391,13 @@ class ApiVoucher {
   final String? reason;
   final String discount;
   final String discountLabel;
+  final String scopeLabel;
+  final double minSpend;
+  final int? remainingUses;
+  final int perBuyerLimit;
+  final String? startsAt;
+  final String? endsAt;
+
   const ApiVoucher({
     required this.name,
     required this.code,
@@ -779,6 +1405,12 @@ class ApiVoucher {
     required this.discount,
     required this.discountLabel,
     this.reason,
+    this.scopeLabel = '',
+    this.minSpend = 0,
+    this.remainingUses,
+    this.perBuyerLimit = 1,
+    this.startsAt,
+    this.endsAt,
   });
 
   factory ApiVoucher.fromJson(Map<String, dynamic> json) => ApiVoucher(
@@ -788,7 +1420,71 @@ class ApiVoucher {
     reason: json['reason']?.toString(),
     discount: json['discount']?.toString() ?? '',
     discountLabel: json['discount_label']?.toString() ?? '',
+    scopeLabel: json['scope_label']?.toString() ?? '',
+    minSpend: _num(json['min_spend']),
+    remainingUses: json['remaining_uses'] == null
+        ? null
+        : _int(json['remaining_uses']),
+    perBuyerLimit: _int(json['per_buyer_limit']),
+    startsAt: json['starts_at']?.toString(),
+    endsAt: json['ends_at']?.toString(),
   );
+
+  /// Short line the checkout voucher list shows under the code.
+  String get details {
+    final parts = <String>[
+      if (scopeLabel.isNotEmpty) scopeLabel,
+      if (minSpend > 0) 'Minimum spend ₱${minSpend.toStringAsFixed(2)}',
+      if (endsAt != null && endsAt!.isNotEmpty) 'Valid until $endsAt',
+      if (remainingUses != null) '$remainingUses use(s) left',
+      'Up to $perBuyerLimit use(s) per Buyer',
+    ];
+    return parts.join(' · ');
+  }
+}
+
+/// One address from the Buyer's saved address book (web: Buyer > Account > Delivery).
+class ApiBuyerAddress {
+  final int id;
+  final String label;
+  final String line;
+  final String province;
+  final String city;
+  final String provinceCode;
+  final String cityCode;
+  final bool isDefault;
+  final bool usable;
+  final double? latitude;
+  final double? longitude;
+
+  const ApiBuyerAddress({
+    required this.id,
+    required this.label,
+    required this.line,
+    required this.province,
+    required this.city,
+    required this.provinceCode,
+    required this.cityCode,
+    required this.isDefault,
+    required this.usable,
+    this.latitude,
+    this.longitude,
+  });
+
+  factory ApiBuyerAddress.fromJson(Map<String, dynamic> json) =>
+      ApiBuyerAddress(
+        id: _int(json['id']),
+        label: json['label']?.toString() ?? 'Address',
+        line: json['line']?.toString() ?? '',
+        province: json['province']?.toString() ?? '',
+        city: json['city']?.toString() ?? '',
+        provinceCode: json['province_code']?.toString() ?? '',
+        cityCode: json['city_code']?.toString() ?? '',
+        isDefault: _bool(json['is_default']),
+        usable: _bool(json['usable']),
+        latitude: json['latitude'] == null ? null : _num(json['latitude']),
+        longitude: json['longitude'] == null ? null : _num(json['longitude']),
+      );
 }
 
 class ApiCheckoutShop {
@@ -824,12 +1520,20 @@ class ApiCheckoutPreview {
   final ApiCart cart;
   final List<ApiCheckoutShop> shops;
   final Map<String, dynamic> defaultAddress;
+  final String buyerName;
+  final String buyerPhone;
+  final List<ApiBuyerAddress> savedAddresses;
+  final bool sellerNotesEnabled;
 
   const ApiCheckoutPreview({
     required this.revision,
     required this.cart,
     required this.shops,
     required this.defaultAddress,
+    this.buyerName = '',
+    this.buyerPhone = '',
+    this.savedAddresses = const [],
+    this.sellerNotesEnabled = true,
   });
 
   factory ApiCheckoutPreview.fromJson(Map<String, dynamic> json) =>
@@ -845,7 +1549,69 @@ class ApiCheckoutPreview {
         defaultAddress: Map<String, dynamic>.from(
           (json['default_address'] as Map?) ?? const {},
         ),
+        buyerName:
+            ((json['buyer'] as Map?)?['name'] ?? json['buyer_name'])
+                ?.toString() ??
+            '',
+        buyerPhone:
+            ((json['buyer'] as Map?)?['phone_number'] ?? json['buyer_phone'])
+                ?.toString() ??
+            '',
+        savedAddresses: (json['saved_addresses'] as List? ?? [])
+            .map(
+              (e) =>
+                  ApiBuyerAddress.fromJson(Map<String, dynamic>.from(e as Map)),
+            )
+            .toList(),
+        sellerNotesEnabled: json['seller_notes_enabled'] == null
+            ? true
+            : _bool(json['seller_notes_enabled']),
       );
+}
+
+/// One Logistics Company the Buyer can pick for a shop's parcel.
+class ApiShippingOption {
+  final int companyId;
+  final String companyName;
+  final bool isCheapest;
+  final int hubCount;
+  final List<String> route;
+  final double fee;
+  final String feeLabel;
+
+  const ApiShippingOption({
+    required this.companyId,
+    required this.companyName,
+    required this.isCheapest,
+    required this.hubCount,
+    required this.route,
+    required this.fee,
+    required this.feeLabel,
+  });
+
+  factory ApiShippingOption.fromJson(Map<String, dynamic> json) {
+    final fee = _num(json['shipping_fee']);
+    return ApiShippingOption(
+      companyId: _int(json['company_id']),
+      companyName: json['company_name']?.toString() ?? 'Logistics provider',
+      isCheapest: _bool(json['is_cheapest']),
+      hubCount: _int(json['hub_count']),
+      route: (json['route'] as List? ?? [])
+          .map((stop) => '${(stop as Map)['name'] ?? ''}')
+          .where((name) => name.isNotEmpty)
+          .toList(),
+      fee: fee,
+      feeLabel:
+          json['shipping_fee_label']?.toString() ??
+          '₱${fee.toStringAsFixed(2)}',
+    );
+  }
+
+  /// "4 hubs · Sampaguita Station → Hilltop Hub → …" like the web card.
+  String get routeLabel {
+    if (route.isEmpty) return '$hubCount hub${hubCount == 1 ? '' : 's'}';
+    return '$hubCount hub${hubCount == 1 ? '' : 's'} · ${route.join(' → ')}';
+  }
 }
 
 class ApiShippingQuote {
@@ -853,10 +1619,238 @@ class ApiShippingQuote {
   final String totalLabel;
   final Map<int, double> perSeller;
   final Map<int, String> perSellerLabel;
+
+  /// The Company the server picked for each shop, and every Company the Buyer
+  /// may choose instead.
+  final Map<int, ApiShippingOption> selected;
+  final Map<int, List<ApiShippingOption>> options;
+
   const ApiShippingQuote({
     required this.total,
     required this.totalLabel,
     required this.perSeller,
     required this.perSellerLabel,
+    this.selected = const {},
+    this.options = const {},
   });
+}
+
+// ── Seller chat ───────────────────────────────────────────────────────────────
+
+/// The shop on the other side of a chat, as the web chat header names it.
+class ApiChatSeller {
+  final int id;
+  final String name;
+  final String owner;
+  final String? avatar;
+  final String? url;
+
+  const ApiChatSeller({
+    required this.id,
+    required this.name,
+    required this.owner,
+    this.avatar,
+    this.url,
+  });
+
+  factory ApiChatSeller.fromJson(Map<String, dynamic> json) => ApiChatSeller(
+    id: _int(json['id']),
+    name: json['name']?.toString() ?? 'Shop',
+    owner: json['owner']?.toString() ?? '',
+    avatar: json['avatar']?.toString(),
+    url: json['url']?.toString(),
+  );
+
+  String get initial =>
+      name.trim().isEmpty ? '?' : name.trim().substring(0, 1).toUpperCase();
+}
+
+/// An order the buyer can share in the chat: `#ORD-2026-0012 · Assigned to Rider`.
+class ApiChatOrder {
+  final int id;
+  final String number;
+  final String label;
+  final String status;
+
+  const ApiChatOrder({
+    required this.id,
+    required this.number,
+    required this.label,
+    this.status = '',
+  });
+
+  factory ApiChatOrder.fromJson(Map<String, dynamic> json) => ApiChatOrder(
+    id: _int(json['id']),
+    number: json['number']?.toString() ?? '',
+    label: json['label']?.toString() ?? '',
+    status: json['status']?.toString() ?? '',
+  );
+}
+
+/// The order card inside a shared-order message.
+class ApiChatSharedOrder {
+  final int orderId;
+  final String number;
+  final String? image;
+  final String productName;
+  final int itemCount;
+  final String total;
+  final String? carrier;
+  final String? tracking;
+  final String status;
+
+  const ApiChatSharedOrder({
+    required this.orderId,
+    required this.number,
+    required this.productName,
+    required this.itemCount,
+    required this.total,
+    required this.status,
+    this.image,
+    this.carrier,
+    this.tracking,
+  });
+
+  factory ApiChatSharedOrder.fromJson(Map<String, dynamic> json) =>
+      ApiChatSharedOrder(
+        orderId: _int(json['order_id']),
+        number: json['number']?.toString() ?? '',
+        image: json['image_url']?.toString(),
+        productName: json['product_name']?.toString() ?? 'Order items',
+        itemCount: _int(json['item_count']),
+        total: json['total']?.toString() ?? '',
+        carrier: json['carrier']?.toString(),
+        tracking: json['tracking']?.toString(),
+        status: json['status']?.toString() ?? '',
+      );
+
+  bool get hasTracking => tracking != null && tracking!.trim().isNotEmpty;
+
+  String get trackingLabel => hasTracking
+      ? '${(carrier ?? '').trim().isEmpty ? 'Courier' : carrier} · Tracking $tracking'
+      : '';
+}
+
+/// One line of a marketplace chat: a buyer/seller message, an attached photo, a
+/// shared order, or a Vendo notice (`system`).
+class ApiChatMessage {
+  final int id;
+  final bool mine;
+  final bool system;
+  final String sender;
+  final String initial;
+  final String? avatar;
+  final String? body;
+  final String? item;
+  final String? time;
+  final String? attachmentUrl;
+  final ApiChatSharedOrder? sharedOrder;
+
+  const ApiChatMessage({
+    required this.id,
+    required this.sender,
+    required this.initial,
+    this.mine = false,
+    this.system = false,
+    this.avatar,
+    this.body,
+    this.item,
+    this.time,
+    this.attachmentUrl,
+    this.sharedOrder,
+  });
+
+  factory ApiChatMessage.fromJson(Map<String, dynamic> json) {
+    final shared = json['shared_order'];
+    return ApiChatMessage(
+      id: _int(json['id']),
+      mine: _bool(json['mine']),
+      system: _bool(json['system']),
+      sender: json['sender']?.toString() ?? '',
+      initial: json['initial']?.toString() ?? '',
+      avatar: json['avatar']?.toString(),
+      body: json['body']?.toString(),
+      item: json['item']?.toString(),
+      time: json['time']?.toString(),
+      attachmentUrl: json['attachment_url']?.toString(),
+      sharedOrder: shared is Map
+          ? ApiChatSharedOrder.fromJson(Map<String, dynamic>.from(shared))
+          : null,
+    );
+  }
+
+  /// "You · Nov 16, 7:52 AM", the small line above each bubble.
+  String get meta => [
+    sender,
+    time,
+  ].where((part) => part != null && part.trim().isNotEmpty).join(' · ');
+}
+
+/// A whole chat thread: the shop, the order it is pinned to (if any), its
+/// messages and the orders the buyer may share.
+class ApiChatThread {
+  final ApiChatSeller? seller;
+  final ApiChatOrder? order;
+  final List<ApiChatMessage> messages;
+  final List<ApiChatOrder> shareOrders;
+
+  /// Set when the web would send the buyer to their newest order chat instead
+  /// of starting a shop chat (a shop chat already exists if this is null).
+  final int? redirectOrderId;
+
+  const ApiChatThread({
+    this.seller,
+    this.order,
+    this.messages = const [],
+    this.shareOrders = const [],
+    this.redirectOrderId,
+  });
+
+  factory ApiChatThread.fromJson(Map<String, dynamic> json) {
+    final seller = json['seller'];
+    final order = json['order'];
+    return ApiChatThread(
+      seller: seller is Map
+          ? ApiChatSeller.fromJson(Map<String, dynamic>.from(seller))
+          : null,
+      order: order is Map
+          ? ApiChatOrder.fromJson(Map<String, dynamic>.from(order))
+          : null,
+      messages: (json['messages'] as List? ?? [])
+          .map(
+            (e) => ApiChatMessage.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
+          .toList(),
+      shareOrders: (json['share_orders'] as List? ?? [])
+          .map(
+            (e) => ApiChatOrder.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
+          .toList(),
+      redirectOrderId: json['redirect_order_id'] == null
+          ? null
+          : _int(json['redirect_order_id']),
+    );
+  }
+}
+
+/// Result of checking one shop's stacked voucher codes.
+class ApiVoucherQuote {
+  final double discount;
+  final String discountLabel;
+  final List<String> codes;
+
+  const ApiVoucherQuote({
+    required this.discount,
+    required this.discountLabel,
+    required this.codes,
+  });
+
+  factory ApiVoucherQuote.fromJson(Map<String, dynamic> json) =>
+      ApiVoucherQuote(
+        discount: _num(json['discount']),
+        discountLabel: json['discount_label']?.toString() ?? '',
+        codes: (json['codes'] as List? ?? [])
+            .map((code) => code.toString())
+            .toList(),
+      );
 }

@@ -5,10 +5,10 @@ import 'package:flutter/services.dart';
 import 'package:vendo_buyer/core/api/api_models.dart';
 import 'package:vendo_buyer/core/api/buyer_api.dart';
 import 'package:vendo_buyer/features/cart/screens/cart_screen.dart';
+import 'package:vendo_buyer/features/home/screens/categories_screen.dart';
 import 'package:vendo_buyer/features/home/screens/category_products_screen.dart';
 import 'package:vendo_buyer/features/home/widgets/buyer_nav_bar.dart';
 import 'package:vendo_buyer/features/notifications/screens/notifications_screen.dart';
-import 'package:vendo_buyer/features/orders/screens/orders_screen.dart';
 import 'package:vendo_buyer/features/product/screens/api_product_screen.dart';
 import 'package:vendo_buyer/features/profile/screens/profile_screen.dart';
 import 'package:vendo_buyer/features/saved/screens/saved_screen.dart';
@@ -150,6 +150,15 @@ class _HomeTabState extends State<_HomeTab> {
     );
   }
 
+  /// "See all" next to Shop by category: the full catalogue list the web
+  /// Categories page shows.
+  void _openCategories() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CategoriesScreen()),
+    );
+  }
+
   /// Fills the header badge from the server; a failure leaves the last known
   /// count (the badge is decoration, not critical data).
   Future<void> _loadCartCount() async {
@@ -249,16 +258,14 @@ class _HomeTabState extends State<_HomeTab> {
 
                 const SizedBox(height: 12),
 
-                // ── Quick-action pills ─────────────────────────────
-                const _QuickActions(),
-
-                const SizedBox(height: 12),
-
                 // ── Shop by category ───────────────────────────────
                 if (_loading)
                   const _CategorySkeleton()
                 else
-                  _CategoryCard(categories: _categories),
+                  _CategoryCard(
+                    categories: _categories,
+                    onSeeAll: _openCategories,
+                  ),
 
                 const SizedBox(height: 16),
 
@@ -793,10 +800,7 @@ class _HeroBannerState extends State<_HeroBanner>
                       final t = _float.value;
                       return Transform.translate(
                         offset: Offset(0, -10 * t),
-                        child: Transform.rotate(
-                          angle: 0.03 * t,
-                          child: child,
-                        ),
+                        child: Transform.rotate(angle: 0.03 * t, child: child),
                       );
                     },
                     child: const SizedBox(
@@ -940,100 +944,6 @@ class _HeroIllustrationPainter extends CustomPainter {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Quick-action pills (scroll sideways)
-// ─────────────────────────────────────────────────────────────────────────────
-class _QuickActions extends StatelessWidget {
-  const _QuickActions();
-
-  static const _actions = <_QuickAction>[
-    _QuickAction(Icons.shopping_bag_outlined, 'Track orders'),
-    _QuickAction(Icons.favorite_border_rounded, 'Saved items'),
-    _QuickAction(Icons.credit_card_rounded, 'Cash on Delivery'),
-    _QuickAction(Icons.location_on_outlined, 'Live status'),
-    _QuickAction(Icons.verified_user_outlined, 'Approved sellers'),
-    _QuickAction(Icons.chat_bubble_outline_rounded, 'Seller chat'),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 42,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: _actions.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 12),
-        itemBuilder: (_, i) => _QuickActionTile(action: _actions[i]),
-      ),
-    );
-  }
-}
-
-class _QuickAction {
-  final IconData icon;
-  final String label;
-  const _QuickAction(this.icon, this.label);
-}
-
-class _QuickActionTile extends StatelessWidget {
-  final _QuickAction action;
-  const _QuickActionTile({required this.action});
-
-  void _open(BuildContext context) {
-    switch (action.label) {
-      case 'Track orders':
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const OrdersScreen()),
-        );
-      case 'Saved items':
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const SavedScreen()),
-        );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => _open(context),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: _C.white,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: _C.cardBorder),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 24,
-              height: 24,
-              decoration: const BoxDecoration(
-                color: _C.lavenderBg,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(action.icon, color: _C.plum, size: 14),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              action.label,
-              style: const TextStyle(
-                color: _C.ink,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Section header (title, optional subtitle, optional action link)
 // ─────────────────────────────────────────────────────────────────────────────
 class _SectionHeader extends StatelessWidget {
@@ -1119,7 +1029,8 @@ class _HomeCategory {
 
 class _CategoryCard extends StatelessWidget {
   final List<_HomeCategory> categories;
-  const _CategoryCard({required this.categories});
+  final VoidCallback onSeeAll;
+  const _CategoryCard({required this.categories, required this.onSeeAll});
 
   static const _icons = <String, IconData>{
     'Electronics and Gadgets': Icons.devices_outlined,
@@ -1170,7 +1081,7 @@ class _CategoryCard extends StatelessWidget {
                   ),
                 ),
                 GestureDetector(
-                  onTap: () {},
+                  onTap: onSeeAll,
                   child: const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1578,7 +1489,6 @@ class _Product {
   /// that were built before it existed; readers treat that as "no photos".
   final List<String>? images;
   final String title, price, sold, delivery, location;
-  final String province, municipality;
   final IconData icon;
   final String? discount; // e.g. '-84%'
   final int discountPercent;
@@ -1595,8 +1505,6 @@ class _Product {
     required this.delivery,
     required this.location,
     required this.icon,
-    this.province = '',
-    this.municipality = '',
     this.id = 0,
     this.image = '',
     this.images = const [],
@@ -1616,8 +1524,6 @@ class _Product {
     sold: product.sold > 0 ? '${product.sold} sold' : 'New arrival',
     delivery: 'COD',
     location: product.shop,
-    province: product.province,
-    municipality: product.municipality,
     icon: Icons.shopping_bag_outlined,
     discount: product.discountPercent > 0
         ? '-${product.discountPercent}%'
@@ -1886,8 +1792,7 @@ class _ProductCardState extends State<_ProductCard> {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  // Price (purple) + crossed-out original price when discounted,
-                  // sold count pushed to the right
+                  // Price (purple) + crossed-out original price when discounted.
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.baseline,
                     textBaseline: TextBaseline.alphabetic,
@@ -1922,65 +1827,42 @@ class _ProductCardState extends State<_ProductCard> {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  // Store name on the left, sold count flush right on the same line.
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.storefront_outlined,
+                        size: 12,
+                        color: _C.plum.withValues(alpha: 0.6),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          p.location.toUpperCase(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: _C.muted,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
                       const SizedBox(width: 6),
                       Text(
                         p.sold,
                         maxLines: 1,
                         textAlign: TextAlign.right,
-                        style: const TextStyle(color: _C.muted, fontSize: 10),
+                        style: const TextStyle(
+                          color: _C.muted,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 3),
-                  // Store name on the left, location flush right on the same line.
-                  // The name keeps as much width as it needs; the location gets up to
-                  // half the row and is cut with "..." instead of wrapping.
-                  LayoutBuilder(
-                    builder: (context, constraints) => Row(
-                      children: [
-                        Icon(
-                          Icons.storefront_outlined,
-                          size: 12,
-                          color: _C.plum.withValues(alpha: 0.6),
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            p.location.toUpperCase(),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: _C.muted,
-                              fontSize: 9,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ),
-                        if (p.province.isNotEmpty ||
-                            p.municipality.isNotEmpty) ...[
-                          const SizedBox(width: 6),
-                          ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: constraints.maxWidth * 0.5,
-                            ),
-                            child: Text(
-                              [
-                                p.province,
-                                p.municipality,
-                              ].where((s) => s.isNotEmpty).join(', '),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              textAlign: TextAlign.right,
-                              style: const TextStyle(
-                                color: _C.muted,
-                                fontSize: 9,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
                   ),
                 ],
               ),

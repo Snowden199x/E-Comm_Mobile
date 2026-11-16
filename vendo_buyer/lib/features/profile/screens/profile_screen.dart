@@ -85,10 +85,7 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
 
   Future<void> _open(Widget screen) async {
     HapticFeedback.selectionClick();
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => screen),
-    );
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
     if (mounted) _loadProfile();
   }
 
@@ -195,8 +192,7 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                         _MenuItem(
                           icon: Icons.person_outline_rounded,
                           label: 'Personal Information',
-                          onTap: () =>
-                              _open(const PersonalInformationScreen()),
+                          onTap: () => _open(const PersonalInformationScreen()),
                         ),
                         _MenuItem(
                           icon: Icons.location_on_outlined,
@@ -467,9 +463,10 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
   // ── Order status quick-jump bar ───────────────────────────────────────────
   Widget _buildOrderBar() {
     const statuses = [
+      // These open the matching tab on My Orders, which uses the web's keys.
       _OrderStatus(Icons.local_shipping_outlined, 'To Ship', 'to_ship'),
-      _OrderStatus(Icons.inventory_2_outlined, 'To Receive', 'to_receive'),
-      _OrderStatus(Icons.rate_review_outlined, 'To Review', 'to_review'),
+      _OrderStatus(Icons.inventory_2_outlined, 'To Receive', 'in_transit'),
+      _OrderStatus(Icons.rate_review_outlined, 'To Review', 'delivered'),
     ];
 
     return Container(
@@ -518,7 +515,7 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
             children: statuses.map((s) {
               return Expanded(
                 child: GestureDetector(
-                  onTap: () => _open(OrdersScreen(initialGroup: s.group)),
+                  onTap: () => _open(OrdersScreen(initialTab: s.group)),
                   child: Column(
                     children: [
                       Container(

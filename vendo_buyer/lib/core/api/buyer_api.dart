@@ -18,9 +18,14 @@ class BuyerApiException implements Exception {
 
 /// Orders from the cache, with the time they were saved on the device.
 class CachedOrders {
-  const CachedOrders({required this.items, required this.cachedAt});
+  const CachedOrders({
+    required this.items,
+    required this.cachedAt,
+    this.tabs = const [],
+  });
 
   final List<ApiOrder> items;
+  final List<ApiOrderTab> tabs;
   final DateTime cachedAt;
 }
 
@@ -80,7 +85,7 @@ class BuyerApi {
       return 'http://127.0.0.1:8000/api/v1/buyer';
     }
     if (kDebugMode) {
-      return 'http://192.168.1.17:8000/api/v1/buyer';
+      return 'http://192.168.1.41:8000/api/v1/buyer';
     }
     return 'https://vendo-ph.app/api/v1/buyer';
   }
@@ -97,9 +102,8 @@ class BuyerApi {
   @visibleForTesting
   void useClient(http.Client client) => _client = client;
 
-  static String _ordersKey(String? status, String? group) =>
-      'offline:orders:${status == null || status.isEmpty ? 'all' : status}:'
-      '${group == null || group.isEmpty ? 'all' : group}';
+  static String _ordersKey(String? tab) =>
+      'offline:orders:${tab == null || tab.isEmpty ? 'all' : tab}';
   static String _orderKey(int id) => 'offline:order:$id';
   static const String _notificationsKey = 'offline:notifications';
 
@@ -181,9 +185,9 @@ class BuyerApi {
   }
 
   /// Signs in with a Google ID token. The API verifies the token and returns
-  /// the same session as [login]; a Google email without an approved Buyer
-  /// account gets a [BuyerApiException] explaining what to do instead.
-  Future<void> googleSignIn(String idToken) async {
+  /// the same session as [login]; a Google email with no Buyer account returns
+  /// `registration_required` with the data the registration form needs.
+  Future<Map<String, dynamic>> googleSignIn(String idToken) async {
     final response = await http
         .post(
           Uri.parse('$baseUrl/google'),
@@ -194,7 +198,10 @@ class BuyerApi {
           }),
         )
         .timeout(const Duration(seconds: 20));
-    await _saveLogin(_check(response));
+    final data = _check(response);
+    if (data['registration_required'] == true) return data;
+    await _saveLogin(data);
+    return data;
   }
 
   Future<void> logout() async {
@@ -221,6 +228,18 @@ class BuyerApi {
         .get(Uri.parse('$baseUrl/home'), headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
     return _check(response);
+  }
+
+  /// Every top-level category with its subcategories — the same rows the web
+  /// Categories page lists, so both sides show the same catalogue.
+  Future<List<ApiCategory>> categories() async {
+    final response = await _client
+        .get(Uri.parse('$baseUrl/categories'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 25));
+    final data = _check(response);
+    return (data['categories'] as List? ?? [])
+        .map((e) => ApiCategory.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
   }
 
   Future<List<ApiProduct>> products({
@@ -268,8 +287,9 @@ class BuyerApi {
     int id, {
     String? search,
     String sort = 'latest',
+    int page = 1,
   }) async {
-    final query = <String, String>{'sort': sort};
+    final query = <String, String>{'sort': sort, 'page': '$page'};
     if (search != null && search.trim().isNotEmpty)
       query['search'] = search.trim();
     final uri = Uri.parse(
@@ -280,6 +300,79 @@ class BuyerApi {
         .timeout(const Duration(seconds: 25));
     return _check(response);
   }
+
+  // ── Seller chat ────────────────────────────────────────────────────────────
+  /// One chat thread: a shop chat when only [sellerId] is set, else the chat
+  /// pinned to [orderId]. Both are the threads the web chat page reads.
+  Future<ApiChatThread> chatThread({int? sellerId, int? orderId}) async {
+    final response = await _client
+        .get(
+          Uri.parse(_chatPath(sellerId: sellerId, orderId: orderId)),
+          headers: await _authHeaders(),
+        )
+        .timeout(const Duration(seconds: 25));
+    return ApiChatThread.fromJson(_check(response));
+  }
+
+  /// Messages that arrived after [after], for the chat's short poll.
+  Future<List<ApiChatMessage>> chatNewMessages({
+    int? sellerId,
+    int? orderId,
+    required int after,
+  }) async {
+    final uri = Uri.parse(
+      '${_chatPath(sellerId: sellerId, orderId: orderId)}/fetch',
+    ).replace(queryParameters: {'after': '$after'});
+    final response = await _client
+        .get(uri, headers: await _authHeaders())
+        .timeout(const Duration(seconds: 25));
+    final data = _check(response);
+    return (data['messages'] as List? ?? [])
+        .map(
+          (e) => ApiChatMessage.fromJson(Map<String, dynamic>.from(e as Map)),
+        )
+        .toList();
+  }
+
+  /// Sends a message, a photo, a shared order or any mix of them. The same
+  /// request the web chat form posts, so either side sees it.
+  Future<void> sendChatMessage({
+    int? sellerId,
+    int? orderId,
+    String body = '',
+    String? attachmentPath,
+    int? sharedOrderId,
+  }) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse(_chatPath(sellerId: sellerId, orderId: orderId)),
+    );
+    request.headers['Accept'] = 'application/json';
+    request.headers['Authorization'] = 'Bearer ${await _token()}';
+    if (body.trim().isNotEmpty) request.fields['body'] = body.trim();
+    if (sharedOrderId != null)
+      request.fields['shared_order_id'] = '$sharedOrderId';
+    if (attachmentPath != null) {
+      request.files.add(
+        await http.MultipartFile.fromPath('attachment', attachmentPath),
+      );
+    }
+    final streamed = await request.send().timeout(const Duration(seconds: 60));
+    _check(await http.Response.fromStream(streamed));
+  }
+
+  /// Chat photos and delivery proofs are private, so the app sends its token
+  /// when it loads one.
+  Future<Map<String, String>> mediaHeaders() async => {
+    'Authorization': 'Bearer ${await _token()}',
+  };
+
+  /// The rider's delivery photo for this order (bearer token required).
+  String orderDeliveryProofUrl(int id) => '$baseUrl/orders/$id/delivery-proof';
+
+  String _chatPath({int? sellerId, int? orderId}) => orderId != null
+      ? '$baseUrl/messages/orders/$orderId'
+      : '$baseUrl/messages/sellers/$sellerId';
 
   // ── Saved items ────────────────────────────────────────────────────────────
   Future<List<ApiProduct>> savedItems() async {
@@ -401,19 +494,61 @@ class BuyerApi {
     );
     final perSeller = <int, double>{};
     final perSellerLabel = <int, String>{};
+    final selected = <int, ApiShippingOption>{};
+    final options = <int, List<ApiShippingOption>>{};
     quotes.forEach((key, value) {
       final row = Map<String, dynamic>.from(value as Map);
-      perSeller[int.parse(key)] =
+      final sellerId = int.parse(key);
+      perSeller[sellerId] =
           double.tryParse(row['shipping_fee']?.toString() ?? '') ?? 0;
-      perSellerLabel[int.parse(key)] =
-          row['shipping_fee_label']?.toString() ?? '';
+      perSellerLabel[sellerId] = row['shipping_fee_label']?.toString() ?? '';
+
+      final list = (row['options'] as List? ?? [])
+          .map(
+            (e) =>
+                ApiShippingOption.fromJson(Map<String, dynamic>.from(e as Map)),
+          )
+          .toList();
+      if (list.isNotEmpty) options[sellerId] = list;
+
+      // The server picks the Buyer's saved Company (or the cheapest) first.
+      final chosenId = int.tryParse('${row['company_id'] ?? ''}') ?? 0;
+      ApiShippingOption? pick;
+      for (final option in list) {
+        if (option.companyId == chosenId) pick = option;
+      }
+      pick ??= list.isEmpty ? null : list.first;
+      if (pick != null) selected[sellerId] = pick;
     });
     return ApiShippingQuote(
       total: double.tryParse(data['shipping_total']?.toString() ?? '') ?? 0,
       totalLabel: data['shipping_total_label']?.toString() ?? '',
       perSeller: perSeller,
       perSellerLabel: perSellerLabel,
+      selected: selected,
+      options: options,
     );
+  }
+
+  /// Checks one shop's voucher codes (up to two stacked) against the same
+  /// service the web checkout applies, so the discount matches there.
+  Future<ApiVoucherQuote> voucherQuote(
+    List<int> itemIds,
+    int sellerId,
+    List<String> codes,
+  ) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/checkout/voucher-quote'),
+          headers: await _authHeaders(),
+          body: jsonEncode({
+            'items': itemIds,
+            'seller_id': sellerId,
+            'codes': codes,
+          }),
+        )
+        .timeout(const Duration(seconds: 25));
+    return ApiVoucherQuote.fromJson(_check(response));
   }
 
   Future<List<ApiProvince>> locations() async {
@@ -439,14 +574,62 @@ class BuyerApi {
         .toList();
   }
 
+  Future<ApiGeoMapConfig> geoConfig() async {
+    final response = await http
+        .get(Uri.parse('$baseUrl/geo/config'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 25));
+    return ApiGeoMapConfig.fromJson(_check(response));
+  }
+
+  /// Place search for the pin picker (Philippines only, up to five matches).
+  Future<List<ApiGeoPlace>> geoSearch(String query) async {
+    final response = await http
+        .get(
+          Uri.parse(
+            '$baseUrl/geo/search',
+          ).replace(queryParameters: {'q': query}),
+          headers: await _authHeaders(),
+        )
+        .timeout(const Duration(seconds: 25));
+    final data = _check(response);
+    return (data['results'] as List? ?? [])
+        .map((e) => ApiGeoPlace.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  /// The address at a pin. Null when Geoapify has no address for the point.
+  Future<ApiGeoPlace?> geoReverse(double latitude, double longitude) async {
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/geo/reverse').replace(
+            queryParameters: {
+              'lat': latitude.toString(),
+              'lng': longitude.toString(),
+            },
+          ),
+          headers: await _authHeaders(),
+        )
+        .timeout(const Duration(seconds: 25));
+    if (response.statusCode == 422) return null;
+    final data = _check(response);
+    final result = data['result'];
+    if (result is! Map) return null;
+    return ApiGeoPlace.fromJson(Map<String, dynamic>.from(result));
+  }
+
   Future<List<ApiOrder>> placeOrder({
     required List<int> itemIds,
     required String shippingAddress,
     required String provinceCode,
     required String cityCode,
     required String checkoutRevision,
+    int? shippingAddressId,
+    double? shippingLatitude,
+    double? shippingLongitude,
     Map<String, String> sellerNotes = const {},
-    Map<String, String> voucherCodes = const {},
+    Map<int, List<String>> voucherCodes = const {},
+    Map<int, String> shippingQuotes = const {},
+    Map<int, int> logisticsCompanyIds = const {},
   }) async {
     final response = await http
         .post(
@@ -459,8 +642,28 @@ class BuyerApi {
             'shipping_city_code': cityCode,
             'payment_mode': 'cod',
             'checkout_revision': checkoutRevision,
+            if (shippingAddressId != null)
+              'shipping_address_id': shippingAddressId,
+            if (shippingLatitude != null && shippingLongitude != null) ...{
+              'shipping_latitude': shippingLatitude,
+              'shipping_longitude': shippingLongitude,
+            },
+            if (shippingQuotes.isNotEmpty)
+              'shipping_quotes': {
+                for (final entry in shippingQuotes.entries)
+                  '${entry.key}': entry.value,
+              },
+            if (logisticsCompanyIds.isNotEmpty)
+              'logistics_company_ids': {
+                for (final entry in logisticsCompanyIds.entries)
+                  '${entry.key}': entry.value,
+              },
             if (sellerNotes.isNotEmpty) 'seller_notes': sellerNotes,
-            if (voucherCodes.isNotEmpty) 'voucher_codes': voucherCodes,
+            if (voucherCodes.isNotEmpty)
+              'voucher_codes': {
+                for (final entry in voucherCodes.entries)
+                  '${entry.key}': entry.value,
+              },
           }),
         )
         .timeout(const Duration(seconds: 45));
@@ -471,31 +674,43 @@ class BuyerApi {
   }
 
   // ── Orders ─────────────────────────────────────────────────────────────────
-  /// [group] is the My Orders tab: to_ship, to_receive or to_review.
-  Future<List<ApiOrder>> orders({String? status, String? group}) async {
+  /// One tab of the Buyer's orders (`all`, `placed`, `to_ship`, `in_transit`,
+  /// `delivered`, `returns`, `cancelled`) plus the counts for every tab.
+  /// Pages 2+ only fetch; the first page is also the copy kept for offline use.
+  Future<ApiOrdersPage> orders({String? tab, int page = 1}) async {
     final uri = Uri.parse('$baseUrl/orders').replace(
       queryParameters: {
-        if (status != null && status.isNotEmpty) 'status': status,
-        if (group != null && group.isNotEmpty) 'group': group,
+        if (tab != null && tab.isNotEmpty) 'tab': tab,
+        if (page > 1) 'page': '$page',
       },
     );
     final response = await _client
         .get(uri, headers: await _authHeaders())
         .timeout(const Duration(seconds: 25));
     final data = _check(response);
+    final meta = data['meta'] is Map
+        ? Map<String, dynamic>.from(data['meta'] as Map)
+        : const <String, dynamic>{};
     // Keep the newest list on the device so orders survive a bad signal.
-    await OfflineStore.instance.cacheJson(_ordersKey(status, group), data);
-    return _orders(data);
+    if (page <= 1) {
+      await OfflineStore.instance.cacheJson(_ordersKey(tab), data);
+    }
+    return ApiOrdersPage(
+      orders: _orders(data),
+      tabs: ApiOrderTab.list(data['tabs']),
+      page: (meta['current_page'] as num?)?.toInt() ?? page,
+      lastPage: (meta['last_page'] as num?)?.toInt() ?? page,
+      total: (meta['total'] as num?)?.toInt() ?? 0,
+    );
   }
 
   /// The last order list this device saw, when the API cannot be reached.
-  Future<CachedOrders?> cachedOrders({String? status, String? group}) async {
-    final cached = await OfflineStore.instance.readJson(
-      _ordersKey(status, group),
-    );
+  Future<CachedOrders?> cachedOrders({String? tab}) async {
+    final cached = await OfflineStore.instance.readJson(_ordersKey(tab));
     if (cached == null) return null;
     return CachedOrders(
       items: _orders(cached.payload),
+      tabs: ApiOrderTab.list(cached.payload['tabs']),
       cachedAt: cached.cachedAt,
     );
   }
@@ -551,6 +766,28 @@ class BuyerApi {
         .post(
           Uri.parse('$baseUrl/orders/$id/complete'),
           headers: await _authHeaders(),
+        )
+        .timeout(const Duration(seconds: 30));
+    return ApiOrderDetail.fromJson(
+      Map<String, dynamic>.from(_check(response)['order'] as Map),
+    );
+  }
+
+  /// Asks the seller to take a delivered order back. The web return form posts the
+  /// same reason/details to `OrderReturnService`.
+  Future<ApiOrderDetail> requestOrderReturn(
+    int id,
+    String reason, {
+    String? details,
+  }) async {
+    final response = await http
+        .post(
+          Uri.parse('$baseUrl/orders/$id/return'),
+          headers: await _authHeaders(),
+          body: jsonEncode({
+            'reason': reason,
+            if (details != null && details.isNotEmpty) 'details': details,
+          }),
         )
         .timeout(const Duration(seconds: 30));
     return ApiOrderDetail.fromJson(

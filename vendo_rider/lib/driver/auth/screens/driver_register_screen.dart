@@ -11,7 +11,20 @@ import 'package:vendo_rider/driver/auth/widgets/register_widgets.dart';
 /// registration, with the driver-only fields (vehicle and licence) and the
 /// Apply-to choice: Station Hub, Province Hub, or both.
 class DriverRegisterScreen extends StatefulWidget {
-  const DriverRegisterScreen({super.key});
+  const DriverRegisterScreen({
+    super.key,
+    this.googleRegistrationToken,
+    this.verifiedEmail,
+    this.googleFirstName = '',
+    this.googleLastName = '',
+  });
+
+  /// Set when the account was started with Google: the API already proved the
+  /// address, so the form sends this instead of an emailed code.
+  final String? googleRegistrationToken;
+  final String? verifiedEmail;
+  final String googleFirstName;
+  final String googleLastName;
 
   @override
   State<DriverRegisterScreen> createState() => _DriverRegisterScreenState();
@@ -138,9 +151,16 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
   Set<String> _flagged = {};
   final Map<String, GlobalKey> _keys = {};
 
+  /// The Google email is already proven, so it is filled in, read-only and
+  /// marked verified instead of asking for a 6-digit code.
+  bool get _verifiedWithGoogle => widget.googleRegistrationToken != null;
+
   @override
   void initState() {
     super.initState();
+    _email.text = widget.verifiedEmail ?? '';
+    _firstName.text = widget.googleFirstName;
+    _lastName.text = widget.googleLastName;
     _loadLocations();
     _loadHubs();
   }
@@ -296,9 +316,14 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
 
   String get _barangayName => (_barangays[_barangayCode] ?? '').toString();
 
-  String _hubName(List<Map<String, dynamic>> hubs, String? id, String fallback) {
+  String _hubName(
+    List<Map<String, dynamic>> hubs,
+    String? id,
+    String fallback,
+  ) {
     for (final hub in hubs) {
-      if (hub['id']?.toString() == id) return hub['name']?.toString() ?? fallback;
+      if (hub['id']?.toString() == id)
+        return hub['name']?.toString() ?? fallback;
     }
     return fallback;
   }
@@ -318,7 +343,8 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
           hub['logistics_company_id']?.toString() != _companyId) {
         continue;
       }
-      if (_cityCode != null && hub['municipality_code']?.toString() == _cityCode) {
+      if (_cityCode != null &&
+          hub['municipality_code']?.toString() == _cityCode) {
         return hub;
       }
     }
@@ -375,13 +401,13 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
         ('firstName', _blank(_firstName)),
         ('sex', _sex == null),
         ('email', _blank(_email) || !_email.text.contains('@')),
-        ('emailVerify', _emailVerificationToken == null),
+        (
+          'emailVerify',
+          !_verifiedWithGoogle && _emailVerificationToken == null,
+        ),
         ('birthday', _birthday.text.isEmpty),
         ('password', _password.text.length < 8),
-        (
-          'confirm',
-          _confirm.text.isEmpty || _confirm.text != _password.text,
-        ),
+        ('confirm', _confirm.text.isEmpty || _confirm.text != _password.text),
       ]);
     } else if (step == 1) {
       checks.addAll([
@@ -407,7 +433,9 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
         ('applyTo', _applyTo == null),
         (
           'hub',
-          _applyTo == 'station' ? _stationHubId == null : _provinceHubId == null,
+          _applyTo == 'station'
+              ? _stationHubId == null
+              : _provinceHubId == null,
         ),
       ]);
     }
@@ -545,7 +573,8 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
                 icon: Icons.photo_library_outlined,
                 title: 'Choose from gallery',
                 subtitle: 'Select an existing photo',
-                onTap: () => Navigator.of(sheetContext).pop(ImageSource.gallery),
+                onTap: () =>
+                    Navigator.of(sheetContext).pop(ImageSource.gallery),
               ),
             ],
           ),
@@ -571,7 +600,8 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
     final today = DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: _licenseExpiry ?? DateTime(today.year + 1, today.month, today.day),
+      initialDate:
+          _licenseExpiry ?? DateTime(today.year + 1, today.month, today.day),
       firstDate: DateTime(today.year, today.month, today.day),
       lastDate: DateTime(today.year + 15, 12, 31),
       helpText: 'Licence expiry date',
@@ -598,7 +628,7 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
       _showMessage('Please confirm the declaration before submitting.');
       return;
     }
-    if (_emailVerificationToken == null) {
+    if (!_verifiedWithGoogle && _emailVerificationToken == null) {
       _goToStep(0);
       setState(() => _flagged = {'emailVerify'});
       _showMessage('Verify your email before submitting.');
@@ -615,7 +645,10 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
           'last_name': _lastName.text.trim(),
           'middle_name': _middleInitial.text.trim(),
           'email': _email.text.trim(),
-          'email_verification_token': _emailVerificationToken!,
+          if (_verifiedWithGoogle)
+            'google_registration_token': widget.googleRegistrationToken!
+          else
+            'email_verification_token': _emailVerificationToken!,
           'password': _password.text,
           'password_confirmation': _confirm.text,
           'phone_number': _phone.text.trim().replaceAll(' ', ''),
@@ -638,9 +671,7 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
           'license_category': _licenseCategory!,
           'license_expires_at': _isoDate(_licenseExpiry!),
         },
-        {
-          'drivers_license': _licenseFilePath!,
-        },
+        {'drivers_license': _licenseFilePath!},
       );
       await DriverApi.instance.saveApplicationEmail(_email.text);
 
@@ -845,19 +876,48 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
             icon: Icons.mail_outline_rounded,
             keyboard: TextInputType.emailAddress,
             required: true,
-            labelAction: _emailVerificationToken != null
+            readOnly: _verifiedWithGoogle,
+            suffix: _verifiedWithGoogle
+                ? const Icon(
+                    Icons.lock_outline_rounded,
+                    size: 18,
+                    color: VColors.muted,
+                  )
+                : null,
+            labelAction: _verifiedWithGoogle
                 ? const Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
                         Icons.verified_rounded,
-                        color: VColors.green,
+                        color: VColors.verified,
+                        size: 17,
+                      ),
+                      SizedBox(width: 5),
+                      Text(
+                        'Verified with Google',
+                        style: TextStyle(
+                          color: VColors.verified,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  )
+                : _emailVerificationToken != null
+                ? const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.verified_rounded,
+                        color: VColors.verified,
                         size: 17,
                       ),
                       SizedBox(width: 5),
                       Text(
                         'Verified',
                         style: TextStyle(
-                          color: VColors.green,
+                          color: VColors.verified,
                           fontSize: 12.5,
                           fontWeight: FontWeight.w700,
                         ),
@@ -879,14 +939,16 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
                       ),
                     ),
                   ),
-            onChanged: (_) {
-              if (_emailVerificationToken != null) {
-                setState(() => _emailVerificationToken = null);
-              }
-            },
+            onChanged: _verifiedWithGoogle
+                ? null
+                : (_) {
+                    if (_emailVerificationToken != null) {
+                      setState(() => _emailVerificationToken = null);
+                    }
+                  },
           ),
         ),
-        if (_emailVerificationToken == null)
+        if (!_verifiedWithGoogle && _emailVerificationToken == null)
           Padding(
             padding: const EdgeInsets.only(top: 6, left: 2),
             child: Text(
@@ -970,7 +1032,8 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
           icon: Icons.lock_outline_rounded,
           obscure: _obscurePassword,
           required: true,
-          forceError: _flagged.contains('password') && _password.text.isNotEmpty,
+          forceError:
+              _flagged.contains('password') && _password.text.isNotEmpty,
           errorText: 'Password must be at least 8 characters.',
           suffix: GestureDetector(
             onTap: () => setState(() => _obscurePassword = !_obscurePassword),
@@ -1023,7 +1086,8 @@ class _DriverRegisterScreenState extends State<DriverRegisterScreen> {
 
   Widget _stepAddress() {
     final cities =
-        (_provinces[_provinceCode]?['cities'] as Map?)?.cast<String, dynamic>() ??
+        (_provinces[_provinceCode]?['cities'] as Map?)
+            ?.cast<String, dynamic>() ??
         <String, dynamic>{};
 
     return Column(
@@ -2028,4 +2092,3 @@ class _SourceTile extends StatelessWidget {
     );
   }
 }
-
