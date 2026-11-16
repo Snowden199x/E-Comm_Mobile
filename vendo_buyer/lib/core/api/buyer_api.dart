@@ -363,6 +363,86 @@ class BuyerApi {
 
   /// Chat photos and delivery proofs are private, so the app sends its token
   /// when it loads one.
+  // ── Messages inbox and Vendo Support ─────────────────────────────────────
+  /// The Buyer's shop chats, the same list the web Messages page shows.
+  Future<ApiSellerChats> sellerChats() async {
+    final response = await _client
+        .get(Uri.parse('$baseUrl/messages'), headers: await _authHeaders())
+        .timeout(const Duration(seconds: 25));
+    return ApiSellerChats.fromJson(_check(response));
+  }
+
+  /// The latest support conversation (if any) and the topics to start one.
+  Future<ApiSupportInbox> supportInbox() async {
+    final response = await _client
+        .get(
+          Uri.parse('$baseUrl/messages/support'),
+          headers: await _authHeaders(),
+        )
+        .timeout(const Duration(seconds: 25));
+    return ApiSupportInbox.fromJson(_check(response));
+  }
+
+  /// Starts a Vendo Support conversation, or returns the one already open.
+  Future<ApiSupportConversation> startSupportChat(String reason) async {
+    final response = await _client
+        .post(
+          Uri.parse('$baseUrl/messages/support'),
+          headers: await _authHeaders(),
+          body: jsonEncode({'reason': reason}),
+        )
+        .timeout(const Duration(seconds: 25));
+    final data = _check(response);
+    return ApiSupportConversation.fromJson(
+      Map<String, dynamic>.from(data['conversation'] as Map),
+    );
+  }
+
+  /// The whole support thread, including replies Admin sent from the web.
+  Future<ApiSupportConversation> supportThread(int conversationId) async {
+    final response = await _client
+        .get(
+          Uri.parse('$baseUrl/messages/support/$conversationId'),
+          headers: await _authHeaders(),
+        )
+        .timeout(const Duration(seconds: 25));
+    final data = _check(response);
+    return ApiSupportConversation.fromJson(
+      Map<String, dynamic>.from(data['conversation'] as Map),
+    );
+  }
+
+  Future<void> sendSupportMessage(
+    int conversationId, {
+    String body = '',
+    String? attachmentPath,
+  }) async {
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$baseUrl/messages/support/$conversationId'),
+    );
+    request.headers['Accept'] = 'application/json';
+    request.headers['Authorization'] = 'Bearer ${await _token()}';
+    if (body.trim().isNotEmpty) request.fields['body'] = body.trim();
+    if (attachmentPath != null) {
+      request.files.add(
+        await http.MultipartFile.fromPath('attachment', attachmentPath),
+      );
+    }
+    final streamed = await request.send().timeout(const Duration(seconds: 60));
+    _check(await http.Response.fromStream(streamed));
+  }
+
+  Future<void> closeSupportChat(int conversationId) async {
+    final response = await _client
+        .post(
+          Uri.parse('$baseUrl/messages/support/$conversationId/close'),
+          headers: await _authHeaders(),
+        )
+        .timeout(const Duration(seconds: 25));
+    _check(response);
+  }
+
   Future<Map<String, String>> mediaHeaders() async => {
     'Authorization': 'Bearer ${await _token()}',
   };
@@ -922,6 +1002,30 @@ class BuyerApi {
       failed: failed,
       messages: messages,
     );
+  }
+
+  // ── Account standing and complaints ───────────────────────────────────────
+  /// Strikes, suspension state and approved reports — the same record the web
+  /// account-standing page reads. Works while suspended, like the web page.
+  Future<ApiStanding> standing() async {
+    final response = await _client
+        .get(
+          Uri.parse('$baseUrl/account-standing'),
+          headers: await _authHeaders(),
+        )
+        .timeout(const Duration(seconds: 25));
+    return ApiStanding.fromJson(_check(response));
+  }
+
+  /// Complaints this Buyer filed, with the web page's status counts.
+  Future<ApiComplaintsPage> complaints({int page = 1}) async {
+    final uri = Uri.parse('$baseUrl/complaints').replace(
+      queryParameters: {if (page > 1) 'page': '$page'},
+    );
+    final response = await _client
+        .get(uri, headers: await _authHeaders())
+        .timeout(const Duration(seconds: 25));
+    return ApiComplaintsPage.fromJson(_check(response));
   }
 
   Future<ApiBuyer> account() async {

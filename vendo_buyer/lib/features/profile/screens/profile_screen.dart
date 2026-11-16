@@ -6,7 +6,9 @@ import 'package:vendo_buyer/features/home/widgets/buyer_nav_bar.dart';
 import 'package:vendo_buyer/features/legal/screens/legal_screen.dart';
 import 'package:vendo_buyer/features/notifications/screens/notifications_screen.dart';
 import 'package:vendo_buyer/features/orders/screens/orders_screen.dart';
+import 'package:vendo_buyer/features/profile/screens/account_standing_screen.dart';
 import 'package:vendo_buyer/features/profile/screens/change_password_screen.dart';
+import 'package:vendo_buyer/features/profile/screens/complaints_screen.dart';
 import 'package:vendo_buyer/features/profile/screens/delivery_address_screen.dart';
 import 'package:vendo_buyer/features/profile/screens/personal_information_screen.dart';
 import 'package:vendo_buyer/features/reviews/screens/my_reviews_screen.dart';
@@ -241,7 +243,24 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // ── Support section ─────────────────────────
+                    // ── Compliance section ──────────────────────
+                    _Section(
+                      title: 'Compliance',
+                      items: [
+                        _MenuItem(
+                          icon: Icons.shield_outlined,
+                          label: 'Account Standing',
+                          onTap: () => _open(const AccountStandingScreen()),
+                        ),
+                        _MenuItem(
+                          icon: Icons.report_outlined,
+                          label: 'Complaints',
+                          onTap: () => _open(const ComplaintsScreen()),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+
                     _Section(
                       title: 'Support',
                       items: [
