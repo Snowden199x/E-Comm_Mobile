@@ -8,8 +8,11 @@ import 'package:vendo_buyer/features/cart/screens/cart_screen.dart';
 import 'package:vendo_buyer/features/home/screens/categories_screen.dart';
 import 'package:vendo_buyer/features/home/screens/category_products_screen.dart';
 import 'package:vendo_buyer/features/home/widgets/buyer_nav_bar.dart';
+import 'package:vendo_buyer/features/messages/screens/messages_screen.dart';
 import 'package:vendo_buyer/features/notifications/screens/notifications_screen.dart';
 import 'package:vendo_buyer/features/product/screens/api_product_screen.dart';
+import 'package:vendo_buyer/features/profile/screens/account_standing_screen.dart';
+import 'package:vendo_buyer/features/profile/screens/complaints_screen.dart';
 import 'package:vendo_buyer/features/profile/screens/profile_screen.dart';
 import 'package:vendo_buyer/features/saved/screens/saved_screen.dart';
 import 'package:vendo_buyer/features/search/screens/search_results_screen.dart';
@@ -255,6 +258,11 @@ class _HomeTabState extends State<_HomeTab> {
 
                 // ── Welcome hero ───────────────────────────────────
                 const _HeroBanner(),
+
+                const SizedBox(height: 12),
+
+                // ── Account shortcuts ──────────────────────────────
+                const _AccountShortcuts(),
 
                 const SizedBox(height: 12),
 
@@ -513,7 +521,14 @@ class _HomeHeaderState extends State<_HomeHeader>
                     _HeaderIcon(
                       icon: Icons.chat_bubble_outline_rounded,
                       tooltip: 'Messages',
-                      onTap: () {},
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const MessagesScreen(),
+                          ),
+                        );
+                      },
                     ),
                     // ── Cart (badge mirrors the live cart count) ───────
                     ValueListenableBuilder<int>(
@@ -1021,6 +1036,124 @@ class _SectionHeader extends StatelessWidget {
 // Shop by category: white card with a sideways row of round icons (no labels)
 // ─────────────────────────────────────────────────────────────────────────────
 /// Top-level categories from `GET /api/v1/buyer/home`.
+// ─────────────────────────────────────────────────────────────────────────────
+// Account shortcuts — standing and complaints, one tap from Home
+// ─────────────────────────────────────────────────────────────────────────────
+class _AccountShortcuts extends StatelessWidget {
+  const _AccountShortcuts();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(
+        children: [
+          Expanded(
+            child: _AccountShortcutCard(
+              icon: Icons.shield_outlined,
+              label: 'Account Standing',
+              hint: 'Strikes and reports',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const AccountStandingScreen(),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: _AccountShortcutCard(
+              icon: Icons.report_outlined,
+              label: 'Complaints',
+              hint: 'Your cases',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ComplaintsScreen()),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AccountShortcutCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String hint;
+  final VoidCallback onTap;
+
+  const _AccountShortcutCard({
+    required this.icon,
+    required this.label,
+    required this.hint,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: _C.white,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _C.cardBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: const BoxDecoration(
+                      color: _C.lavenderBg,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(icon, size: 17, color: _C.plum),
+                  ),
+                  const Spacer(),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    size: 17,
+                    color: _C.lavenderMuted,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: _C.ink,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 1),
+              Text(
+                hint,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: _C.muted, fontSize: 10.5),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _HomeCategory {
   final int id;
   final String name;

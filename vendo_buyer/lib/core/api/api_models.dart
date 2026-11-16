@@ -1040,6 +1040,420 @@ class ApiNotification {
   );
 }
 
+/// One step of the strike ladder: how many strikes trigger what suspension.
+class ApiStrikeStep {
+  final int strikes;
+  final int? days;
+  final String label;
+
+  const ApiStrikeStep({required this.strikes, this.days, required this.label});
+
+  factory ApiStrikeStep.fromJson(Map<String, dynamic> json) => ApiStrikeStep(
+    strikes: _int(json['strikes']),
+    days: json['days'] == null ? null : _int(json['days']),
+    label: json['label']?.toString() ?? '',
+  );
+
+  /// "3 strikes: 7-day suspension", the line the web page prints.
+  String get summary =>
+      '$strikes ${strikes == 1 ? 'strike' : 'strikes'}: $label';
+}
+
+/// One approved account report about this Buyer; each counts as one strike.
+class ApiStandingReport {
+  final int id;
+  final String type;
+  final String reportedOn;
+  final String approvedOn;
+  final String reporter;
+  final String? note;
+  final int? orderId;
+  final String? orderNumber;
+
+  const ApiStandingReport({
+    required this.id,
+    required this.type,
+    required this.reportedOn,
+    required this.approvedOn,
+    required this.reporter,
+    this.note,
+    this.orderId,
+    this.orderNumber,
+  });
+
+  factory ApiStandingReport.fromJson(Map<String, dynamic> json) {
+    final order = json['order'];
+    return ApiStandingReport(
+      id: _int(json['id']),
+      type: json['type']?.toString() ?? 'Account report',
+      reportedOn: json['reported_on']?.toString() ?? '',
+      approvedOn: json['approved_on']?.toString() ?? '',
+      reporter: json['reporter']?.toString() ?? 'Another user',
+      note: json['note']?.toString(),
+      orderId: order is Map ? _int(order['id']) : null,
+      orderNumber: _child(order, 'number'),
+    );
+  }
+
+  String get orderLabel {
+    final number = orderNumber ?? '';
+    if (number.isNotEmpty) return number;
+    return orderId == null ? '' : '#$orderId';
+  }
+}
+
+/// Account standing from `GET /account-standing`: strikes, suspension state and
+/// the approved reports behind them, matching the web page.
+class ApiStanding {
+  final int strikes;
+  final int? untilNext;
+  final bool suspended;
+  final String? suspensionNotes;
+  final String? suspendedUntilLabel;
+  final List<ApiStrikeStep> ladder;
+  final List<ApiStandingReport> reports;
+
+  const ApiStanding({
+    required this.strikes,
+    this.untilNext,
+    this.suspended = false,
+    this.suspensionNotes,
+    this.suspendedUntilLabel,
+    this.ladder = const [],
+    this.reports = const [],
+  });
+
+  factory ApiStanding.fromJson(Map<String, dynamic> json) {
+    final account = json['account'] is Map
+        ? Map<String, dynamic>.from(json['account'] as Map)
+        : const <String, dynamic>{};
+    return ApiStanding(
+      strikes: _int(json['strikes']),
+      untilNext: json['until_next'] == null ? null : _int(json['until_next']),
+      suspended: _bool(json['suspended']),
+      suspensionNotes: account['suspension_notes']?.toString(),
+      suspendedUntilLabel: account['suspended_until_label']?.toString(),
+      ladder: (json['ladder'] as List? ?? [])
+          .whereType<Map>()
+          .map((e) => ApiStrikeStep.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+      reports: (json['reports'] as List? ?? [])
+          .whereType<Map>()
+          .map((e) => ApiStandingReport.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+    );
+  }
+}
+
+/// One complaint the Buyer sent to Vendo.
+class ApiComplaint {
+  final int id;
+  final String type;
+  final String status;
+  final String statusLabel;
+  final String description;
+  final String? decision;
+  final String? filedAtLabel;
+  final int attachments;
+  final int? orderId;
+  final String? orderNumber;
+  final String? respondentName;
+  final bool isAccountReport;
+
+  const ApiComplaint({
+    required this.id,
+    required this.type,
+    required this.status,
+    required this.statusLabel,
+    required this.description,
+    this.decision,
+    this.filedAtLabel,
+    this.attachments = 0,
+    this.orderId,
+    this.orderNumber,
+    this.respondentName,
+    this.isAccountReport = false,
+  });
+
+  factory ApiComplaint.fromJson(Map<String, dynamic> json) {
+    final order = json['order'];
+    final respondent = json['respondent'];
+    return ApiComplaint(
+      id: _int(json['id']),
+      type: json['type']?.toString() ?? 'Complaint',
+      status: json['status']?.toString() ?? '',
+      statusLabel: json['status_label']?.toString() ?? '',
+      description: json['description']?.toString() ?? '',
+      decision: json['decision']?.toString(),
+      filedAtLabel: json['filed_at_label']?.toString(),
+      attachments: _int(json['attachments']),
+      orderId: order is Map ? _int(order['id']) : null,
+      orderNumber: _child(order, 'number'),
+      respondentName: _child(respondent, 'name'),
+      isAccountReport: json['kind']?.toString() == 'user_report',
+    );
+  }
+
+  String get orderLabel {
+    final number = orderNumber ?? '';
+    if (number.isNotEmpty) return number;
+    return orderId == null ? '' : '#$orderId';
+  }
+}
+
+/// The complaints list plus the Open / In review / Resolved counts above it.
+class ApiComplaintsPage {
+  final List<ApiComplaint> items;
+  final int open;
+  final int inReview;
+  final int resolved;
+  final int total;
+  final int page;
+  final int lastPage;
+
+  const ApiComplaintsPage({
+    required this.items,
+    this.open = 0,
+    this.inReview = 0,
+    this.resolved = 0,
+    this.total = 0,
+    this.page = 1,
+    this.lastPage = 1,
+  });
+
+  /// The next page's rows appended to this one, with fresh counts.
+  ApiComplaintsPage append(ApiComplaintsPage next) => ApiComplaintsPage(
+    items: [...items, ...next.items],
+    open: next.open,
+    inReview: next.inReview,
+    resolved: next.resolved,
+    total: next.total,
+    page: next.page,
+    lastPage: next.lastPage,
+  );
+
+  bool get hasMore => page < lastPage;
+
+  factory ApiComplaintsPage.fromJson(Map<String, dynamic> json) {
+    final counts = json['counts'] is Map
+        ? Map<String, dynamic>.from(json['counts'] as Map)
+        : const <String, dynamic>{};
+    final meta = json['meta'] is Map
+        ? Map<String, dynamic>.from(json['meta'] as Map)
+        : const <String, dynamic>{};
+    return ApiComplaintsPage(
+      items: (json['data'] as List? ?? [])
+          .whereType<Map>()
+          .map((e) => ApiComplaint.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+      open: _int(counts['open']),
+      inReview: _int(counts['in_review']),
+      resolved: _int(counts['resolved']),
+      total: _int(meta['total']),
+      page: _int(meta['current_page']),
+      lastPage: _int(meta['last_page']),
+    );
+  }
+}
+
+/// One shop chat in the Buyer's Messages inbox.
+class ApiSellerChat {
+  final int id;
+  final int sellerId;
+  final String sellerName;
+  final String? sellerAvatar;
+  final int? orderId;
+  final String? orderNumber;
+  final String preview;
+  final String? time;
+  final int unread;
+
+  const ApiSellerChat({
+    required this.id,
+    required this.sellerId,
+    required this.sellerName,
+    this.sellerAvatar,
+    this.orderId,
+    this.orderNumber,
+    this.preview = 'No messages yet',
+    this.time,
+    this.unread = 0,
+  });
+
+  factory ApiSellerChat.fromJson(Map<String, dynamic> json) {
+    final seller = json['seller'];
+    final order = json['order'];
+    return ApiSellerChat(
+      id: _int(json['id']),
+      sellerId: _int(_child(seller, 'id')),
+      sellerName: _child(seller, 'name') ?? 'Seller',
+      sellerAvatar: _child(seller, 'avatar'),
+      orderId: order is Map ? _int(order['id']) : null,
+      orderNumber: _child(order, 'number'),
+      preview: json['preview']?.toString() ?? 'No messages yet',
+      time: json['time']?.toString(),
+      unread: _int(json['unread']),
+    );
+  }
+
+  String get initial {
+    final name = sellerName.trim();
+    return name.isEmpty ? 'S' : name.substring(0, 1).toUpperCase();
+  }
+}
+
+class ApiSellerChats {
+  final List<ApiSellerChat> items;
+  final int unreadTotal;
+
+  const ApiSellerChats({this.items = const [], this.unreadTotal = 0});
+
+  factory ApiSellerChats.fromJson(Map<String, dynamic> json) => ApiSellerChats(
+    items: (json['data'] as List? ?? [])
+        .whereType<Map>()
+        .map((e) => ApiSellerChat.fromJson(Map<String, dynamic>.from(e)))
+        .toList(),
+    unreadTotal: _int(json['unread_total']),
+  );
+}
+
+/// One topic offered by the Vendo Support card.
+class ApiSupportReason {
+  final String name;
+  final String description;
+
+  const ApiSupportReason({required this.name, required this.description});
+
+  factory ApiSupportReason.fromJson(Map<String, dynamic> json) =>
+      ApiSupportReason(
+        name: json['name']?.toString() ?? '',
+        description: json['description']?.toString() ?? '',
+      );
+}
+
+class ApiSupportAttachment {
+  final String url;
+  final String name;
+
+  const ApiSupportAttachment({required this.url, required this.name});
+
+  factory ApiSupportAttachment.fromJson(Map<String, dynamic> json) =>
+      ApiSupportAttachment(
+        url: json['url']?.toString() ?? '',
+        name: json['name']?.toString() ?? '',
+      );
+
+  bool get isImage {
+    final lower = name.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.gif') ||
+        lower.endsWith('.webp');
+  }
+}
+
+class ApiSupportMessage {
+  final int id;
+  final String body;
+  final bool isMine;
+  final bool isSystem;
+  final String? avatar;
+  final String initial;
+  final String? time;
+  final List<ApiSupportAttachment> attachments;
+
+  const ApiSupportMessage({
+    required this.id,
+    required this.body,
+    required this.isMine,
+    required this.isSystem,
+    this.avatar,
+    this.initial = 'V',
+    this.time,
+    this.attachments = const [],
+  });
+
+  factory ApiSupportMessage.fromJson(Map<String, dynamic> json) =>
+      ApiSupportMessage(
+        id: _int(json['id']),
+        body: json['body']?.toString() ?? '',
+        isMine: _bool(json['is_mine']),
+        isSystem: _bool(json['is_system']),
+        avatar: json['avatar']?.toString(),
+        initial: json['initial']?.toString() ?? 'V',
+        time: json['time']?.toString(),
+        attachments: (json['attachments'] as List? ?? [])
+            .whereType<Map>()
+            .map(
+              (e) =>
+                  ApiSupportAttachment.fromJson(Map<String, dynamic>.from(e)),
+            )
+            .toList(),
+      );
+}
+
+/// A Vendo Support conversation — the same thread the web panel reads.
+class ApiSupportConversation {
+  final int id;
+  final String status;
+  final List<ApiSupportMessage> messages;
+
+  const ApiSupportConversation({
+    required this.id,
+    required this.status,
+    this.messages = const [],
+  });
+
+  factory ApiSupportConversation.fromJson(Map<String, dynamic> json) =>
+      ApiSupportConversation(
+        id: _int(json['id']),
+        status: json['status']?.toString() ?? '',
+        messages: (json['messages'] as List? ?? [])
+            .whereType<Map>()
+            .map(
+              (e) => ApiSupportMessage.fromJson(Map<String, dynamic>.from(e)),
+            )
+            .toList(),
+      );
+
+  bool get isOpen => status == 'open';
+  bool get isClosed => status == 'closed';
+
+  /// The newest human message, for the "Continue conversation" row.
+  String get lastPreview {
+    for (final message in messages.reversed) {
+      if (message.isSystem) continue;
+      final body = message.body.trim();
+      if (body.isNotEmpty) return body;
+      if (message.attachments.isNotEmpty) return 'Photo';
+    }
+    return 'No messages yet';
+  }
+}
+
+class ApiSupportInbox {
+  final ApiSupportConversation? conversation;
+  final List<ApiSupportReason> reasons;
+
+  const ApiSupportInbox({this.conversation, this.reasons = const []});
+
+  factory ApiSupportInbox.fromJson(Map<String, dynamic> json) {
+    final conversation = json['conversation'];
+    return ApiSupportInbox(
+      conversation: conversation is Map
+          ? ApiSupportConversation.fromJson(
+              Map<String, dynamic>.from(conversation),
+            )
+          : null,
+      reasons: (json['reasons'] as List? ?? [])
+          .whereType<Map>()
+          .map((e) => ApiSupportReason.fromJson(Map<String, dynamic>.from(e)))
+          .toList(),
+    );
+  }
+}
+
 class ApiBuyer {
   final int id;
   final String name;
